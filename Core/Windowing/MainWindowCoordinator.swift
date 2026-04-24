@@ -42,7 +42,7 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
 
         let hostingController = NSHostingController(rootView: ContentView(appState: appState))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 680),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false

@@ -1,10 +1,15 @@
+import AppKit
 import AVFoundation
+import ApplicationServices
 import Foundation
 
 @MainActor
 protocol PermissionServiceProtocol: AnyObject {
     func currentMicrophonePermissionStatus() -> MicrophonePermissionState
     func requestMicrophonePermissionIfNeeded() async -> MicrophonePermissionState
+    func isAccessibilityPermissionGranted() -> Bool
+    func requestAccessibilityPermission() -> Bool
+    func openAccessibilitySettings()
 }
 
 @MainActor
@@ -38,5 +43,22 @@ final class SystemPermissionService: PermissionServiceProtocol {
         }
 
         return granted ? .granted : currentMicrophonePermissionStatus()
+    }
+
+    func isAccessibilityPermissionGranted() -> Bool {
+        AXIsProcessTrusted()
+    }
+
+    func requestAccessibilityPermission() -> Bool {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
+    }
+
+    func openAccessibilitySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else {
+            return
+        }
+
+        NSWorkspace.shared.open(url)
     }
 }

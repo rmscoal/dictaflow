@@ -12,10 +12,13 @@ protocol MainWindowRouting: AnyObject {
 final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isMainWindowVisible = false
     @Published private(set) var microphonePermissionState: MicrophonePermissionState
+    @Published private(set) var accessibilityPermissionState: AccessibilityPermissionState
     @Published private(set) var recordingState: DictationRecordingState
     @Published private(set) var transcriptionState: TranscriptionPipelineState
+    @Published private(set) var textInsertionState: TextInsertionState
     @Published private(set) var lastCapture: DictationCapture?
     @Published private(set) var lastTranscription: WhisperTranscriptionResult?
+    @Published private(set) var lastTextInsertion: TextInsertionResult?
     @Published private(set) var statusMessage: String
     @Published private(set) var isHotkeyRegistered = false
     @Published private(set) var modelDownloadProgressText: String?
@@ -29,7 +32,11 @@ final class DictaFlowAppState: ObservableObject {
     private let hotkeyService: HotkeyServiceProtocol
     private let modelDownloadService: ModelDownloadServiceProtocol
     private let whisperService: WhisperServiceProtocol
+    private let textInsertionService: TextInsertionServiceProtocol
     private weak var mainWindowRouter: MainWindowRouting?
+    private var workspaceObservers = Set<AnyCancellable>()
+    private var lastKnownExternalTargetApplication: InsertionTargetApplication?
+    private var pendingInsertionTargetApplication: InsertionTargetApplication?
 
     convenience init() {
         self.init(
@@ -38,7 +45,8 @@ final class DictaFlowAppState: ObservableObject {
             audioRecorderService: SystemAudioRecorderService(),
             hotkeyService: CarbonHotkeyService(),
             modelDownloadService: WhisperModelDownloadService(),
-            whisperService: WhisperCPPService()
+            whisperService: WhisperCPPService(),
+            textInsertionService: SystemTextInsertionService()
         )
     }
 
@@ -48,7 +56,8 @@ final class DictaFlowAppState: ObservableObject {
         audioRecorderService: AudioRecorderServiceProtocol,
         hotkeyService: HotkeyServiceProtocol,
         modelDownloadService: ModelDownloadServiceProtocol,
-        whisperService: WhisperServiceProtocol
+        whisperService: WhisperServiceProtocol,
+        textInsertionService: TextInsertionServiceProtocol
     ) {
         self.settingsStore = settingsStore
         self.permissionService = permissionService
@@ -56,15 +65,24 @@ final class DictaFlowAppState: ObservableObject {
         self.hotkeyService = hotkeyService
         self.modelDownloadService = modelDownloadService
         self.whisperService = whisperService
+        self.textInsertionService = textInsertionService
         self.launchExperience = settingsStore.shouldShowMainWindowOnLaunch ? .firstLaunch : .returningUser
         self.whisperConfiguration = .default
         self.microphonePermissionState = permissionService.currentMicrophonePermissionStatus()
+        self.accessibilityPermissionState = AccessibilityPermissionState(
+            isGranted: permissionService.isAccessibilityPermissionGranted(),
+            hasRequestedBefore: settingsStore.hasRequestedAccessibilityPermission
+        )
         self.recordingState = .idle
         self.transcriptionState = .idle
+        self.textInsertionState = .idle
         self.lastCapture = nil
         self.lastTranscription = nil
+        self.lastTextInsertion = nil
         self.statusMessage = ""
         self.modelDownloadProgressText = nil
+        self.lastKnownExternalTargetApplication = Self.makeInsertionTargetApplication(from: NSWorkspace.shared.frontmostApplication)
+        configureWorkspaceObservers()
         updateStatusMessage()
     }
 
@@ -75,6 +93,14 @@ final class DictaFlowAppState: ObservableObject {
 
         if transcriptionState.isTranscribing {
             return "waveform.badge.magnifyingglass"
+        }
+
+        if textInsertionState.isBusy {
+            return "text.cursor"
+        }
+
+        if let lastTextInsertion, lastTextInsertion.method == .copyPanel {
+            return "doc.on.clipboard"
         }
 
         return isMainWindowVisible ? "waveform.circle.fill" : "waveform.circle"
@@ -92,8 +118,21 @@ final class DictaFlowAppState: ObservableObject {
             return "Running Whisper locally"
         }
 
+        switch textInsertionState {
+        case .idle:
+            break
+        case .requestingAccessibilityPermission:
+            return "Waiting for Accessibility permission"
+        case .inserting(let targetApplicationName):
+            return "Inserting into \(targetApplicationName ?? "target app")"
+        }
+
         if recordingState.isRecording {
             return "Recording in progress"
+        }
+
+        if let lastTextInsertion {
+            return lastTextInsertion.method.title
         }
 
         return isMainWindowVisible ? "Main window open" : "Running in menu bar"
@@ -116,6 +155,10 @@ final class DictaFlowAppState: ObservableObject {
             return "waveform.badge.magnifyingglass"
         }
 
+        if textInsertionState.isBusy {
+            return "text.cursor"
+        }
+
         return "mic.circle.fill"
     }
 
@@ -133,7 +176,7 @@ final class DictaFlowAppState: ObservableObject {
 
         switch transcriptionState {
         case .idle:
-            return "Ready to record, transcribe locally with Whisper, and prepare for text insertion."
+            break
         case .preparingModel(let model):
             return "Preparing the local \(model.displayName) Whisper model."
         case .downloadingModel(let model, let progress):
@@ -147,6 +190,17 @@ final class DictaFlowAppState: ObservableObject {
         case .transcribing(let model):
             return "Transcribing locally with the \(model.displayName) model."
         }
+
+        switch textInsertionState {
+        case .idle:
+            break
+        case .requestingAccessibilityPermission(let targetApplicationName):
+            return "Requesting Accessibility permission before inserting into \(targetApplicationName ?? "the target app")."
+        case .inserting(let targetApplicationName):
+            return "Inserting the finished transcript into \(targetApplicationName ?? "the focused app")."
+        }
+
+        return "Ready to record, transcribe locally with Whisper, and insert text into the focused app."
     }
 
     var hotkeyDisplayText: String {
@@ -170,12 +224,47 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    var textInsertionStatusText: String {
+        if let lastTextInsertion {
+            return lastTextInsertion.summaryText
+        }
+
+        switch textInsertionState {
+        case .idle:
+            return "Automatic insertion will try Accessibility first, then paste, simulated typing, and finally a manual copy panel."
+        case .requestingAccessibilityPermission(let targetApplicationName):
+            return "Waiting for Accessibility approval before targeting \(targetApplicationName ?? "the current app")."
+        case .inserting(let targetApplicationName):
+            return "Trying to insert into \(targetApplicationName ?? "the current app")."
+        }
+    }
+
+    var canInsertLastTranscription: Bool {
+        guard let lastTranscription else {
+            return false
+        }
+
+        return !lastTranscription.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !recordingState.isRecording
+            && !transcriptionState.isTranscribing
+            && !textInsertionState.isBusy
+    }
+
+    var canCopyLastTranscription: Bool {
+        guard let lastTranscription else {
+            return false
+        }
+
+        return !lastTranscription.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     func attach(mainWindowRouter: MainWindowRouting) {
         self.mainWindowRouter = mainWindowRouter
     }
 
     func handleApplicationLaunch() {
         refreshMicrophonePermissionStatus()
+        refreshAccessibilityPermissionStatus()
         registerGlobalHotkey()
         prepareDefaultModelIfNeeded()
 
@@ -204,6 +293,11 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
+    func refreshAccessibilityPermissionStatus() {
+        accessibilityPermissionState = resolvedAccessibilityPermissionState()
+        updateStatusMessage()
+    }
+
     func retryModelPreparation() {
         prepareDefaultModelIfNeeded()
     }
@@ -212,6 +306,31 @@ final class DictaFlowAppState: ObservableObject {
         Task { @MainActor [weak self] in
             await self?.performDictationToggle()
         }
+    }
+
+    func insertLastTranscription() {
+        guard canInsertLastTranscription, let lastTranscription else {
+            return
+        }
+
+        pendingInsertionTargetApplication = captureCurrentInsertionTargetApplication()
+
+        Task { @MainActor [weak self] in
+            await self?.insert(transcription: lastTranscription, targetApplication: self?.pendingInsertionTargetApplication)
+        }
+    }
+
+    func copyLastTranscription() {
+        guard let lastTranscription else {
+            return
+        }
+
+        textInsertionService.copyTextToPasteboard(lastTranscription.text)
+        statusMessage = "Copied the last transcript to the clipboard for manual paste."
+    }
+
+    func openAccessibilitySettings() {
+        permissionService.openAccessibilitySettings()
     }
 
     func prepareForTermination() {
@@ -330,7 +449,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func performDictationToggle() async {
-        if transcriptionState.isTranscribing {
+        if transcriptionState.isTranscribing || textInsertionState.isBusy {
             return
         }
 
@@ -345,6 +464,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func beginRecordingFlow() async {
+        pendingInsertionTargetApplication = captureCurrentInsertionTargetApplication()
         recordingState = .requestingPermission
         updateStatusMessage()
 
@@ -415,11 +535,104 @@ final class DictaFlowAppState: ObservableObject {
             lastTranscription = transcription
             transcriptionState = .idle
             updateStatusMessage()
+            await insert(transcription: transcription, targetApplication: pendingInsertionTargetApplication)
         } catch {
             transcriptionState = .idle
             statusMessage = "Could not transcribe the recording locally. \(error.localizedDescription)"
             showMainWindow()
         }
+    }
+
+    private func insert(transcription: WhisperTranscriptionResult, targetApplication: InsertionTargetApplication?) async {
+        let text = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            pendingInsertionTargetApplication = nil
+            statusMessage = "Whisper returned an empty transcript, so there was nothing to insert."
+            showMainWindow()
+            return
+        }
+
+        let resolvedTargetApplication = targetApplication ?? captureCurrentInsertionTargetApplication()
+        let targetApplicationName = resolvedTargetApplication?.displayName
+
+        ensureAccessibilityPermissionForInsertion(targetApplicationName: targetApplicationName)
+
+        textInsertionState = .inserting(targetApplicationName: targetApplicationName)
+        updateStatusMessage()
+
+        let insertionResult = await textInsertionService.insertText(
+            text,
+            targetApplication: resolvedTargetApplication,
+            allowAccessibilityFeatures: accessibilityPermissionState == .granted
+        )
+
+        lastTextInsertion = insertionResult
+        textInsertionState = .idle
+        pendingInsertionTargetApplication = nil
+        updateStatusMessage()
+
+        if insertionResult.method == .copyPanel || accessibilityPermissionState != .granted {
+            showMainWindow()
+        }
+    }
+
+    private func ensureAccessibilityPermissionForInsertion(targetApplicationName: String?) {
+        accessibilityPermissionState = resolvedAccessibilityPermissionState()
+
+        guard accessibilityPermissionState == .undetermined else {
+            return
+        }
+
+        textInsertionState = .requestingAccessibilityPermission(targetApplicationName: targetApplicationName)
+        updateStatusMessage()
+        settingsStore.markAccessibilityPermissionRequested()
+        _ = permissionService.requestAccessibilityPermission()
+        accessibilityPermissionState = resolvedAccessibilityPermissionState()
+    }
+
+    private func resolvedAccessibilityPermissionState() -> AccessibilityPermissionState {
+        AccessibilityPermissionState(
+            isGranted: permissionService.isAccessibilityPermissionGranted(),
+            hasRequestedBefore: settingsStore.hasRequestedAccessibilityPermission
+        )
+    }
+
+    private func configureWorkspaceObservers() {
+        NSWorkspace.shared.notificationCenter
+            .publisher(for: NSWorkspace.didActivateApplicationNotification)
+            .compactMap { notification in
+                notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            }
+            .compactMap(Self.makeInsertionTargetApplication(from:))
+            .sink { [weak self] targetApplication in
+                self?.lastKnownExternalTargetApplication = targetApplication
+            }
+            .store(in: &workspaceObservers)
+    }
+
+    private func captureCurrentInsertionTargetApplication() -> InsertionTargetApplication? {
+        if let currentTargetApplication = Self.makeInsertionTargetApplication(from: NSWorkspace.shared.frontmostApplication) {
+            lastKnownExternalTargetApplication = currentTargetApplication
+            return currentTargetApplication
+        }
+
+        return lastKnownExternalTargetApplication
+    }
+
+    private static func makeInsertionTargetApplication(from application: NSRunningApplication?) -> InsertionTargetApplication? {
+        guard let application else {
+            return nil
+        }
+
+        guard application.bundleIdentifier != Bundle.main.bundleIdentifier else {
+            return nil
+        }
+
+        return InsertionTargetApplication(
+            bundleIdentifier: application.bundleIdentifier,
+            localizedName: application.localizedName,
+            processIdentifier: application.processIdentifier
+        )
     }
 
     private func updateStatusMessage() {
@@ -451,13 +664,38 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
+        switch textInsertionState {
+        case .idle:
+            break
+        case .requestingAccessibilityPermission(let targetApplicationName):
+            statusMessage = "DictaFlow is requesting Accessibility permission before inserting into \(targetApplicationName ?? "the target app")."
+            return
+        case .inserting(let targetApplicationName):
+            statusMessage = "Inserting the latest transcript into \(targetApplicationName ?? "the focused app")."
+            return
+        }
+
         if microphonePermissionState == .denied || microphonePermissionState == .restricted {
             statusMessage = microphonePermissionState.detailText
             return
         }
 
+        if let lastTextInsertion {
+            if lastTextInsertion.method == .copyPanel, accessibilityPermissionState != .granted {
+                statusMessage = "Accessibility access is still required for automatic insertion. The latest transcript was copied for manual paste."
+            } else {
+                statusMessage = lastTextInsertion.summaryText
+            }
+            return
+        }
+
+        if accessibilityPermissionState == .denied {
+            statusMessage = accessibilityPermissionState.detailText
+            return
+        }
+
         if let lastTranscription, !lastTranscription.text.isEmpty {
-            statusMessage = "Last transcription finished at \(lastTranscription.completedAt.formatted(date: .omitted, time: .standard)) using the \(lastTranscription.model.displayName) model."
+            statusMessage = "Last transcription finished at \(lastTranscription.completedAt.formatted(date: .omitted, time: .standard)) and is ready for insertion."
             return
         }
 

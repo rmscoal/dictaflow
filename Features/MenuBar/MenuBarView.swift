@@ -31,13 +31,30 @@ struct MenuBarView: View {
             .buttonStyle(.borderedProminent)
             .tint(appState.recordingState.isRecording ? .red : .accentColor)
 
-            Button("Retry Model Preparation") {
-                appState.retryModelPreparation()
+            Button("Insert Last Transcript Again") {
+                appState.insertLastTranscription()
+            }
+            .buttonStyle(.bordered)
+            .disabled(!appState.canInsertLastTranscription)
+
+            Button("Copy Last Transcript") {
+                appState.copyLastTranscription()
+            }
+            .buttonStyle(.bordered)
+            .disabled(!appState.canCopyLastTranscription)
+
+            Button("Refresh Accessibility Status") {
+                appState.refreshAccessibilityPermissionStatus()
             }
             .buttonStyle(.bordered)
 
-            Button("Refresh Microphone Status") {
-                appState.refreshMicrophonePermissionStatus()
+            Button("Open Accessibility Settings") {
+                appState.openAccessibilitySettings()
+            }
+            .buttonStyle(.bordered)
+
+            Button("Retry Model Preparation") {
+                appState.retryModelPreparation()
             }
             .buttonStyle(.bordered)
 
@@ -46,17 +63,24 @@ struct MenuBarView: View {
             }
             .buttonStyle(.borderless)
 
-            if let lastTranscription = appState.lastTranscription, !lastTranscription.text.isEmpty {
+            if let lastTextInsertion = appState.lastTextInsertion {
+                Divider()
+
+                Text(lastTextInsertion.summaryText)
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(lastTextInsertion.method.detailText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let lastTranscription = appState.lastTranscription, !lastTranscription.text.isEmpty {
                 Divider()
 
                 Text(lastTranscription.text)
                     .font(.caption)
                     .lineLimit(4)
                     .fixedSize(horizontal: false, vertical: true)
-
-                Text(lastTranscription.detectedLanguageDisplayName)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             } else if let lastCapture = appState.lastCapture {
                 Text(lastCapture.durationText)
                     .font(.caption)
@@ -69,7 +93,7 @@ struct MenuBarView: View {
             .buttonStyle(.borderless)
         }
         .padding(16)
-        .frame(width: 320, alignment: .leading)
+        .frame(width: 340, alignment: .leading)
     }
 }
 

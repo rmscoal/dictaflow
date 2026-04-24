@@ -3,11 +3,16 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var appState: DictaFlowAppState
 
+    private let statusColumns = [
+        GridItem(.flexible(), spacing: 16),
+        GridItem(.flexible(), spacing: 16)
+    ]
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 20) {
             headerSection
 
-            HStack(alignment: .top, spacing: 16) {
+            LazyVGrid(columns: statusColumns, spacing: 16) {
                 StatusCard(
                     title: "Global Shortcut",
                     systemImage: "command.square",
@@ -18,6 +23,12 @@ struct ContentView: View {
                     title: "Microphone",
                     systemImage: "mic.fill",
                     content: "\(appState.microphonePermissionState.title)\n\(appState.microphonePermissionState.detailText)"
+                )
+
+                StatusCard(
+                    title: "Accessibility",
+                    systemImage: "figure.wave.circle",
+                    content: "\(appState.accessibilityPermissionState.title)\n\(appState.accessibilityPermissionState.detailText)"
                 )
 
                 StatusCard(
@@ -44,8 +55,32 @@ struct ContentView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(appState.recordingState.isRecording ? .red : .accentColor)
 
+                        Button("Insert Last Transcript Again") {
+                            appState.insertLastTranscription()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!appState.canInsertLastTranscription)
+
+                        Button("Copy Last Transcript") {
+                            appState.copyLastTranscription()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!appState.canCopyLastTranscription)
+                    }
+
+                    HStack(spacing: 12) {
                         Button("Refresh Microphone Status") {
                             appState.refreshMicrophonePermissionStatus()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Refresh Accessibility Status") {
+                            appState.refreshAccessibilityPermissionStatus()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Open Accessibility Settings") {
+                            appState.openAccessibilitySettings()
                         }
                         .buttonStyle(.bordered)
 
@@ -53,6 +88,29 @@ struct ContentView: View {
                             appState.retryModelPreparation()
                         }
                         .buttonStyle(.bordered)
+                    }
+                }
+                .font(.system(size: 13))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+            }
+
+            GroupBox("Text Insertion") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label(appState.textInsertionStatusText, systemImage: "text.cursor")
+                        .font(.headline)
+
+                    if let lastTextInsertion = appState.lastTextInsertion {
+                        Text(lastTextInsertion.method.title)
+                            .font(.subheadline.weight(.semibold))
+
+                        Text(lastTextInsertion.method.detailText)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("After transcription finishes, DictaFlow will automatically target the current app with the configured fallback chain.")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .font(.system(size: 13))
@@ -118,7 +176,7 @@ struct ContentView: View {
             }
         }
         .padding(24)
-        .frame(minWidth: 760, minHeight: 520)
+        .frame(minWidth: 820, minHeight: 640)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
@@ -135,7 +193,7 @@ struct ContentView: View {
                 .font(.headline)
                 .foregroundStyle(.primary)
 
-            Text("Phase 3 adds automatic Whisper model download, a local model store in Application Support, and an offline transcription pipeline powered by whisper.cpp.")
+            Text("Phase 4 adds focused-app text insertion with Accessibility permission handling and a full fallback chain for paste, simulated typing, and manual copy.")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
