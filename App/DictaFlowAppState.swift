@@ -9,8 +9,14 @@ protocol MainWindowRouting: AnyObject {
 }
 
 @MainActor
+protocol SettingsWindowRouting: AnyObject {
+    func showSettingsWindow()
+}
+
+@MainActor
 final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isMainWindowVisible = false
+    @Published private(set) var isSettingsWindowVisible = false
     @Published private(set) var microphonePermissionState: MicrophonePermissionState
     @Published private(set) var accessibilityPermissionState: AccessibilityPermissionState
     @Published private(set) var recordingState: DictationRecordingState
@@ -24,7 +30,7 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var modelDownloadProgressText: String?
 
     let launchExperience: AppLaunchExperience
-    let whisperConfiguration: WhisperConfiguration
+    @Published private(set) var whisperConfiguration: WhisperConfiguration
 
     private let settingsStore: SettingsStoreProtocol
     private let permissionService: PermissionServiceProtocol
@@ -34,6 +40,7 @@ final class DictaFlowAppState: ObservableObject {
     private let whisperService: WhisperServiceProtocol
     private let textInsertionService: TextInsertionServiceProtocol
     private weak var mainWindowRouter: MainWindowRouting?
+    private weak var settingsWindowRouter: SettingsWindowRouting?
     private var workspaceObservers = Set<AnyCancellable>()
     private var lastKnownExternalTargetApplication: InsertionTargetApplication?
     private var pendingInsertionTargetApplication: InsertionTargetApplication?
@@ -67,7 +74,8 @@ final class DictaFlowAppState: ObservableObject {
         self.whisperService = whisperService
         self.textInsertionService = textInsertionService
         self.launchExperience = settingsStore.shouldShowMainWindowOnLaunch ? .firstLaunch : .returningUser
-        self.whisperConfiguration = .default
+        self.whisperConfiguration = settingsStore.whisperConfiguration
+        self.isSettingsWindowVisible = false
         self.microphonePermissionState = permissionService.currentMicrophonePermissionStatus()
         self.accessibilityPermissionState = AccessibilityPermissionState(
             isGranted: permissionService.isAccessibilityPermissionGranted(),
@@ -224,6 +232,33 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    var whisperConfigurationSummaryText: String {
+        "\(whisperConfiguration.taskMode.title) • \(whisperConfiguration.inputLanguage.displayName) • \(whisperConfiguration.model.displayName)"
+    }
+
+    var whisperSettingsLocked: Bool {
+        switch recordingState {
+        case .idle:
+            break
+        case .requestingPermission, .recording, .stopping:
+            return true
+        }
+
+        return transcriptionState.isPreparingModel || transcriptionState.isTranscribing || textInsertionState.isBusy
+    }
+
+    var supportedWhisperLanguages: [WhisperLanguageOption] {
+        WhisperLanguageCatalog.supportedLanguages
+    }
+
+    var commonWhisperLanguages: [WhisperLanguageOption] {
+        WhisperLanguageCatalog.commonLanguages
+    }
+
+    var additionalWhisperLanguages: [WhisperLanguageOption] {
+        WhisperLanguageCatalog.additionalLanguages
+    }
+
     var textInsertionStatusText: String {
         if let lastTextInsertion {
             return lastTextInsertion.summaryText
@@ -262,6 +297,10 @@ final class DictaFlowAppState: ObservableObject {
         self.mainWindowRouter = mainWindowRouter
     }
 
+    func attach(settingsWindowRouter: SettingsWindowRouting) {
+        self.settingsWindowRouter = settingsWindowRouter
+    }
+
     func handleApplicationLaunch() {
         refreshMicrophonePermissionStatus()
         refreshAccessibilityPermissionStatus()
@@ -280,12 +319,42 @@ final class DictaFlowAppState: ObservableObject {
         mainWindowRouter?.showMainWindow()
     }
 
+    func openSettingsWindow() {
+        settingsWindowRouter?.showSettingsWindow()
+    }
+
     func closeMainWindow() {
         mainWindowRouter?.closeMainWindow()
     }
 
     func toggleMainWindow() {
         isMainWindowVisible ? closeMainWindow() : showMainWindow()
+    }
+
+    func updateTaskMode(_ taskMode: WhisperTaskMode) {
+        guard whisperConfiguration.taskMode != taskMode else {
+            return
+        }
+
+        whisperConfiguration.taskMode = taskMode
+        persistWhisperConfiguration()
+        updateStatusMessage()
+    }
+
+    func updateInputLanguage(_ inputLanguage: WhisperInputLanguage) {
+        guard whisperConfiguration.inputLanguage != inputLanguage else {
+            return
+        }
+
+        whisperConfiguration.inputLanguage = inputLanguage
+        persistWhisperConfiguration()
+        updateStatusMessage()
+    }
+
+    func resetWhisperSettingsToDefaults() {
+        whisperConfiguration = .default
+        persistWhisperConfiguration()
+        updateStatusMessage()
     }
 
     func refreshMicrophonePermissionStatus() {
@@ -299,6 +368,16 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func retryModelPreparation() {
+        prepareDefaultModelIfNeeded()
+    }
+
+    func prepareAndUseModel(_ model: WhisperModelDescriptor) {
+        if whisperConfiguration.model != model {
+            whisperConfiguration.model = model
+            persistWhisperConfiguration()
+            updateStatusMessage()
+        }
+
         prepareDefaultModelIfNeeded()
     }
 
@@ -333,6 +412,12 @@ final class DictaFlowAppState: ObservableObject {
         permissionService.openAccessibilitySettings()
     }
 
+    func openModelsFolder() {
+        let modelsDirectoryURL = modelDownloadService.modelsDirectoryURL
+        try? FileManager.default.createDirectory(at: modelsDirectoryURL, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(modelsDirectoryURL)
+    }
+
     func prepareForTermination() {
         hotkeyService.unregisterToggleHotkey()
     }
@@ -348,6 +433,16 @@ final class DictaFlowAppState: ObservableObject {
 
     func mainWindowDidClose() {
         isMainWindowVisible = false
+        updateStatusMessage()
+    }
+
+    func settingsWindowDidOpen() {
+        isSettingsWindowVisible = true
+        updateStatusMessage()
+    }
+
+    func settingsWindowDidClose() {
+        isSettingsWindowVisible = false
         updateStatusMessage()
     }
 
@@ -446,6 +541,10 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         return "Downloading \(whisperConfiguration.model.displayName) model: \(writtenText)"
+    }
+
+    private func persistWhisperConfiguration() {
+        settingsStore.saveWhisperConfiguration(whisperConfiguration)
     }
 
     private func performDictationToggle() async {

@@ -42,11 +42,6 @@
 			path = Resources;
 			sourceTree = "<group>";
 		};
-		FB742D972F9A61DD00AA0EED /* Docs */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Docs;
-			sourceTree = "<group>";
-		};
 		FBE942B32D0A000100000001 /* Core */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Core;
@@ -86,7 +81,6 @@
 			children = (
 				FB742D992F9A63D800AA0EED /* DictaFlow-Dev-Info.plist */,
 				FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */,
-				FB742D972F9A61DD00AA0EED /* Docs */,
 				FBE942B32D0A000100000002 /* Features */,
 				FBE942B32D0A000100000004 /* Services */,
 				FBE942B32D0A000100000001 /* Core */,

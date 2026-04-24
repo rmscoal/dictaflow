@@ -54,4 +54,17 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable {
             return "1.5 GB"
         }
     }
+
+    var detailText: String {
+        switch self {
+        case .tiny:
+            return "Fastest startup with the lightest footprint. Best for quick notes and lower-end Macs."
+        case .base:
+            return "Balanced for everyday dictation with better accuracy than Tiny."
+        case .small:
+            return "Recommended default with strong quality for most general-purpose dictation."
+        case .medium:
+            return "Highest quality in V1, but noticeably heavier on CPU, memory, and disk."
+        }
+    }
 }
