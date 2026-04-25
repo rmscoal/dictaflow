@@ -68,15 +68,8 @@ struct MenuBarView: View {
                         .foregroundStyle(appState.recordingState.isRecording ? .red : Color.accentColor)
                         .symbolRenderingMode(.hierarchical)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(appState.recordingState.isRecording ? "Recording" : "Ready")
-                            .font(.system(size: 16, weight: .semibold))
-
-                        Text(appState.menuBarStatusText)
-                            .font(.system(size: 11))
-                            .foregroundStyle(MenuTheme.secondaryText)
-                            .lineLimit(1)
-                    }
+                    Text(appState.recordingState.isRecording ? "Recording" : "Ready")
+                        .font(.system(size: 16, weight: .semibold))
 
                     Spacer()
                 }

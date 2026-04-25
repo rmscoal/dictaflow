@@ -153,7 +153,7 @@ final class DictaFlowAppState: ObservableObject {
             return lastTextInsertion.method.title
         }
 
-        return isMainWindowVisible ? "Main window open" : "Running in menu bar"
+        return "Ready"
     }
 
     var launchBehaviorText: String {

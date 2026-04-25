@@ -42,7 +42,7 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
 
         let hostingController = NSHostingController(rootView: ContentView(appState: appState))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 680, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -57,7 +57,7 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
         window.backgroundColor = .black
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
-        window.setFrameAutosaveName("DictaFlowMainWindow")
+        window.setFrameAutosaveName("DictaFlowMainWindowCompact")
         window.tabbingMode = .disallowed
         window.toolbarStyle = .unifiedCompact
         window.delegate = self

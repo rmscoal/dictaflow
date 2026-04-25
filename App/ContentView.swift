@@ -21,7 +21,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
-        .frame(minWidth: 640, minHeight: 460)
+        .frame(minWidth: 520, minHeight: 360)
         .foregroundStyle(AppTheme.primaryText)
         .alert(
             "Prepare \(selectedModel.displayName) Model?",
@@ -51,19 +51,14 @@ struct ContentView: View {
     }
 
     private var topBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Image(systemName: appState.menuBarIconName)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(statusColor)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("DictaFlow")
-                    .font(.system(size: 16, weight: .semibold))
-
-                Text(appState.menuBarStatusText)
-                    .font(.system(size: 11))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .lineLimit(1)
+                    .font(.system(size: 14, weight: .semibold))
             }
 
             Spacer()
@@ -85,127 +80,95 @@ struct ContentView: View {
             .controlSize(.small)
             .help("Hide Window")
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 7)
         .background(AppTheme.barFill)
     }
 
     private var dashboardPage: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 12) {
-                    recordingTile
+            VStack(alignment: .leading, spacing: 10) {
+                recordingTile
 
-                    VStack(spacing: 8) {
-                        NavigationTile(title: "Model", value: appState.whisperConfiguration.model.displayName, systemImage: "cpu") {
-                            appState.mainWindowPage = .models
-                        }
-
-                        NavigationTile(title: "Settings", value: appState.whisperConfiguration.taskMode.title, systemImage: "slider.horizontal.3") {
-                            appState.mainWindowPage = .settings
-                        }
-
-                        NavigationTile(title: "History", value: historySummaryText, systemImage: "clock") {
-                            appState.mainWindowPage = .history
-                        }
+                LazyVGrid(columns: compactNavigationColumns, spacing: 8) {
+                    NavigationTile(title: "Model", value: appState.whisperConfiguration.model.displayName, systemImage: "cpu") {
+                        appState.mainWindowPage = .models
                     }
-                    .frame(width: 210)
+
+                    NavigationTile(title: "Settings", value: "Preferences", systemImage: "slider.horizontal.3") {
+                        appState.mainWindowPage = .settings
+                    }
+
+                    NavigationTile(title: "History", value: historySummaryText, systemImage: "clock") {
+                        appState.mainWindowPage = .history
+                    }
                 }
 
-                LazyVGrid(columns: dashboardColumns, spacing: 10) {
-                    GlassTile {
-                        VStack(alignment: .leading, spacing: 8) {
-                            TileHeader(title: "Access", systemImage: "checkmark.shield")
+                GlassTile {
+                    VStack(alignment: .leading, spacing: 8) {
+                        StatusLine(
+                            title: "Microphone",
+                            value: appState.microphonePermissionState.title,
+                            systemImage: "mic.fill",
+                            color: appState.microphonePermissionState == .granted ? .green : .orange
+                        )
 
-                            StatusLine(
-                                title: "Microphone",
-                                value: appState.microphonePermissionState.title,
-                                systemImage: "mic.fill",
-                                color: appState.microphonePermissionState == .granted ? .green : .orange
-                            )
+                        StatusLine(
+                            title: "Accessibility",
+                            value: appState.accessibilityPermissionState.title,
+                            systemImage: "figure.wave.circle",
+                            color: appState.accessibilityPermissionState == .granted ? .green : .orange
+                        )
 
-                            StatusLine(
-                                title: "Accessibility",
-                                value: appState.accessibilityPermissionState.title,
-                                systemImage: "figure.wave.circle",
-                                color: appState.accessibilityPermissionState == .granted ? .green : .orange
-                            )
-
-                            if hasMissingRequiredSettings {
-                                HStack(spacing: 8) {
-                                    Button("Refresh") {
-                                        appState.refreshMicrophonePermissionStatus()
-                                        appState.refreshAccessibilityPermissionStatus()
-                                    }
-                                    .controlSize(.small)
-
-                                    if appState.accessibilityPermissionState != .granted {
-                                        Button("Open Settings") {
-                                            appState.openAccessibilitySettings()
-                                        }
-                                        .controlSize(.small)
-                                    }
-                                }
+                        if hasMissingRequiredSettings {
+                            Button("Refresh") {
+                                appState.refreshMicrophonePermissionStatus()
+                                appState.refreshAccessibilityPermissionStatus()
                             }
-                        }
-                    }
-
-                    GlassTile {
-                        VStack(alignment: .leading, spacing: 8) {
-                            TileHeader(title: "Local Engine", systemImage: "lock.shield")
-
-                            Text(shortModelStatusText)
-                                .font(.system(size: 13))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .lineLimit(3)
-
-                            Text(appState.whisperConfigurationSummaryText)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(AppTheme.tertiaryText)
-                                .lineLimit(1)
+                            .controlSize(.small)
                         }
                     }
                 }
             }
-            .padding(14)
+            .padding(12)
+            .frame(maxWidth: 560, alignment: .top)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
     }
 
     private var recordingTile: some View {
         GlassTile {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .center, spacing: 12) {
-                    Image(systemName: appState.dictationActionSymbolName)
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(statusColor)
-                        .symbolRenderingMode(.hierarchical)
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: appState.dictationActionSymbolName)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(statusColor)
+                    .symbolRenderingMode(.hierarchical)
+                    .frame(width: 22)
 
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(appState.recordingState.isRecording ? "Recording" : "Ready")
-                            .font(.system(size: 22, weight: .semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(appState.recordingState.isRecording ? "Recording" : "Ready")
+                        .font(.system(size: 15, weight: .semibold))
 
-                        Text(appState.dictationSummaryText)
-                            .font(.system(size: 12))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .lineLimit(1)
-                    }
-
-                    Spacer()
+                    Text(recordingStatusText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .lineLimit(1)
                 }
+
+                Spacer(minLength: 10)
 
                 Button {
                     appState.toggleDictation()
                 } label: {
                     Label(appState.dictationActionTitle, systemImage: appState.recordingState.isRecording ? "stop.fill" : "mic.fill")
-                        .frame(maxWidth: .infinity)
+                        .frame(width: 142)
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
+                .controlSize(.small)
                 .tint(appState.recordingState.isRecording ? .red : AppTheme.accent)
                 .disabled(appState.transcriptionState.isTranscribing || appState.textInsertionState.isBusy)
             }
-            .frame(minHeight: 128, alignment: .top)
         }
     }
 
@@ -416,6 +379,14 @@ struct ContentView: View {
         ]
     }
 
+    private var compactNavigationColumns: [GridItem] {
+        [
+            GridItem(.flexible(minimum: 150), spacing: 8),
+            GridItem(.flexible(minimum: 150), spacing: 8),
+            GridItem(.flexible(minimum: 150), spacing: 8)
+        ]
+    }
+
     private var statusColor: Color {
         appState.recordingState.isRecording ? .red : AppTheme.accent
     }
@@ -434,6 +405,22 @@ struct ContentView: View {
         }
 
         return "Empty"
+    }
+
+    private var recordingStatusText: String {
+        if appState.recordingState.isRecording {
+            return "Recording"
+        }
+
+        if appState.transcriptionState.isTranscribing {
+            return "Transcribing"
+        }
+
+        if appState.textInsertionState.isBusy {
+            return "Inserting"
+        }
+
+        return "Idle"
     }
 
     private var shortModelStatusText: String {
@@ -508,14 +495,14 @@ private struct GlassTile<Content: View>: View {
 
     var body: some View {
         content
-            .padding(12)
+            .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .stroke(AppTheme.border, lineWidth: 1)
             )
-            .shadow(color: Color.black.opacity(0.12), radius: 10, x: 0, y: 4)
+            .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 3)
     }
 }
 
@@ -539,18 +526,18 @@ private struct NavigationTile: View {
     var body: some View {
         Button(action: action) {
             GlassTile {
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Image(systemName: systemImage)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AppTheme.accent)
-                        .frame(width: 18)
+                        .frame(width: 16)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title)
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 11, weight: .semibold))
 
                         Text(value)
-                            .font(.system(size: 11))
+                            .font(.system(size: 10))
                             .foregroundStyle(AppTheme.secondaryText)
                             .lineLimit(1)
                     }
@@ -648,6 +635,8 @@ private struct StatusLine: View {
 
             Text(title)
                 .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
 
             Spacer()
 
@@ -655,6 +644,7 @@ private struct StatusLine: View {
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .foregroundStyle(color)
                 .lineLimit(1)
+                .frame(minWidth: 64, alignment: .trailing)
         }
     }
 }
