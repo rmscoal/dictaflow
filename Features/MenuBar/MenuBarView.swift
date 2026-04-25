@@ -240,11 +240,32 @@ struct MenuBarView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-        } else if let lastTranscription = appState.lastTranscription, !lastTranscription.text.isEmpty {
-            Text(lastTranscription.text)
-                .font(.system(size: 12))
-                .lineLimit(4)
-                .fixedSize(horizontal: false, vertical: true)
+        } else if let lastTranscription = appState.lastTranscription {
+            VStack(alignment: .leading, spacing: 6) {
+                Label(
+                    "\(lastTranscription.taskMode.title) / \(lastTranscription.detectedLanguageDisplayName)",
+                    systemImage: "text.bubble.fill"
+                )
+                .font(.system(size: 12, weight: .semibold))
+
+                if lastTranscription.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Whisper finished, but returned an empty transcript.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(lastTranscription.text)
+                        .font(.system(size: 12))
+                        .lineLimit(6)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Text("\(lastTranscription.segments.count) segment\(lastTranscription.segments.count == 1 ? "" : "s") completed at \(lastTranscription.completedAt.formatted(date: .omitted, time: .standard)).")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         } else if let lastCapture = appState.lastCapture {
             Text("Last capture: \(lastCapture.durationText)")
                 .font(.system(size: 12))

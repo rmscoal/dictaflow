@@ -91,7 +91,7 @@ final class SystemTextInsertionService: TextInsertionServiceProtocol {
         }
 
         runningApplication.activate(options: [.activateIgnoringOtherApps])
-        try? await Task.sleep(nanoseconds: 150_000_000)
+        try? await Task.sleep(nanoseconds: 350_000_000)
     }
 
     private func runningApplication(for targetApplication: InsertionTargetApplication) -> NSRunningApplication? {
@@ -229,15 +229,16 @@ final class SystemTextInsertionService: TextInsertionServiceProtocol {
             return false
         }
 
-        try? await Task.sleep(nanoseconds: 250_000_000)
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
 
         let postPasteSnapshot = focusedElementSnapshot(targetApplication: targetApplication)
+        let pasteWasConfirmed = pasteWasObserved(insertedText: text, before: prePasteSnapshot, after: postPasteSnapshot)
 
-        if pasteboard.changeCount == insertedPasteboardChangeCount {
+        if pasteWasConfirmed, pasteboard.changeCount == insertedPasteboardChangeCount {
             snapshot?.restore(to: pasteboard)
         }
 
-        return pasteWasObserved(insertedText: text, before: prePasteSnapshot, after: postPasteSnapshot)
+        return pasteWasConfirmed
     }
 
     private func postCommandV() -> Bool {
@@ -258,10 +259,9 @@ final class SystemTextInsertionService: TextInsertionServiceProtocol {
         vDown.flags = .maskCommand
         vUp.flags = .maskCommand
 
-        commandDown.post(tap: .cghidEventTap)
-        vDown.post(tap: .cghidEventTap)
-        vUp.post(tap: .cghidEventTap)
-        commandUp.post(tap: .cghidEventTap)
+        for event in [commandDown, vDown, vUp, commandUp] {
+            event.post(tap: .cghidEventTap)
+        }
 
         return true
     }

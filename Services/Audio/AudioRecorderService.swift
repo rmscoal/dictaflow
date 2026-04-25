@@ -78,7 +78,7 @@ final class SystemAudioRecorderService: NSObject, AudioRecorderServiceProtocol {
 
         let capture = DictationCapture(
             fileURL: fileURL,
-            duration: recorder.currentTime,
+            duration: measuredDuration(of: fileURL) ?? recorder.currentTime,
             capturedAt: Date()
         )
 
@@ -105,5 +105,18 @@ final class SystemAudioRecorderService: NSObject, AudioRecorderServiceProtocol {
         let timestamp = formatter.string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let filename = "capture-\(timestamp)-\(UUID().uuidString.lowercased()).m4a"
         return directoryURL.appendingPathComponent(filename)
+    }
+
+    private func measuredDuration(of fileURL: URL) -> TimeInterval? {
+        guard let audioFile = try? AVAudioFile(forReading: fileURL) else {
+            return nil
+        }
+
+        let sampleRate = audioFile.processingFormat.sampleRate
+        guard sampleRate > 0 else {
+            return nil
+        }
+
+        return TimeInterval(audioFile.length) / sampleRate
     }
 }

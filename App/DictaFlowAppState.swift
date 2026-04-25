@@ -44,6 +44,7 @@ final class DictaFlowAppState: ObservableObject {
     private var workspaceObservers = Set<AnyCancellable>()
     private var lastKnownExternalTargetApplication: InsertionTargetApplication?
     private var pendingInsertionTargetApplication: InsertionTargetApplication?
+    private var preservedStatusMessage: String?
 
     convenience init() {
         self.init(
@@ -89,6 +90,7 @@ final class DictaFlowAppState: ObservableObject {
         self.lastTextInsertion = nil
         self.statusMessage = ""
         self.modelDownloadProgressText = nil
+        self.preservedStatusMessage = nil
         self.lastKnownExternalTargetApplication = Self.makeInsertionTargetApplication(from: NSWorkspace.shared.frontmostApplication)
         configureWorkspaceObservers()
         updateStatusMessage()
@@ -405,7 +407,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         textInsertionService.copyTextToPasteboard(lastTranscription.text)
-        statusMessage = "Copied the last transcript to the clipboard for manual paste."
+        setPreservedStatusMessage("Copied the last transcript to the clipboard for manual paste.")
     }
 
     func openAccessibilitySettings() {
@@ -454,7 +456,7 @@ final class DictaFlowAppState: ObservableObject {
             isHotkeyRegistered = true
         } catch {
             isHotkeyRegistered = false
-            statusMessage = error.localizedDescription
+            setPreservedStatusMessage(error.localizedDescription)
             showMainWindow()
         }
     }
@@ -494,7 +496,7 @@ final class DictaFlowAppState: ObservableObject {
                 await MainActor.run {
                     self.transcriptionState = .idle
                     self.modelDownloadProgressText = nil
-                    self.statusMessage = "Could not prepare the Whisper model. \(error.localizedDescription)"
+                    self.setPreservedStatusMessage("Could not prepare the Whisper model. \(error.localizedDescription)")
                     self.showMainWindow()
                 }
             }
@@ -563,6 +565,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func beginRecordingFlow() async {
+        clearPreservedStatusMessage()
         pendingInsertionTargetApplication = captureCurrentInsertionTargetApplication()
         recordingState = .requestingPermission
         updateStatusMessage()
@@ -583,7 +586,7 @@ final class DictaFlowAppState: ObservableObject {
             updateStatusMessage()
         } catch {
             recordingState = .idle
-            statusMessage = "Could not start recording. \(error.localizedDescription)"
+            setPreservedStatusMessage("Could not start recording. \(error.localizedDescription)")
             showMainWindow()
         }
     }
@@ -601,7 +604,7 @@ final class DictaFlowAppState: ObservableObject {
             await transcribe(capture: capture)
         } catch {
             recordingState = .idle
-            statusMessage = "Could not stop recording cleanly. \(error.localizedDescription)"
+            setPreservedStatusMessage("Could not stop recording cleanly. \(error.localizedDescription)")
             showMainWindow()
         }
     }
@@ -632,12 +635,13 @@ final class DictaFlowAppState: ObservableObject {
             )
 
             lastTranscription = transcription
+            clearPreservedStatusMessage()
             transcriptionState = .idle
             updateStatusMessage()
             await insert(transcription: transcription, targetApplication: pendingInsertionTargetApplication)
         } catch {
             transcriptionState = .idle
-            statusMessage = "Could not transcribe the recording locally. \(error.localizedDescription)"
+            setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)")
             showMainWindow()
         }
     }
@@ -646,7 +650,7 @@ final class DictaFlowAppState: ObservableObject {
         let text = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             pendingInsertionTargetApplication = nil
-            statusMessage = "Whisper returned an empty transcript, so there was nothing to insert."
+            setPreservedStatusMessage("Whisper returned an empty transcript, so there was nothing to insert.")
             showMainWindow()
             return
         }
@@ -655,6 +659,7 @@ final class DictaFlowAppState: ObservableObject {
         let targetApplicationName = resolvedTargetApplication?.displayName
 
         ensureAccessibilityPermissionForInsertion(targetApplicationName: targetApplicationName)
+        let canAttemptAutomaticInsertion = accessibilityPermissionState == .granted
 
         textInsertionState = .inserting(targetApplicationName: targetApplicationName)
         updateStatusMessage()
@@ -662,17 +667,20 @@ final class DictaFlowAppState: ObservableObject {
         let insertionResult = await textInsertionService.insertText(
             text,
             targetApplication: resolvedTargetApplication,
-            allowAccessibilityFeatures: accessibilityPermissionState == .granted
+            allowAccessibilityFeatures: canAttemptAutomaticInsertion
         )
 
         lastTextInsertion = insertionResult
         textInsertionState = .idle
         pendingInsertionTargetApplication = nil
-        updateStatusMessage()
 
-        if insertionResult.method == .copyPanel || accessibilityPermissionState != .granted {
-            showMainWindow()
+        if insertionResult.method == .copyPanel, !canAttemptAutomaticInsertion {
+            setPreservedStatusMessage("Accessibility access is required for automatic insertion. The latest transcript was copied to the clipboard.")
+        } else {
+            clearPreservedStatusMessage()
         }
+
+        updateStatusMessage()
     }
 
     private func ensureAccessibilityPermissionForInsertion(targetApplicationName: String?) {
@@ -694,6 +702,15 @@ final class DictaFlowAppState: ObservableObject {
             isGranted: permissionService.isAccessibilityPermissionGranted(),
             hasRequestedBefore: settingsStore.hasRequestedAccessibilityPermission
         )
+    }
+
+    private func setPreservedStatusMessage(_ message: String) {
+        preservedStatusMessage = message
+        statusMessage = message
+    }
+
+    private func clearPreservedStatusMessage() {
+        preservedStatusMessage = nil
     }
 
     private func configureWorkspaceObservers() {
@@ -720,6 +737,10 @@ final class DictaFlowAppState: ObservableObject {
 
     private static func makeInsertionTargetApplication(from application: NSRunningApplication?) -> InsertionTargetApplication? {
         guard let application else {
+            return nil
+        }
+
+        guard application.activationPolicy == .regular else {
             return nil
         }
 
@@ -771,6 +792,11 @@ final class DictaFlowAppState: ObservableObject {
             return
         case .inserting(let targetApplicationName):
             statusMessage = "Inserting the latest transcript into \(targetApplicationName ?? "the focused app")."
+            return
+        }
+
+        if let preservedStatusMessage {
+            statusMessage = preservedStatusMessage
             return
         }
 

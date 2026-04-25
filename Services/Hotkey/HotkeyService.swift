@@ -9,15 +9,15 @@ protocol HotkeyServiceProtocol: AnyObject {
 
 enum HotkeyServiceError: LocalizedError {
     case unableToInstallHandler
-    case unableToRegisterShortcut
+    case unableToRegisterShortcut(statuses: [String])
     case unableToResolveShortcutKey
 
     var errorDescription: String? {
         switch self {
         case .unableToInstallHandler:
             return "DictaFlow could not install its global hotkey handler."
-        case .unableToRegisterShortcut:
-            return "DictaFlow could not register Command + Shift + / as a global shortcut."
+        case .unableToRegisterShortcut(let statuses):
+            return "DictaFlow could not register Command + Shift + \\ as a global shortcut. \(statuses.joined(separator: " "))"
         case .unableToResolveShortcutKey:
             return "DictaFlow could not resolve the slash key for the current keyboard layout."
         }
@@ -26,10 +26,10 @@ enum HotkeyServiceError: LocalizedError {
 
 @MainActor
 final class CarbonHotkeyService: HotkeyServiceProtocol {
-    private static let hotKeyIdentifier: UInt32 = 1
     private static let hotKeySignature = fourCharCode("DFHK")
+    private static let modifierFlags = UInt32(cmdKey | shiftKey)
 
-    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyRefs: [EventHotKeyRef] = []
     private var eventHandlerRef: EventHandlerRef?
     private var handler: (() -> Void)?
 
@@ -60,28 +60,39 @@ final class CarbonHotkeyService: HotkeyServiceProtocol {
             throw HotkeyServiceError.unableToInstallHandler
         }
 
-        let slashKeyCode = try Self.currentSlashKeyCode()
-        let hotKeyID = EventHotKeyID(signature: Self.hotKeySignature, id: Self.hotKeyIdentifier)
-        let registerStatus = RegisterEventHotKey(
-            slashKeyCode,
-            UInt32(cmdKey | shiftKey),
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
+        let candidates = try Self.shortcutCandidates()
+        var failedRegistrations: [String] = []
 
-        guard registerStatus == noErr else {
+        for candidate in candidates {
+            var hotKeyRef: EventHotKeyRef?
+            let hotKeyID = EventHotKeyID(signature: Self.hotKeySignature, id: candidate.id)
+            let registerStatus = RegisterEventHotKey(
+                candidate.keyCode,
+                Self.modifierFlags,
+                hotKeyID,
+                GetApplicationEventTarget(),
+                0,
+                &hotKeyRef
+            )
+
+            if registerStatus == noErr, let hotKeyRef {
+                hotKeyRefs.append(hotKeyRef)
+            } else {
+                failedRegistrations.append("\(candidate.displayName): OSStatus \(registerStatus).")
+            }
+        }
+
+        guard !hotKeyRefs.isEmpty else {
             unregisterToggleHotkey()
-            throw HotkeyServiceError.unableToRegisterShortcut
+            throw HotkeyServiceError.unableToRegisterShortcut(statuses: failedRegistrations)
         }
     }
 
     func unregisterToggleHotkey() {
-        if let hotKeyRef {
+        for hotKeyRef in hotKeyRefs {
             UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
         }
+        hotKeyRefs = []
 
         if let eventHandlerRef {
             RemoveEventHandler(eventHandlerRef)
@@ -103,13 +114,20 @@ final class CarbonHotkeyService: HotkeyServiceProtocol {
             &hotKeyID
         )
 
-        guard status == noErr, hotKeyID.signature == Self.hotKeySignature, hotKeyID.id == Self.hotKeyIdentifier else {
+        guard status == noErr, hotKeyID.signature == Self.hotKeySignature else {
             return
         }
 
         Task { @MainActor [handler] in
             handler?()
         }
+    }
+
+    private static func shortcutCandidates() throws -> [(id: UInt32, displayName: String, keyCode: UInt32)] {
+        [
+            (id: 1, displayName: "Command + Shift + \\", keyCode: UInt32(kVK_ANSI_Backslash)),
+            (id: 2, displayName: "Command + Shift + /", keyCode: try currentSlashKeyCode())
+        ]
     }
 
     private static func currentSlashKeyCode() throws -> UInt32 {
@@ -126,19 +144,17 @@ final class CarbonHotkeyService: HotkeyServiceProtocol {
         }
 
         let keyboardLayout = keyboardLayoutData.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) { $0 }
-        let shiftedModifierState = UInt32(shiftKey) >> 8
-
         for keyCode in UInt16(0)...UInt16(UInt8.max) {
             if translatedString(
                 for: keyCode,
-                modifierState: shiftedModifierState,
+                modifierState: 0,
                 keyboardLayout: keyboardLayout
             ) == "/" {
                 return UInt32(keyCode)
             }
         }
 
-        throw HotkeyServiceError.unableToResolveShortcutKey
+        return UInt32(kVK_ANSI_Slash)
     }
 }
 

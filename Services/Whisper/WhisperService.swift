@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import whisper
 
 protocol WhisperServiceProtocol: AnyObject {
@@ -24,6 +25,10 @@ enum WhisperServiceError: LocalizedError {
 }
 
 actor WhisperCPPService: WhisperServiceProtocol {
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "DictaFlow",
+        category: "Whisper"
+    )
     private let audioDecodingService: AudioDecodingServiceProtocol
     private var cachedContexts: [URL: WhisperContextBox] = [:]
 
@@ -37,25 +42,18 @@ actor WhisperCPPService: WhisperServiceProtocol {
         configuration: WhisperConfiguration
     ) async throws -> WhisperTranscriptionResult {
         let samples = try await audioDecodingService.decodePCMFloatSamples(from: audioFileURL)
+        logDecodedAudioStats(samples)
         let context = try context(for: modelURL)
+        let languageCode = configuration.inputLanguage.whisperCode ?? "auto"
 
-        if let languageCode = configuration.inputLanguage.whisperCode {
-            return try languageCode.withCString { languagePointer in
-                try runTranscription(
-                    context: context,
-                    samples: samples,
-                    configuration: configuration,
-                    languagePointer: languagePointer
-                )
-            }
+        return try languageCode.withCString { languagePointer in
+            try runTranscription(
+                context: context,
+                samples: samples,
+                configuration: configuration,
+                languagePointer: languagePointer
+            )
         }
-
-        return try runTranscription(
-            context: context,
-            samples: samples,
-            configuration: configuration,
-            languagePointer: nil
-        )
     }
 
     private func context(for modelURL: URL) throws -> WhisperContextBox {
@@ -89,7 +87,8 @@ actor WhisperCPPService: WhisperServiceProtocol {
         parameters.print_special = false
         parameters.translate = configuration.taskMode == .translateToEnglish
         parameters.language = languagePointer
-        parameters.detect_language = configuration.inputLanguage == .automatic
+        // In whisper.cpp, detect_language exits after language detection. Use "auto" to detect and transcribe.
+        parameters.detect_language = false
         parameters.n_threads = Int32(Self.recommendedThreadCount)
         parameters.offset_ms = 0
         parameters.duration_ms = 0
@@ -123,8 +122,15 @@ actor WhisperCPPService: WhisperServiceProtocol {
             languageCode = nil
         }
 
+        let transcriptText = segments.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Diagnostic log: this records local dictation text and requires care in shared logs.
+        logger.info(
+            "Whisper inference completed: segments=\(segmentCount, privacy: .public), detectedLanguage=\(languageCode ?? "unknown", privacy: .public), transcript=\"\(transcriptText, privacy: .public)\""
+        )
+
         return WhisperTranscriptionResult(
-            text: segments.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines),
+            text: transcriptText,
             segments: segments,
             detectedLanguageCode: languageCode,
             model: configuration.model,
@@ -132,6 +138,37 @@ actor WhisperCPPService: WhisperServiceProtocol {
             completedAt: Date()
         )
     }
+
+    private func logDecodedAudioStats(_ samples: [Float]) {
+        guard !samples.isEmpty else {
+            logger.info("Whisper decoded audio: samples=0, duration=0.000s, rms=0.000000, peak=0.000000, activeSamples=0")
+            return
+        }
+
+        var sumOfSquares: Double = 0
+        var peak: Float = 0
+        var activeSampleCount = 0
+
+        for sample in samples {
+            let absoluteSample = abs(sample)
+            peak = max(peak, absoluteSample)
+            sumOfSquares += Double(sample * sample)
+
+            if absoluteSample >= Self.activityThreshold {
+                activeSampleCount += 1
+            }
+        }
+
+        let rms = sqrt(sumOfSquares / Double(samples.count))
+        let duration = Double(samples.count) / Self.decodedSampleRate
+
+        logger.info(
+            "Whisper decoded audio: samples=\(samples.count, privacy: .public), duration=\(duration, format: .fixed(precision: 3), privacy: .public)s, rms=\(rms, format: .fixed(precision: 6), privacy: .public), peak=\(Double(peak), format: .fixed(precision: 6), privacy: .public), activeSamples=\(activeSampleCount, privacy: .public)"
+        )
+    }
+
+    private static let decodedSampleRate: Double = 16_000
+    private static let activityThreshold: Float = 0.001
 
     private static var recommendedThreadCount: Int {
         max(1, min(8, ProcessInfo.processInfo.processorCount - 2))

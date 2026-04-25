@@ -278,6 +278,23 @@ struct ContentView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if let lastTranscription = appState.lastTranscription {
+                    if lastTranscription.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("Whisper finished, but returned an empty transcript.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text(lastTranscription.text)
+                            .font(.system(size: 13))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Text("\(lastTranscription.segments.count) segment\(lastTranscription.segments.count == 1 ? "" : "s") completed at \(lastTranscription.completedAt.formatted(date: .omitted, time: .standard)).")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text("After transcription finishes, DictaFlow targets the focused app and falls back through Accessibility, paste, simulated typing, then copy panel.")
                         .font(.system(size: 12))
