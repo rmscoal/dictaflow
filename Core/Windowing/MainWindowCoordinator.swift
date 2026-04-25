@@ -42,15 +42,20 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
 
         let hostingController = NSHostingController(rootView: ContentView(appState: appState))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 860, height: 680),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 500),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
 
         window.title = "DictaFlow"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
         window.contentViewController = hostingController
         window.center()
+        window.isOpaque = true
+        window.backgroundColor = .black
+        window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.setFrameAutosaveName("DictaFlowMainWindow")
         window.tabbingMode = .disallowed

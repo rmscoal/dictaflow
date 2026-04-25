@@ -13,10 +13,18 @@ protocol SettingsWindowRouting: AnyObject {
     func showSettingsWindow()
 }
 
+enum MainWindowPage {
+    case dashboard
+    case models
+    case settings
+    case history
+}
+
 @MainActor
 final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isMainWindowVisible = false
     @Published private(set) var isSettingsWindowVisible = false
+    @Published var mainWindowPage: MainWindowPage = .dashboard
     @Published private(set) var microphonePermissionState: MicrophonePermissionState
     @Published private(set) var accessibilityPermissionState: AccessibilityPermissionState
     @Published private(set) var recordingState: DictationRecordingState
@@ -318,11 +326,17 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func showMainWindow() {
+        mainWindowPage = .dashboard
+        mainWindowRouter?.showMainWindow()
+    }
+
+    func showMainWindowPage(_ page: MainWindowPage) {
+        mainWindowPage = page
         mainWindowRouter?.showMainWindow()
     }
 
     func openSettingsWindow() {
-        settingsWindowRouter?.showSettingsWindow()
+        showMainWindowPage(.settings)
     }
 
     func closeMainWindow() {

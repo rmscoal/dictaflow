@@ -46,13 +46,16 @@ final class SystemTextInsertionService: TextInsertionServiceProtocol {
                 )
             }
 
-            if await insertViaPaste(trimmedText, targetApplication: targetApplication) {
+            switch await insertViaPaste(trimmedText, targetApplication: targetApplication) {
+            case .confirmed, .posted:
                 return TextInsertionResult(
                     text: trimmedText,
                     method: .clipboardPaste,
                     targetApplicationName: targetApplicationName,
                     completedAt: Date()
                 )
+            case .notPosted:
+                break
             }
 
             if insertViaSimulatedTyping(trimmedText) {
@@ -219,14 +222,14 @@ final class SystemTextInsertionService: TextInsertionServiceProtocol {
         _ = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange)
     }
 
-    private func insertViaPaste(_ text: String, targetApplication: InsertionTargetApplication?) async -> Bool {
+    private func insertViaPaste(_ text: String, targetApplication: InsertionTargetApplication?) async -> PasteInsertionOutcome {
         let prePasteSnapshot = focusedElementSnapshot(targetApplication: targetApplication)
         let snapshot = PasteboardSnapshot(pasteboard: pasteboard)
         copyTextToPasteboard(text)
         let insertedPasteboardChangeCount = pasteboard.changeCount
 
         guard postCommandV() else {
-            return false
+            return .notPosted
         }
 
         try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -238,7 +241,7 @@ final class SystemTextInsertionService: TextInsertionServiceProtocol {
             snapshot?.restore(to: pasteboard)
         }
 
-        return pasteWasConfirmed
+        return pasteWasConfirmed ? .confirmed : .posted
     }
 
     private func postCommandV() -> Bool {
@@ -404,4 +407,10 @@ private struct FocusedElementSnapshot {
     let processIdentifier: pid_t
     let value: String?
     let selectedRange: NSRange?
+}
+
+private enum PasteInsertionOutcome {
+    case notPosted
+    case posted
+    case confirmed
 }
