@@ -7,6 +7,11 @@ struct WhisperTranscriptionResult: Equatable {
     let model: WhisperModelDescriptor
     let taskMode: WhisperTaskMode
     let completedAt: Date
+    var refinement: TranscriptRefinementResult? = nil
+
+    var insertionText: String {
+        refinement?.refinedText ?? text
+    }
 
     var detectedLanguageDisplayName: String {
         guard let detectedLanguageCode else {

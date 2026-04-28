@@ -4,10 +4,12 @@ struct ContentView: View {
     @ObservedObject var appState: DictaFlowAppState
     @State private var isShowingModelPreparationConfirmation = false
     @State private var selectedModel: WhisperModelDescriptor
+    @State private var selectedRefinementModel: RefinementModelDescriptor
 
     init(appState: DictaFlowAppState) {
         self.appState = appState
         _selectedModel = State(initialValue: appState.whisperConfiguration.model)
+        _selectedRefinementModel = State(initialValue: appState.refinementConfiguration.model)
     }
 
     var body: some View {
@@ -21,7 +23,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
-        .frame(minWidth: 520, minHeight: 360)
+        .frame(minWidth: 500, minHeight: 340)
         .foregroundStyle(AppTheme.primaryText)
         .alert(
             "Prepare \(selectedModel.displayName) Model?",
@@ -88,10 +90,11 @@ struct ContentView: View {
 
     private var dashboardPage: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
                 recordingTile
+                refinementTile
 
-                LazyVGrid(columns: compactNavigationColumns, spacing: 8) {
+                LazyVGrid(columns: compactNavigationColumns, spacing: 6) {
                     NavigationTile(title: "Model", value: appState.whisperConfiguration.model.displayName, systemImage: "cpu") {
                         appState.mainWindowPage = .models
                     }
@@ -106,19 +109,19 @@ struct ContentView: View {
                 }
 
                 GlassTile {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
                         StatusLine(
                             title: "Microphone",
                             value: appState.microphonePermissionState.title,
                             systemImage: "mic.fill",
-                            color: appState.microphonePermissionState == .granted ? .green : .orange
+                            color: appState.microphonePermissionState == .granted ? AppTheme.primaryText : AppTheme.secondaryText
                         )
 
                         StatusLine(
                             title: "Accessibility",
                             value: appState.accessibilityPermissionState.title,
                             systemImage: "figure.wave.circle",
-                            color: appState.accessibilityPermissionState == .granted ? .green : .orange
+                            color: appState.accessibilityPermissionState == .granted ? AppTheme.primaryText : AppTheme.secondaryText
                         )
 
                         if hasMissingRequiredSettings {
@@ -131,43 +134,128 @@ struct ContentView: View {
                     }
                 }
             }
-            .padding(12)
-            .frame(maxWidth: 560, alignment: .top)
+            .padding(8)
+            .frame(maxWidth: 430, alignment: .top)
             .frame(maxWidth: .infinity, alignment: .top)
+        }
+    }
+
+    private var refinementTile: some View {
+        GlassTile {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "wand.and.sparkles")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(AppTheme.accent)
+                        .frame(width: 16)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Refined Text with LLM")
+                            .font(.system(size: 11, weight: .semibold))
+
+                        Text(appState.refinementConfiguration.isEnabled ? "On" : "Off")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Toggle("", isOn: refinementEnabledBinding)
+                        .labelsHidden()
+                        .toggleStyle(AppCompactSwitchStyle())
+                        .disabled(appState.whisperSettingsLocked)
+                }
+
+                Text(shortRefinementStatusText)
+                    .font(.system(size: 9))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .lineLimit(2)
+
+                if appState.refinementConfiguration.isEnabled {
+                    HStack(spacing: 8) {
+                        Button {
+                            appState.prepareRefinementModel()
+                        } label: {
+                            Label("Prepare", systemImage: "arrow.down.circle")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(appState.whisperSettingsLocked)
+
+                        Button {
+                            appState.mainWindowPage = .settings
+                        } label: {
+                            Label("Settings", systemImage: "slider.horizontal.3")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                } else if !appState.hasPreparedRefinementModel {
+                    HStack(spacing: 8) {
+                        Button {
+                            appState.mainWindowPage = .settings
+                        } label: {
+                            Label("Choose Model", systemImage: "list.bullet")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .tint(AppTheme.accent)
+
+                        Text("Qwen2.5 1.5B (Recommended)")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(AppTheme.tertiaryText)
+                            .lineLimit(1)
+                    }
+                }
+            }
         }
     }
 
     private var recordingTile: some View {
         GlassTile {
-            HStack(alignment: .center, spacing: 10) {
-                Image(systemName: appState.dictationActionSymbolName)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(statusColor)
-                    .symbolRenderingMode(.hierarchical)
-                    .frame(width: 22)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 9) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.white.opacity(0.045))
+                            .overlay(Circle().stroke(AppTheme.border, lineWidth: 0.75))
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(appState.recordingState.isRecording ? "Recording" : "Ready")
-                        .font(.system(size: 15, weight: .semibold))
+                        Image(systemName: appState.recordingState.isRecording ? "stop.fill" : "mic.fill")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(AppTheme.primaryText)
+                    }
+                    .frame(width: 30, height: 30)
 
-                    Text(recordingStatusText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(AppTheme.secondaryText)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(appState.recordingState.isRecording ? "Recording" : "Ready")
+                            .font(.system(size: 12, weight: .semibold))
+
+                        Text(appState.dictationSummaryText)
+                            .font(.system(size: 10))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    WaveformBadge()
+                        .frame(width: 28, height: 18)
+                        .foregroundStyle(AppTheme.tertiaryText)
                 }
-
-                Spacer(minLength: 10)
 
                 Button {
                     appState.toggleDictation()
                 } label: {
                     Label(appState.dictationActionTitle, systemImage: appState.recordingState.isRecording ? "stop.fill" : "mic.fill")
-                        .frame(width: 142)
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 28)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .tint(appState.recordingState.isRecording ? .red : AppTheme.accent)
-                .disabled(appState.transcriptionState.isTranscribing || appState.textInsertionState.isBusy)
+                .tint(AppTheme.accent)
+                .disabled(appState.transcriptionState.isBusy || appState.textInsertionState.isBusy)
             }
         }
     }
@@ -181,17 +269,17 @@ struct ContentView: View {
 
                         HStack(alignment: .firstTextBaseline) {
                             Text(appState.whisperConfiguration.model.displayName)
-                                .font(.system(size: 22, weight: .semibold))
+                                .font(.system(size: 13, weight: .semibold))
 
                             Spacer()
 
                             Text(appState.whisperConfiguration.model.approximateDiskSizeDescription)
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(AppTheme.accent)
                         }
 
                         Text(shortModelStatusText)
-                            .font(.system(size: 13))
+                            .font(.system(size: 10))
                             .foregroundStyle(AppTheme.secondaryText)
                     }
                 }
@@ -284,10 +372,60 @@ struct ContentView: View {
                 }
 
                 GlassTile {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SettingLabel(
+                            title: "Refinement",
+                            value: appState.refinementConfiguration.isEnabled ? "On" : "Off",
+                            systemImage: "wand.and.sparkles"
+                        )
+
+                        Toggle("Clean transcripts locally before insertion", isOn: refinementEnabledBinding)
+                            .toggleStyle(.switch)
+                            .disabled(appState.whisperSettingsLocked)
+
+                        Picker("Model", selection: refinementModelBinding) {
+                            ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
+                                Text("\(model.pickerTitle) (\(model.approximateDiskSizeDescription))")
+                                    .tag(model)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .disabled(appState.whisperSettingsLocked)
+
+                        Text(selectedRefinementModel.detailText)
+                            .font(.system(size: 12))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text(shortRefinementStatusText)
+                            .font(.system(size: 12))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        HStack(spacing: 10) {
+                            Button {
+                                appState.prepareAndUseRefinementModel(selectedRefinementModel)
+                            } label: {
+                                Label("Use & Prepare", systemImage: "arrow.down.circle")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(AppTheme.accent)
+                            .disabled(appState.whisperSettingsLocked)
+
+                            Text("Local")
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(AppTheme.tertiaryText)
+                        }
+                    }
+                }
+
+                GlassTile {
                     HStack(spacing: 10) {
                         Button {
                             appState.resetWhisperSettingsToDefaults()
                             selectedModel = WhisperConfiguration.default.model
+                            selectedRefinementModel = RefinementConfiguration.default.model
                         } label: {
                             Label("Restore Defaults", systemImage: "arrow.counterclockwise")
                         }
@@ -326,10 +464,29 @@ struct ContentView: View {
                                     .foregroundStyle(AppTheme.secondaryText)
                             }
 
-                            Text(lastTranscription.text.isEmpty ? "Empty transcript" : lastTranscription.text)
+                            if let refinement = lastTranscription.refinement {
+                                Text(refinement.refinedText.isEmpty ? "Empty refined transcript" : refinement.refinedText)
+                                    .font(.system(size: 13))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                Divider()
+
+                                Text("Raw Whisper Transcript")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(AppTheme.secondaryText)
+
+                                Text(lastTranscription.text.isEmpty ? "Empty transcript" : lastTranscription.text)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(AppTheme.secondaryText)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                Text(lastTranscription.text.isEmpty ? "Empty transcript" : lastTranscription.text)
                                 .font(.system(size: 13))
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                            }
 
                             HStack(spacing: 10) {
                                 Button {
@@ -381,14 +538,14 @@ struct ContentView: View {
 
     private var compactNavigationColumns: [GridItem] {
         [
-            GridItem(.flexible(minimum: 150), spacing: 8),
-            GridItem(.flexible(minimum: 150), spacing: 8),
-            GridItem(.flexible(minimum: 150), spacing: 8)
+            GridItem(.flexible(minimum: 0), spacing: 6),
+            GridItem(.flexible(minimum: 0), spacing: 6),
+            GridItem(.flexible(minimum: 0), spacing: 6)
         ]
     }
 
     private var statusColor: Color {
-        appState.recordingState.isRecording ? .red : AppTheme.accent
+        appState.recordingState.isRecording ? AppTheme.primaryText : AppTheme.accent
     }
 
     private var hasMissingRequiredSettings: Bool {
@@ -416,6 +573,10 @@ struct ContentView: View {
             return "Transcribing"
         }
 
+        if appState.transcriptionState.isRefining {
+            return "Refining"
+        }
+
         if appState.textInsertionState.isBusy {
             return "Inserting"
         }
@@ -429,6 +590,10 @@ struct ContentView: View {
         }
 
         return appState.modelStatusText.replacingOccurrences(of: appState.modelsDirectoryPath, with: "local cache")
+    }
+
+    private var shortRefinementStatusText: String {
+        appState.refinementStatusText.replacingOccurrences(of: appState.modelsDirectoryPath, with: "local cache")
     }
 
     private var taskModeBinding: Binding<WhisperTaskMode> {
@@ -445,17 +610,31 @@ struct ContentView: View {
         )
     }
 
+    private var refinementEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { appState.refinementConfiguration.isEnabled },
+            set: { appState.updateRefinementEnabled($0) }
+        )
+    }
+
+    private var refinementModelBinding: Binding<RefinementModelDescriptor> {
+        Binding(
+            get: { selectedRefinementModel },
+            set: { selectedRefinementModel = $0 }
+        )
+    }
+
     private func goBackToDashboard() {
         appState.mainWindowPage = .dashboard
     }
 }
 
 private enum AppTheme {
-    static let background = Color(red: 0.055, green: 0.058, blue: 0.064)
-    static let barFill = Color(red: 0.075, green: 0.078, blue: 0.086)
-    static let tileFill = Color(red: 0.095, green: 0.098, blue: 0.108)
-    static let accent = Color.accentColor
-    static let border = Color.white.opacity(0.10)
+    static let background = Color(red: 0.037, green: 0.037, blue: 0.039)
+    static let barFill = Color.black.opacity(0.28)
+    static let tileFill = Color.white.opacity(0.035)
+    static let accent = Color.white.opacity(0.88)
+    static let border = Color.white.opacity(0.08)
     static let primaryText = Color.white.opacity(0.92)
     static let secondaryText = Color.white.opacity(0.60)
     static let tertiaryText = Color.white.opacity(0.38)
@@ -469,8 +648,8 @@ private struct DetailPage<Content: View>: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 8) {
                     Button(action: back) {
                         Label("Back", systemImage: "chevron.left")
                     }
@@ -478,14 +657,14 @@ private struct DetailPage<Content: View>: View {
                     .controlSize(.small)
 
                     Label(title, systemImage: systemImage)
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
 
                     Spacer()
                 }
 
                 content
             }
-            .padding(14)
+            .padding(9)
         }
     }
 }
@@ -495,14 +674,14 @@ private struct GlassTile<Content: View>: View {
 
     var body: some View {
         content
-            .padding(10)
+            .padding(7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .stroke(AppTheme.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(AppTheme.border, lineWidth: 0.75)
             )
-            .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 3)
+            .shadow(color: Color.black.opacity(0.07), radius: 5, x: 0, y: 2)
     }
 }
 
@@ -512,8 +691,41 @@ private struct TileHeader: View {
 
     var body: some View {
         Label(title, systemImage: systemImage)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(AppTheme.secondaryText)
+    }
+}
+
+private struct WaveformBadge: View {
+    var body: some View {
+        HStack(alignment: .center, spacing: 3) {
+            ForEach([5, 10, 16, 12, 6], id: \.self) { height in
+                Capsule(style: .continuous)
+                    .frame(width: 2.5, height: CGFloat(height))
+            }
+        }
+    }
+}
+
+private struct AppCompactSwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.78)) {
+                configuration.isOn.toggle()
+            }
+        } label: {
+            Capsule(style: .continuous)
+                .fill(configuration.isOn ? Color.white.opacity(0.18) : Color.white.opacity(0.10))
+                .frame(width: 32, height: 18)
+                .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+                    Circle()
+                        .fill(configuration.isOn ? Color.white : Color.white.opacity(0.42))
+                        .frame(width: 14, height: 14)
+                        .padding(2)
+                }
+                .overlay(Capsule(style: .continuous).stroke(AppTheme.border, lineWidth: 0.75))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -526,18 +738,18 @@ private struct NavigationTile: View {
     var body: some View {
         Button(action: action) {
             GlassTile {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Image(systemName: systemImage)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(AppTheme.accent)
-                        .frame(width: 16)
+                        .frame(width: 12)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title)
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.system(size: 9, weight: .semibold))
 
                         Text(value)
-                            .font(.system(size: 10))
+                            .font(.system(size: 8))
                             .foregroundStyle(AppTheme.secondaryText)
                             .lineLimit(1)
                     }
@@ -545,7 +757,7 @@ private struct NavigationTile: View {
                     Spacer()
 
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(AppTheme.tertiaryText)
                 }
             }
@@ -562,10 +774,10 @@ private struct ModelChoiceCard: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(model.displayName)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
 
                     Spacer()
 
@@ -576,22 +788,22 @@ private struct ModelChoiceCard: View {
                 }
 
                 Text(model.approximateDiskSizeDescription)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundStyle(AppTheme.accent)
 
                 Text(model.detailText)
-                    .font(.system(size: 11))
+                    .font(.system(size: 9))
                     .foregroundStyle(AppTheme.secondaryText)
                     .lineLimit(2)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(8)
+            .frame(maxWidth: .infinity, minHeight: 68, alignment: .topLeading)
+            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(isSelected ? AppTheme.accent.opacity(0.7) : AppTheme.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(isSelected ? AppTheme.accent.opacity(0.7) : AppTheme.border, lineWidth: 0.75)
             )
-            .shadow(color: Color.black.opacity(0.10), radius: 10, x: 0, y: 4)
+            .shadow(color: Color.black.opacity(0.08), radius: 6, x: 0, y: 2)
         }
         .buttonStyle(.plain)
     }
@@ -603,18 +815,18 @@ private struct SettingLabel: View {
     let systemImage: String
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: systemImage)
                 .foregroundStyle(AppTheme.accent)
-                .frame(width: 18)
+                .frame(width: 14)
 
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
 
             Spacer()
 
             Text(value)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(AppTheme.secondaryText)
                 .lineLimit(1)
         }
@@ -628,23 +840,23 @@ private struct StatusLine: View {
     let color: Color
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 7) {
             Image(systemName: systemImage)
                 .foregroundStyle(color)
-                .frame(width: 16)
+                .frame(width: 12)
 
             Text(title)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
 
             Spacer()
 
             Text(value)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
                 .foregroundStyle(color)
                 .lineLimit(1)
-                .frame(minWidth: 64, alignment: .trailing)
+                .frame(minWidth: 52, alignment: .trailing)
         }
     }
 }

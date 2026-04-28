@@ -1,6 +1,6 @@
 import Foundation
 
-enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable {
+enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable, Sendable, LocalModelDescriptor {
     case tiny
     case base
     case small
@@ -8,7 +8,11 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable {
 
     static let recommendedDefault: WhisperModelDescriptor = .small
 
-    var displayName: String {
+    nonisolated var modelIdentifier: String {
+        "whisper.\(rawValue)"
+    }
+
+    nonisolated var displayName: String {
         switch self {
         case .tiny:
             return "Tiny"
@@ -21,15 +25,15 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable {
         }
     }
 
-    var filename: String {
+    nonisolated var filename: String {
         "ggml-\(rawValue).bin"
     }
 
-    var downloadURL: URL {
+    nonisolated var downloadURL: URL {
         URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/\(filename)")!
     }
 
-    var sha1Checksum: String {
+    nonisolated var sha1Checksum: String {
         switch self {
         case .tiny:
             return "bd577a113a864445d4c299885e0cb97d4ba92b5f"
@@ -42,7 +46,11 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable {
         }
     }
 
-    var approximateDiskSizeDescription: String {
+    nonisolated var checksum: ModelChecksum {
+        .sha1(sha1Checksum)
+    }
+
+    nonisolated var approximateDiskSizeDescription: String {
         switch self {
         case .tiny:
             return "75 MB"
@@ -55,7 +63,7 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable {
         }
     }
 
-    var detailText: String {
+    nonisolated var detailText: String {
         switch self {
         case .tiny:
             return "Fastest startup with the lightest footprint. Best for quick notes and lower-end Macs."

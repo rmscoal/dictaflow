@@ -4,9 +4,11 @@ protocol SettingsStoreProtocol: AnyObject {
     var shouldShowMainWindowOnLaunch: Bool { get }
     var hasRequestedAccessibilityPermission: Bool { get }
     var whisperConfiguration: WhisperConfiguration { get }
+    var refinementConfiguration: RefinementConfiguration { get }
     func markInitialWindowPresentationComplete()
     func markAccessibilityPermissionRequested()
     func saveWhisperConfiguration(_ configuration: WhisperConfiguration)
+    func saveRefinementConfiguration(_ configuration: RefinementConfiguration)
 }
 
 final class UserDefaultsSettingsStore: SettingsStoreProtocol {
@@ -14,6 +16,7 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
         static let hasPresentedInitialWindow = "app.hasPresentedInitialWindow"
         static let hasRequestedAccessibilityPermission = "permissions.hasRequestedAccessibilityPermission"
         static let whisperConfiguration = "whisper.configuration"
+        static let refinementConfiguration = "refinement.configuration"
     }
 
     private let defaults: UserDefaults
@@ -38,6 +41,14 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
         return (try? JSONDecoder().decode(WhisperConfiguration.self, from: data)) ?? .default
     }
 
+    var refinementConfiguration: RefinementConfiguration {
+        guard let data = defaults.data(forKey: Keys.refinementConfiguration) else {
+            return .default
+        }
+
+        return (try? JSONDecoder().decode(RefinementConfiguration.self, from: data)) ?? .default
+    }
+
     func markInitialWindowPresentationComplete() {
         defaults.set(true, forKey: Keys.hasPresentedInitialWindow)
     }
@@ -52,5 +63,13 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
         }
 
         defaults.set(data, forKey: Keys.whisperConfiguration)
+    }
+
+    func saveRefinementConfiguration(_ configuration: RefinementConfiguration) {
+        guard let data = try? JSONEncoder().encode(configuration) else {
+            return
+        }
+
+        defaults.set(data, forKey: Keys.refinementConfiguration)
     }
 }

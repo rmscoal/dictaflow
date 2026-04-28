@@ -39,6 +39,7 @@ final class DictaFlowAppState: ObservableObject {
 
     let launchExperience: AppLaunchExperience
     @Published private(set) var whisperConfiguration: WhisperConfiguration
+    @Published private(set) var refinementConfiguration: RefinementConfiguration
 
     private let settingsStore: SettingsStoreProtocol
     private let permissionService: PermissionServiceProtocol
@@ -46,6 +47,7 @@ final class DictaFlowAppState: ObservableObject {
     private let hotkeyService: HotkeyServiceProtocol
     private let modelDownloadService: ModelDownloadServiceProtocol
     private let whisperService: WhisperServiceProtocol
+    private let transcriptRefinementService: TranscriptRefinementServiceProtocol
     private let textInsertionService: TextInsertionServiceProtocol
     private weak var mainWindowRouter: MainWindowRouting?
     private weak var settingsWindowRouter: SettingsWindowRouting?
@@ -62,6 +64,7 @@ final class DictaFlowAppState: ObservableObject {
             hotkeyService: CarbonHotkeyService(),
             modelDownloadService: WhisperModelDownloadService(),
             whisperService: WhisperCPPService(),
+            transcriptRefinementService: LlamaCLITranscriptRefinementService(),
             textInsertionService: SystemTextInsertionService()
         )
     }
@@ -73,6 +76,7 @@ final class DictaFlowAppState: ObservableObject {
         hotkeyService: HotkeyServiceProtocol,
         modelDownloadService: ModelDownloadServiceProtocol,
         whisperService: WhisperServiceProtocol,
+        transcriptRefinementService: TranscriptRefinementServiceProtocol,
         textInsertionService: TextInsertionServiceProtocol
     ) {
         self.settingsStore = settingsStore
@@ -81,9 +85,11 @@ final class DictaFlowAppState: ObservableObject {
         self.hotkeyService = hotkeyService
         self.modelDownloadService = modelDownloadService
         self.whisperService = whisperService
+        self.transcriptRefinementService = transcriptRefinementService
         self.textInsertionService = textInsertionService
         self.launchExperience = settingsStore.shouldShowMainWindowOnLaunch ? .firstLaunch : .returningUser
         self.whisperConfiguration = settingsStore.whisperConfiguration
+        self.refinementConfiguration = settingsStore.refinementConfiguration
         self.isSettingsWindowVisible = false
         self.microphonePermissionState = permissionService.currentMicrophonePermissionStatus()
         self.accessibilityPermissionState = AccessibilityPermissionState(
@@ -109,7 +115,7 @@ final class DictaFlowAppState: ObservableObject {
             return "mic.circle.fill"
         }
 
-        if transcriptionState.isTranscribing {
+        if transcriptionState.isTranscribing || transcriptionState.isRefining {
             return "waveform.badge.magnifyingglass"
         }
 
@@ -134,6 +140,12 @@ final class DictaFlowAppState: ObservableObject {
             return "Downloading \(model.displayName) model"
         case .transcribing:
             return "Running Whisper locally"
+        case .preparingRefinementModel(let model):
+            return "Preparing \(model.displayName)"
+        case .downloadingRefinementModel(let model, _):
+            return "Downloading \(model.displayName)"
+        case .refining:
+            return "Refining locally"
         }
 
         switch textInsertionState {
@@ -169,7 +181,7 @@ final class DictaFlowAppState: ObservableObject {
             return "stop.circle.fill"
         }
 
-        if transcriptionState.isTranscribing {
+        if transcriptionState.isTranscribing || transcriptionState.isRefining {
             return "waveform.badge.magnifyingglass"
         }
 
@@ -207,6 +219,18 @@ final class DictaFlowAppState: ObservableObject {
             return "Downloading the local \(model.displayName) Whisper model.\(progressSuffix)"
         case .transcribing(let model):
             return "Transcribing locally with the \(model.displayName) model."
+        case .preparingRefinementModel(let model):
+            return "Preparing the local \(model.displayName) refinement model."
+        case .downloadingRefinementModel(let model, let progress):
+            let progressSuffix: String
+            if let progress {
+                progressSuffix = " \(Int(progress * 100))% complete."
+            } else {
+                progressSuffix = ""
+            }
+            return "Downloading the local \(model.displayName) refinement model.\(progressSuffix)"
+        case .refining(let model):
+            return "Refining the transcript locally with \(model.displayName)."
         }
 
         switch textInsertionState {
@@ -239,11 +263,43 @@ final class DictaFlowAppState: ObservableObject {
             return modelDownloadProgressText ?? "Downloading \(model.displayName) to \(modelsDirectoryPath)"
         case .transcribing(let model):
             return "Using \(model.displayName) from \(modelsDirectoryPath)"
+        case .preparingRefinementModel(let model):
+            return "Preparing \(model.displayName) in \(modelsDirectoryPath)"
+        case .downloadingRefinementModel(let model, _):
+            return modelDownloadProgressText ?? "Downloading \(model.displayName) to \(modelsDirectoryPath)"
+        case .refining(let model):
+            return "Using \(model.displayName) from \(modelsDirectoryPath)"
         }
     }
 
     var whisperConfigurationSummaryText: String {
-        "\(whisperConfiguration.taskMode.title) • \(whisperConfiguration.inputLanguage.displayName) • \(whisperConfiguration.model.displayName)"
+        let refinementText = refinementConfiguration.isEnabled ? "Refinement On" : "Refinement Off"
+        return "\(whisperConfiguration.taskMode.title) • \(whisperConfiguration.inputLanguage.displayName) • \(whisperConfiguration.model.displayName) • \(refinementText)"
+    }
+
+    var refinementStatusText: String {
+        if let progress = modelDownloadProgressText,
+           case .downloadingRefinementModel = transcriptionState {
+            return progress
+        }
+
+        if refinementConfiguration.isEnabled {
+            return "Cleans transcripts locally before insertion."
+        }
+
+        if !hasPreparedRefinementModel {
+            return "Choose and prepare a local refinement model before turning this on."
+        }
+
+        return "Refinement is off. DictaFlow will insert the raw Whisper transcript."
+    }
+
+    var hasPreparedRefinementModel: Bool {
+        RefinementModelDescriptor.allCases.contains { modelDownloadService.isRefinementModelPrepared($0) }
+    }
+
+    var isSelectedRefinementModelPrepared: Bool {
+        modelDownloadService.isRefinementModelPrepared(refinementConfiguration.model)
     }
 
     var whisperSettingsLocked: Bool {
@@ -254,7 +310,7 @@ final class DictaFlowAppState: ObservableObject {
             return true
         }
 
-        return transcriptionState.isPreparingModel || transcriptionState.isTranscribing || textInsertionState.isBusy
+        return transcriptionState.isBusy || textInsertionState.isBusy
     }
 
     var supportedWhisperLanguages: [WhisperLanguageOption] {
@@ -289,9 +345,9 @@ final class DictaFlowAppState: ObservableObject {
             return false
         }
 
-        return !lastTranscription.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return !lastTranscription.insertionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !recordingState.isRecording
-            && !transcriptionState.isTranscribing
+            && !transcriptionState.isBusy
             && !textInsertionState.isBusy
     }
 
@@ -300,7 +356,7 @@ final class DictaFlowAppState: ObservableObject {
             return false
         }
 
-        return !lastTranscription.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return !lastTranscription.insertionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     func attach(mainWindowRouter: MainWindowRouting) {
@@ -367,9 +423,38 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
+    func updateRefinementEnabled(_ isEnabled: Bool) {
+        guard refinementConfiguration.isEnabled != isEnabled else {
+            return
+        }
+
+        guard !isEnabled || isSelectedRefinementModelPrepared else {
+            mainWindowPage = .settings
+            setPreservedStatusMessage("Choose and prepare a refinement model before turning on local cleanup.")
+            showMainWindow()
+            return
+        }
+
+        refinementConfiguration.isEnabled = isEnabled
+        persistRefinementConfiguration()
+        updateStatusMessage()
+    }
+
+    func updateRefinementModel(_ model: RefinementModelDescriptor) {
+        guard refinementConfiguration.model != model else {
+            return
+        }
+
+        refinementConfiguration.model = model
+        persistRefinementConfiguration()
+        updateStatusMessage()
+    }
+
     func resetWhisperSettingsToDefaults() {
         whisperConfiguration = .default
+        refinementConfiguration = .default
         persistWhisperConfiguration()
+        persistRefinementConfiguration()
         updateStatusMessage()
     }
 
@@ -397,6 +482,20 @@ final class DictaFlowAppState: ObservableObject {
         prepareDefaultModelIfNeeded()
     }
 
+    func prepareRefinementModel() {
+        prepareRefinementModelIfNeeded(force: true)
+    }
+
+    func prepareAndUseRefinementModel(_ model: RefinementModelDescriptor) {
+        if refinementConfiguration.model != model {
+            refinementConfiguration.model = model
+            persistRefinementConfiguration()
+            updateStatusMessage()
+        }
+
+        prepareRefinementModelIfNeeded(force: true, enableAfterPreparation: true)
+    }
+
     func toggleDictation() {
         Task { @MainActor [weak self] in
             await self?.performDictationToggle()
@@ -420,7 +519,7 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
-        textInsertionService.copyTextToPasteboard(lastTranscription.text)
+        textInsertionService.copyTextToPasteboard(lastTranscription.insertionText)
         setPreservedStatusMessage("Copied the last transcript to the clipboard for manual paste.")
     }
 
@@ -476,7 +575,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func prepareDefaultModelIfNeeded() {
-        guard !recordingState.isRecording, !transcriptionState.isPreparingModel, !transcriptionState.isTranscribing else {
+        guard !recordingState.isRecording, !transcriptionState.isBusy else {
             return
         }
 
@@ -517,6 +616,57 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    private func prepareRefinementModelIfNeeded(force: Bool = false, enableAfterPreparation: Bool = false) {
+        guard force || refinementConfiguration.isEnabled else {
+            return
+        }
+
+        guard !recordingState.isRecording, !transcriptionState.isBusy else {
+            return
+        }
+
+        let model = refinementConfiguration.model
+        transcriptionState = .preparingRefinementModel(model)
+        modelDownloadProgressText = nil
+        updateStatusMessage()
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                _ = try await self.modelDownloadService.ensureRefinementModelAvailable(model) { [weak self] event in
+                    Task { @MainActor [weak self] in
+                        self?.apply(refinementModelDownloadEvent: event, for: model)
+                    }
+                }
+
+                await MainActor.run {
+                    if case .refining = self.transcriptionState {
+                        return
+                    }
+
+                    if enableAfterPreparation {
+                        self.refinementConfiguration.isEnabled = true
+                        self.persistRefinementConfiguration()
+                    }
+
+                    self.transcriptionState = .idle
+                    self.modelDownloadProgressText = "Ready at \(self.modelsDirectoryPath)"
+                    self.updateStatusMessage()
+                }
+            } catch {
+                await MainActor.run {
+                    self.transcriptionState = .idle
+                    self.modelDownloadProgressText = nil
+                    self.setPreservedStatusMessage("Could not prepare the refinement model. \(error.localizedDescription)")
+                    self.showMainWindow()
+                }
+            }
+        }
+    }
+
     private func apply(modelDownloadEvent: ModelDownloadEvent, for model: WhisperModelDescriptor) {
         switch modelDownloadEvent {
         case .located(let url):
@@ -545,7 +695,51 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
+    private func apply(refinementModelDownloadEvent event: ModelDownloadEvent, for model: RefinementModelDescriptor) {
+        switch event {
+        case .located(let url):
+            if case .refining = transcriptionState {
+                modelDownloadProgressText = "Using cached model at \(url.path)"
+            } else {
+                transcriptionState = .idle
+                modelDownloadProgressText = "Ready at \(url.path)"
+            }
+        case .starting(let expectedBytes):
+            transcriptionState = .downloadingRefinementModel(model, progress: nil)
+            modelDownloadProgressText = formattedModelProgress(
+                modelName: model.displayName,
+                bytesWritten: 0,
+                totalBytes: expectedBytes
+            )
+        case .downloading(let bytesWritten, let totalBytes):
+            let progress: Double?
+            if let totalBytes, totalBytes > 0 {
+                progress = min(1, max(0, Double(bytesWritten) / Double(totalBytes)))
+            } else {
+                progress = nil
+            }
+            transcriptionState = .downloadingRefinementModel(model, progress: progress)
+            modelDownloadProgressText = formattedModelProgress(
+                modelName: model.displayName,
+                bytesWritten: bytesWritten,
+                totalBytes: totalBytes
+            )
+        case .finished(let url):
+            modelDownloadProgressText = "Downloaded to \(url.path)"
+        }
+
+        updateStatusMessage()
+    }
+
     private func formattedModelProgress(bytesWritten: Int64, totalBytes: Int64?) -> String {
+        formattedModelProgress(
+            modelName: whisperConfiguration.model.displayName,
+            bytesWritten: bytesWritten,
+            totalBytes: totalBytes
+        )
+    }
+
+    private func formattedModelProgress(modelName: String, bytesWritten: Int64, totalBytes: Int64?) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useMB, .useGB]
         formatter.countStyle = .file
@@ -553,18 +747,22 @@ final class DictaFlowAppState: ObservableObject {
 
         if let totalBytes, totalBytes > 0 {
             let totalText = formatter.string(fromByteCount: totalBytes)
-            return "Downloading \(whisperConfiguration.model.displayName) model: \(writtenText) of \(totalText)"
+            return "Downloading \(modelName) model: \(writtenText) of \(totalText)"
         }
 
-        return "Downloading \(whisperConfiguration.model.displayName) model: \(writtenText)"
+        return "Downloading \(modelName) model: \(writtenText)"
     }
 
     private func persistWhisperConfiguration() {
         settingsStore.saveWhisperConfiguration(whisperConfiguration)
     }
 
+    private func persistRefinementConfiguration() {
+        settingsStore.saveRefinementConfiguration(refinementConfiguration)
+    }
+
     private func performDictationToggle() async {
-        if transcriptionState.isTranscribing || textInsertionState.isBusy {
+        if transcriptionState.isBusy || textInsertionState.isBusy {
             return
         }
 
@@ -652,7 +850,8 @@ final class DictaFlowAppState: ObservableObject {
             clearPreservedStatusMessage()
             transcriptionState = .idle
             updateStatusMessage()
-            await insert(transcription: transcription, targetApplication: pendingInsertionTargetApplication)
+            let insertionTranscription = await refinedTranscriptionIfNeeded(transcription)
+            await insert(transcription: insertionTranscription, targetApplication: pendingInsertionTargetApplication)
         } catch {
             transcriptionState = .idle
             setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)")
@@ -660,8 +859,51 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    private func refinedTranscriptionIfNeeded(_ transcription: WhisperTranscriptionResult) async -> WhisperTranscriptionResult {
+        guard refinementConfiguration.isEnabled else {
+            return transcription
+        }
+
+        let model = refinementConfiguration.model
+
+        guard let modelURL = modelDownloadService.preparedRefinementModelURL(for: model) else {
+            refinementConfiguration.isEnabled = false
+            persistRefinementConfiguration()
+            setPreservedStatusMessage("Refinement was turned off because \(model.displayName) is not prepared. DictaFlow will use the raw Whisper text.")
+            showMainWindow()
+            updateStatusMessage()
+            return transcription
+        }
+
+        do {
+            transcriptionState = .refining(model)
+            updateStatusMessage()
+
+            let refinement = try await transcriptRefinementService.refine(
+                transcript: transcription.text,
+                whisperTaskMode: transcription.taskMode,
+                modelURL: modelURL,
+                configuration: refinementConfiguration
+            )
+
+            var refinedTranscription = transcription
+            refinedTranscription.refinement = refinement
+            lastTranscription = refinedTranscription
+            transcriptionState = .idle
+            clearPreservedStatusMessage()
+            updateStatusMessage()
+            return refinedTranscription
+        } catch {
+            transcriptionState = .idle
+            setPreservedStatusMessage("Could not refine the transcript locally, so DictaFlow will use the raw Whisper text. \(error.localizedDescription)")
+            showMainWindow()
+            updateStatusMessage()
+            return transcription
+        }
+    }
+
     private func insert(transcription: WhisperTranscriptionResult, targetApplication: InsertionTargetApplication?) async {
-        let text = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = transcription.insertionText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             pendingInsertionTargetApplication = nil
             setPreservedStatusMessage("Whisper returned an empty transcript, so there was nothing to insert.")
@@ -796,6 +1038,15 @@ final class DictaFlowAppState: ObservableObject {
         case .transcribing(let model):
             statusMessage = "Running local \(model.displayName) Whisper transcription on the last recorded clip."
             return
+        case .preparingRefinementModel(let model):
+            statusMessage = "Preparing the local \(model.displayName) refinement model in Application Support."
+            return
+        case .downloadingRefinementModel(let model, _):
+            statusMessage = modelDownloadProgressText ?? "Downloading the local \(model.displayName) refinement model."
+            return
+        case .refining(let model):
+            statusMessage = "Refining the latest transcript locally with \(model.displayName)."
+            return
         }
 
         switch textInsertionState {
@@ -833,8 +1084,12 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
-        if let lastTranscription, !lastTranscription.text.isEmpty {
-            statusMessage = "Last transcription finished at \(lastTranscription.completedAt.formatted(date: .omitted, time: .standard)) and is ready for insertion."
+        if let lastTranscription, !lastTranscription.insertionText.isEmpty {
+            if lastTranscription.refinement != nil {
+                statusMessage = "Last transcription was refined locally and is ready for insertion."
+            } else {
+                statusMessage = "Last transcription finished at \(lastTranscription.completedAt.formatted(date: .omitted, time: .standard)) and is ready for insertion."
+            }
             return
         }
 

@@ -7,6 +7,12 @@ protocol ModelDownloadServiceProtocol: AnyObject {
         _ model: WhisperModelDescriptor,
         progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
     ) async throws -> URL
+    func ensureRefinementModelAvailable(
+        _ model: RefinementModelDescriptor,
+        progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
+    ) async throws -> URL
+    func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool
+    func preparedRefinementModelURL(for model: RefinementModelDescriptor) -> URL?
 }
 
 enum ModelDownloadServiceError: LocalizedError {
@@ -17,11 +23,11 @@ enum ModelDownloadServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .couldNotCreateModelsDirectory:
-            return "DictaFlow could not create its Whisper model folder."
+            return "DictaFlow could not create its local model folder."
         case .invalidServerResponse:
-            return "The Whisper model download returned an invalid response."
+            return "The model download returned an invalid response."
         case .checksumMismatch:
-            return "The downloaded Whisper model did not match its expected checksum."
+            return "The downloaded model did not match its expected checksum."
         }
     }
 }
@@ -31,9 +37,9 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
     private let fileManager: FileManager
     private let session: URLSession
-    private var activeDownloads: [WhisperModelDescriptor: Task<URL, Error>] = [:]
+    private var activeDownloads: [String: Task<URL, Error>] = [:]
 
-    nonisolated init(
+    init(
         fileManager: FileManager = .default,
         session: URLSession = .shared
     ) {
@@ -46,10 +52,34 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         _ model: WhisperModelDescriptor,
         progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
     ) async throws -> URL {
+        try await ensureLocalModelAvailable(model, progressHandler: progressHandler)
+    }
+
+    func ensureRefinementModelAvailable(
+        _ model: RefinementModelDescriptor,
+        progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
+    ) async throws -> URL {
+        try await ensureLocalModelAvailable(model, progressHandler: progressHandler)
+    }
+
+    nonisolated func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool {
+        let modelURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
+        return FileManager.default.fileExists(atPath: modelURL.path)
+    }
+
+    nonisolated func preparedRefinementModelURL(for model: RefinementModelDescriptor) -> URL? {
+        let modelURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
+        return FileManager.default.fileExists(atPath: modelURL.path) ? modelURL : nil
+    }
+
+    private func ensureLocalModelAvailable<Model: LocalModelDescriptor>(
+        _ model: Model,
+        progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
+    ) async throws -> URL {
         let destinationURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
 
         if fileManager.fileExists(atPath: destinationURL.path) {
-            if try existingModelMatchesChecksum(at: destinationURL, expectedSHA1: model.sha1Checksum) {
+            if try Self.modelFileMatchesChecksum(at: destinationURL, expectedChecksum: model.checksum) {
                 progressHandler(.located(destinationURL))
                 return destinationURL
             }
@@ -62,7 +92,7 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             return destinationURL
         }
 
-        if let activeTask = activeDownloads[model] {
+        if let activeTask = activeDownloads[model.modelIdentifier] {
             return try await activeTask.value
         }
 
@@ -89,7 +119,6 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             }
 
             var bytesWritten: Int64 = 0
-            var hasher = Insecure.SHA1()
             var chunkBuffer = Data()
             chunkBuffer.reserveCapacity(64 * 1024)
 
@@ -98,7 +127,6 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
                 if chunkBuffer.count >= 64 * 1024 {
                     try outputHandle.write(contentsOf: chunkBuffer)
-                    hasher.update(data: chunkBuffer)
                     bytesWritten += Int64(chunkBuffer.count)
                     chunkBuffer.removeAll(keepingCapacity: true)
                     progressHandler(.downloading(bytesWritten: bytesWritten, totalBytes: expectedLength))
@@ -107,13 +135,14 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
             if !chunkBuffer.isEmpty {
                 try outputHandle.write(contentsOf: chunkBuffer)
-                hasher.update(data: chunkBuffer)
                 bytesWritten += Int64(chunkBuffer.count)
                 progressHandler(.downloading(bytesWritten: bytesWritten, totalBytes: expectedLength))
             }
 
-            let checksum = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-            guard checksum == model.sha1Checksum else {
+            try outputHandle.synchronize()
+            try outputHandle.close()
+
+            guard try Self.modelFileMatchesChecksum(at: temporaryURL, expectedChecksum: model.checksum) else {
                 try? fileManager.removeItem(at: temporaryURL)
                 throw ModelDownloadServiceError.checksumMismatch
             }
@@ -127,19 +156,19 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             return destinationURL
         }
 
-        activeDownloads[model] = task
+        activeDownloads[model.modelIdentifier] = task
 
         do {
             let destinationURL = try await task.value
-            activeDownloads[model] = nil
+            activeDownloads[model.modelIdentifier] = nil
             return destinationURL
         } catch {
-            activeDownloads[model] = nil
+            activeDownloads[model.modelIdentifier] = nil
             throw error
         }
     }
 
-    private static func makeModelsDirectoryURL(fileManager: FileManager) -> URL {
+    nonisolated private static func makeModelsDirectoryURL(fileManager: FileManager) -> URL {
         let applicationSupportURL = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
@@ -147,7 +176,7 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         return applicationSupportURL.appendingPathComponent("Models", isDirectory: true)
     }
 
-    private static func ensureModelsDirectoryExists(at directoryURL: URL, using fileManager: FileManager) throws {
+    nonisolated private static func ensureModelsDirectoryExists(at directoryURL: URL, using fileManager: FileManager) throws {
         do {
             try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         } catch {
@@ -155,24 +184,41 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         }
     }
 
-    private func existingModelMatchesChecksum(at fileURL: URL, expectedSHA1: String) throws -> Bool {
+    nonisolated private static func modelFileMatchesChecksum(at fileURL: URL, expectedChecksum: ModelChecksum) throws -> Bool {
         let inputHandle = try FileHandle(forReadingFrom: fileURL)
         defer {
             try? inputHandle.close()
         }
 
-        var hasher = Insecure.SHA1()
+        switch expectedChecksum {
+        case .sha1(let expectedSHA1):
+            var hasher = Insecure.SHA1()
 
-        while true {
-            let data = try inputHandle.read(upToCount: 64 * 1024) ?? Data()
-            if data.isEmpty {
-                break
+            while true {
+                let data = try inputHandle.read(upToCount: 64 * 1024) ?? Data()
+                if data.isEmpty {
+                    break
+                }
+
+                hasher.update(data: data)
             }
 
-            hasher.update(data: data)
-        }
+            let checksum = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+            return checksum == expectedSHA1
+        case .sha256(let expectedSHA256):
+            var hasher = SHA256()
 
-        let checksum = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        return checksum == expectedSHA1
+            while true {
+                let data = try inputHandle.read(upToCount: 64 * 1024) ?? Data()
+                if data.isEmpty {
+                    break
+                }
+
+                hasher.update(data: data)
+            }
+
+            let checksum = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+            return checksum == expectedSHA256
+        }
     }
 }
