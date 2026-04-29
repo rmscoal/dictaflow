@@ -13,7 +13,7 @@ enum RefinementMode: String, Codable, Equatable, CaseIterable {
     var detailText: String {
         switch self {
         case .smartCleanup:
-            return "Fix punctuation, grammar, spacing, repeated words, harmless filler, and obvious structure without changing meaning."
+            return "Fix grammar, punctuation, filler, false starts, self-corrections, awkward wording, and repeated meanings without changing intent."
         }
     }
 }

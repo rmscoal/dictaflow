@@ -108,7 +108,7 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
                 "-m", modelURL.path,
                 "-p", prompt,
                 "-n", "\(maxTokens)",
-                "--temp", "0.15",
+                "--temp", "0.0",
                 "--top-p", "0.9",
                 "--no-display-prompt"
             ]
@@ -142,7 +142,45 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
     nonisolated private static func makePrompt(transcript: String, whisperTaskMode: WhisperTaskMode) -> String {
         """
         <|im_start|>system
-        You clean dictated transcripts. Preserve meaning. Do not add facts, answer questions, or explain. Fix punctuation, grammar, casing, spacing, repeated words, and harmless filler. Use paragraphs, bullets, or numbered lists only when clearly implied. Preserve tone and language. Output only the cleaned text.<|im_end|>
+        You clean dictated transcripts for insertion into another app.
+
+        Rules:
+        - Preserve the speaker's meaning and intent. Do not add facts, answer questions, or explain.
+        - If Whisper mode is transcribe, preserve the spoken language. If Whisper mode is translateToEnglish, output English.
+        - Be aggressive about cleanup when the transcript contains dictated speech artifacts.
+        - Remove filler words and discourse markers that do not add meaning, including "um", "uh", "like", "you know", "basically", "kind of", "sort of", "well", and "so". Keep "like" only when it means enjoy or similar to.
+        - Remove hesitation, repeated words, duplicated phrases, false starts, and repeated ideas.
+        - If two nearby words, phrases, or clauses express the same meaning, keep only the clearest version.
+        - If a word or phrase can be deleted without changing the intended meaning, delete it.
+        - Resolve explicit self-corrections. When the speaker revises with words like "sorry", "actually", "I mean", "no", "scratch that", or "never mind", keep the corrected later wording and remove the abandoned wording.
+        - When the output language is English, edit like a strict but natural copy editor: improve grammar, sentence structure, word choice, and clarity.
+        - Rephrase awkward dictated wording into fluent written English when the intended meaning is clear.
+        - Prefer concise, natural phrasing. Smooth awkward dictation without changing tone or rewriting into a different style.
+        - Keep the speaker's tone: casual text should stay casual, and professional text should stay professional.
+        - Do not over-polish, add emphasis, or make the text sound more formal than intended.
+        - Fix punctuation, grammar, casing, and spacing.
+        - Preserve names, numbers, dates, times, URLs, code, commands, and formatting-sensitive text unless the transcript clearly corrects them.
+        - Use paragraphs, bullets, or numbered lists only when clearly implied.
+        - Output only the cleaned text.
+
+        Examples:
+        Raw: let's meet at 5 a.m. never mind sorry let's meet at 6 a.m.
+        Cleaned: Let's meet at 6 a.m.
+
+        Raw: I I think we should ship this tomorrow actually no ship it Friday
+        Cleaned: I think we should ship this Friday.
+
+        Raw: I was wondering maybe we can trying to finish this today
+        Cleaned: I was wondering if we could try to finish this today.
+
+        Raw: I want to like meet tomorrow like at noon
+        Cleaned: I want to meet tomorrow at noon.
+
+        Raw: I'm still seeing like duplicates like the same meaning and duplicates in the result
+        Cleaned: I'm still seeing duplicate wording and repeated meaning in the result.
+
+        Raw: We need more time because we need more time to prepare for the launch
+        Cleaned: We need more time to prepare for the launch.<|im_end|>
         <|im_start|>user
         Task: Smart cleanup
         Whisper mode: \(whisperTaskMode.rawValue)
