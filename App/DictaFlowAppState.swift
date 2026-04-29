@@ -283,6 +283,10 @@ final class DictaFlowAppState: ObservableObject {
             return progress
         }
 
+        if let unsupportedReason = refinementModelSupport(for: refinementConfiguration.model).unsupportedReason {
+            return "\(refinementConfiguration.model.displayName) is unavailable on this Mac. \(unsupportedReason)"
+        }
+
         if refinementConfiguration.isEnabled {
             return "Cleans transcripts locally before insertion."
         }
@@ -295,11 +299,104 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     var hasPreparedRefinementModel: Bool {
-        RefinementModelDescriptor.allCases.contains { modelDownloadService.isRefinementModelPrepared($0) }
+        RefinementModelDescriptor.allCases.contains {
+            modelDownloadService.isRefinementModelPrepared($0) && refinementModelSupport(for: $0).isSupported
+        }
     }
 
     var isSelectedRefinementModelPrepared: Bool {
-        modelDownloadService.isRefinementModelPrepared(refinementConfiguration.model)
+        isSelectedRefinementModelSupported && modelDownloadService.isRefinementModelPrepared(refinementConfiguration.model)
+    }
+
+    var isSelectedRefinementModelSupported: Bool {
+        refinementModelSupport(for: refinementConfiguration.model).isSupported
+    }
+
+    var refinementHardwareProfile: MacHardwareProfile {
+        MacHardwareProfile.current(modelsDirectoryURL: modelDownloadService.modelsDirectoryURL)
+    }
+
+    var refinementRecommendation: RefinementModelRecommendation {
+        RefinementModelRecommendation(
+            hardwareProfile: refinementHardwareProfile,
+            preparedModels: preparedRefinementModels
+        )
+    }
+
+    func refinementModelSupport(for model: RefinementModelDescriptor) -> RefinementModelSupport {
+        refinementRecommendation.support(for: model)
+    }
+
+    func isRefinementModelSupported(_ model: RefinementModelDescriptor) -> Bool {
+        refinementModelSupport(for: model).isSupported
+    }
+
+    func refinementModelPickerTitle(for model: RefinementModelDescriptor) -> String {
+        let badges = refinementModelBadges(for: model).joined(separator: ", ")
+        let baseTitle = "\(model.displayName) (\(model.approximateDiskSizeDescription), \(model.estimatedRuntimeMemoryDescription))"
+        return badges.isEmpty ? baseTitle : "\(baseTitle) - \(badges)"
+    }
+
+    func refinementModelMenuTitle(for model: RefinementModelDescriptor) -> String {
+        let compactBadges = refinementModelBadges(for: model).map { badge in
+            switch badge {
+            case "Best quality":
+                return "Best"
+            case "Recommended for this Mac":
+                return "Rec"
+            case "Unavailable on this Mac":
+                return "Unavailable"
+            default:
+                return badge
+            }
+        }
+
+        return compactBadges.isEmpty ? model.displayName : "\(model.displayName) (\(compactBadges.joined(separator: ", ")))"
+    }
+
+    func refinementModelDetailText(for model: RefinementModelDescriptor) -> String {
+        let support = refinementModelSupport(for: model)
+
+        if let unsupportedReason = support.unsupportedReason {
+            return "\(unsupportedReason) \(model.detailText)"
+        }
+
+        let badges = refinementModelBadges(for: model)
+
+        if badges.contains("Best quality"), badges.contains("Recommended for this Mac") {
+            return "Best quality and recommended for this Mac. \(model.detailText)"
+        }
+
+        if badges.contains("Best quality") {
+            return "Best quality, but above this Mac's recommendation if not also marked recommended. \(model.detailText)"
+        }
+
+        if badges.contains("Recommended for this Mac") {
+            return "Recommended for this Mac. \(model.detailText)"
+        }
+
+        return model.detailText
+    }
+
+    private func refinementModelBadges(for model: RefinementModelDescriptor) -> [String] {
+        let recommendation = refinementRecommendation
+        let support = recommendation.support(for: model)
+
+        if !support.isSupported {
+            return ["Unavailable on this Mac"]
+        }
+
+        var badges: [String] = []
+
+        if model == recommendation.bestModel {
+            badges.append("Best quality")
+        }
+
+        if model == recommendation.recommendedModel {
+            badges.append("Recommended for this Mac")
+        }
+
+        return badges
     }
 
     var whisperSettingsLocked: Bool {
@@ -323,6 +420,10 @@ final class DictaFlowAppState: ObservableObject {
 
     var additionalWhisperLanguages: [WhisperLanguageOption] {
         WhisperLanguageCatalog.additionalLanguages
+    }
+
+    private var preparedRefinementModels: Set<RefinementModelDescriptor> {
+        Set(RefinementModelDescriptor.allCases.filter { modelDownloadService.isRefinementModelPrepared($0) })
     }
 
     var textInsertionStatusText: String {
@@ -428,6 +529,12 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
+        guard !isEnabled || isSelectedRefinementModelSupported else {
+            setPreservedStatusMessage(unsupportedRefinementModelMessage(for: refinementConfiguration.model))
+            showMainWindow()
+            return
+        }
+
         guard !isEnabled || isSelectedRefinementModelPrepared else {
             mainWindowPage = .settings
             setPreservedStatusMessage("Choose and prepare a refinement model before turning on local cleanup.")
@@ -442,6 +549,11 @@ final class DictaFlowAppState: ObservableObject {
 
     func updateRefinementModel(_ model: RefinementModelDescriptor) {
         guard refinementConfiguration.model != model else {
+            return
+        }
+
+        guard isRefinementModelSupported(model) else {
+            setPreservedStatusMessage(unsupportedRefinementModelMessage(for: model))
             return
         }
 
@@ -487,6 +599,11 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func prepareAndUseRefinementModel(_ model: RefinementModelDescriptor) {
+        guard isRefinementModelSupported(model) else {
+            setPreservedStatusMessage(unsupportedRefinementModelMessage(for: model))
+            return
+        }
+
         if refinementConfiguration.model != model {
             refinementConfiguration.model = model
             persistRefinementConfiguration()
@@ -626,6 +743,13 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         let model = refinementConfiguration.model
+
+        guard isRefinementModelSupported(model) else {
+            setPreservedStatusMessage(unsupportedRefinementModelMessage(for: model))
+            showMainWindow()
+            return
+        }
+
         transcriptionState = .preparingRefinementModel(model)
         modelDownloadProgressText = nil
         updateStatusMessage()
@@ -753,6 +877,14 @@ final class DictaFlowAppState: ObservableObject {
         return "Downloading \(modelName) model: \(writtenText)"
     }
 
+    private func unsupportedRefinementModelMessage(for model: RefinementModelDescriptor) -> String {
+        if let unsupportedReason = refinementModelSupport(for: model).unsupportedReason {
+            return "\(model.displayName) is unavailable on this Mac. \(unsupportedReason) Choose a smaller model."
+        }
+
+        return "\(model.displayName) is unavailable on this Mac. Choose a smaller model."
+    }
+
     private func persistWhisperConfiguration() {
         settingsStore.saveWhisperConfiguration(whisperConfiguration)
     }
@@ -865,6 +997,13 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         let model = refinementConfiguration.model
+
+        guard isRefinementModelSupported(model) else {
+            setPreservedStatusMessage("Could not refine the transcript locally, so DictaFlow will use the raw Whisper text. \(unsupportedRefinementModelMessage(for: model))")
+            showMainWindow()
+            updateStatusMessage()
+            return transcription
+        }
 
         guard let modelURL = modelDownloadService.preparedRefinementModelURL(for: model) else {
             refinementConfiguration.isEnabled = false

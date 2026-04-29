@@ -181,7 +181,7 @@ struct ContentView: View {
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
-                        .disabled(appState.whisperSettingsLocked)
+                        .disabled(appState.whisperSettingsLocked || !appState.isSelectedRefinementModelSupported)
 
                         Button {
                             appState.mainWindowPage = .settings
@@ -202,7 +202,7 @@ struct ContentView: View {
                         .controlSize(.small)
                         .tint(AppTheme.accent)
 
-                        Text("Qwen2.5 1.5B (Recommended)")
+                        Text(appState.refinementModelMenuTitle(for: appState.refinementRecommendation.recommendedModel))
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(AppTheme.tertiaryText)
                             .lineLimit(1)
@@ -385,17 +385,18 @@ struct ContentView: View {
 
                         Picker("Model", selection: refinementModelBinding) {
                             ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
-                                Text("\(model.pickerTitle) (\(model.approximateDiskSizeDescription))")
+                                Text(appState.refinementModelPickerTitle(for: model))
                                     .tag(model)
+                                    .disabled(!appState.isRefinementModelSupported(model))
                             }
                         }
                         .labelsHidden()
                         .pickerStyle(.menu)
                         .disabled(appState.whisperSettingsLocked)
 
-                        Text(selectedRefinementModel.detailText)
+                        Text(appState.refinementModelDetailText(for: selectedRefinementModel))
                             .font(.system(size: 12))
-                            .foregroundStyle(AppTheme.secondaryText)
+                            .foregroundStyle(appState.isRefinementModelSupported(selectedRefinementModel) ? AppTheme.secondaryText : Color.orange.opacity(0.86))
                             .fixedSize(horizontal: false, vertical: true)
 
                         Text(shortRefinementStatusText)
@@ -411,7 +412,7 @@ struct ContentView: View {
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(AppTheme.accent)
-                            .disabled(appState.whisperSettingsLocked)
+                            .disabled(appState.whisperSettingsLocked || !appState.isRefinementModelSupported(selectedRefinementModel))
 
                             Text("Local")
                                 .font(.system(size: 11, weight: .semibold, design: .monospaced))

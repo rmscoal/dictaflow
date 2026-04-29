@@ -339,7 +339,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "DictaFlow Dev";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright (C) 2026 Rifky Manuel Satyana";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "DictaFlow uses your microphone for private local voice typing.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -391,7 +391,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "DictaFlow Dev";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSUIElement = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright (C) 2026 Rifky Manuel Satyana";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "DictaFlow uses your microphone for private local voice typing.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

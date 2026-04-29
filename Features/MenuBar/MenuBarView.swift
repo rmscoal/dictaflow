@@ -132,7 +132,7 @@ struct MenuBarView: View {
                 ModelRow(
                     icon: "sparkles",
                     title: "Refine with LLM",
-                    subtitle: appState.refinementConfiguration.model.displayName,
+                    subtitle: appState.refinementModelMenuTitle(for: appState.refinementConfiguration.model),
                     trailing: {
                         HStack(spacing: 6) {
                             Toggle("", isOn: refinementEnabledBinding)
@@ -142,9 +142,10 @@ struct MenuBarView: View {
 
                             Menu {
                                 ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
-                                    Button(model.pickerTitle) {
+                                    Button(appState.refinementModelMenuTitle(for: model)) {
                                         appState.updateRefinementModel(model)
                                     }
+                                    .disabled(!appState.isRefinementModelSupported(model))
                                 }
                             } label: {
                                 ChevronButtonLabel()
