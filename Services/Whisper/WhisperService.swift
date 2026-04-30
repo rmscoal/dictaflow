@@ -123,10 +123,8 @@ actor WhisperCPPService: WhisperServiceProtocol {
         }
 
         let transcriptText = segments.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Diagnostic log: this records local dictation text and requires care in shared logs.
         logger.info(
-            "Whisper inference completed: segments=\(segmentCount, privacy: .public), detectedLanguage=\(languageCode ?? "unknown", privacy: .public), transcript=\"\(transcriptText, privacy: .public)\""
+            "Whisper inference completed: segments=\(segmentCount, privacy: .public), detectedLanguage=\(languageCode ?? "unknown", privacy: .public), transcriptCharacters=\(transcriptText.count, privacy: .public)"
         )
 
         return WhisperTranscriptionResult(

@@ -82,6 +82,10 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
         }
     }
 
+    nonisolated var maximumDownloadSizeBytes: Int64 {
+        approximateDiskSizeBytes + 250_000_000
+    }
+
     nonisolated var approximateDiskSizeDescription: String {
         switch self {
         case .qwen25HalfB:

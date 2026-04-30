@@ -19,8 +19,12 @@ protocol ModelDownloadServiceProtocol: AnyObject {
 
 enum ModelDownloadServiceError: LocalizedError {
     case couldNotCreateModelsDirectory
+    case couldNotCreateModelFile
     case invalidServerResponse
+    case untrustedDownloadURL
+    case downloadTooLarge
     case checksumMismatch
+    case invalidLocalModelFile
     case invalidModelDeletionRequest
     case modelDeletionUnavailable
 
@@ -28,10 +32,18 @@ enum ModelDownloadServiceError: LocalizedError {
         switch self {
         case .couldNotCreateModelsDirectory:
             return "DictaFlow could not create its local model folder."
+        case .couldNotCreateModelFile:
+            return "DictaFlow could not create its local model file."
         case .invalidServerResponse:
             return "The model download returned an invalid response."
+        case .untrustedDownloadURL:
+            return "DictaFlow can only download models over HTTPS."
+        case .downloadTooLarge:
+            return "The model download was larger than expected."
         case .checksumMismatch:
             return "The downloaded model did not match its expected checksum."
+        case .invalidLocalModelFile:
+            return "The local model path is not a regular file."
         case .invalidModelDeletionRequest:
             return "DictaFlow can only delete local model files it recognizes."
         case .modelDeletionUnavailable:
@@ -115,12 +127,17 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
     nonisolated func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool {
         let modelURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
-        return FileManager.default.fileExists(atPath: modelURL.path)
+        return Self.isRegularModelFile(at: modelURL)
     }
 
     nonisolated func preparedRefinementModelURL(for model: RefinementModelDescriptor) -> URL? {
         let modelURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
-        return FileManager.default.fileExists(atPath: modelURL.path) ? modelURL : nil
+        guard Self.isRegularModelFile(at: modelURL),
+              (try? Self.modelFileMatchesChecksum(at: modelURL, expectedChecksum: model.checksum)) == true else {
+            return nil
+        }
+
+        return modelURL
     }
 
     private func ensureLocalModelAvailable<Model: LocalModelDescriptor>(
@@ -130,17 +147,19 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         let destinationURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
 
         if fileManager.fileExists(atPath: destinationURL.path) {
-            if try Self.modelFileMatchesChecksum(at: destinationURL, expectedChecksum: model.checksum) {
+            if !Self.isRegularModelFile(at: destinationURL) {
+                var isDirectory = ObjCBool(false)
+                if fileManager.fileExists(atPath: destinationURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                    throw ModelDownloadServiceError.invalidLocalModelFile
+                }
+
+                try? fileManager.removeItem(at: destinationURL)
+            } else if try Self.modelFileMatchesChecksum(at: destinationURL, expectedChecksum: model.checksum) {
                 progressHandler(.located(destinationURL))
                 return destinationURL
             }
 
             try? fileManager.removeItem(at: destinationURL)
-        }
-
-        if fileManager.fileExists(atPath: destinationURL.path) {
-            progressHandler(.located(destinationURL))
-            return destinationURL
         }
 
         if let activeTask = activeDownloads[model.modelIdentifier] {
@@ -151,9 +170,19 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             try Self.ensureModelsDirectoryExists(at: modelsDirectoryURL, using: fileManager)
             progressHandler(.starting(expectedBytes: nil))
 
+            guard model.downloadURL.scheme?.lowercased() == "https" else {
+                throw ModelDownloadServiceError.untrustedDownloadURL
+            }
+
             let temporaryURL = destinationURL.appendingPathExtension("download")
             if fileManager.fileExists(atPath: temporaryURL.path) {
                 try? fileManager.removeItem(at: temporaryURL)
+            }
+            var shouldKeepTemporaryFile = false
+            defer {
+                if !shouldKeepTemporaryFile {
+                    try? fileManager.removeItem(at: temporaryURL)
+                }
             }
 
             let (bytes, response) = try await session.bytes(from: model.downloadURL)
@@ -161,9 +190,23 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
                 throw ModelDownloadServiceError.invalidServerResponse
             }
+            guard httpResponse.url?.scheme?.lowercased() == "https" else {
+                throw ModelDownloadServiceError.untrustedDownloadURL
+            }
 
             let expectedLength = response.expectedContentLength > 0 ? response.expectedContentLength : nil
-            fileManager.createFile(atPath: temporaryURL.path, contents: nil)
+            if let expectedLength, expectedLength > model.maximumDownloadSizeBytes {
+                throw ModelDownloadServiceError.downloadTooLarge
+            }
+
+            guard fileManager.createFile(
+                atPath: temporaryURL.path,
+                contents: nil,
+                attributes: [.posixPermissions: NSNumber(value: Int16(0o600))]
+            ) else {
+                throw ModelDownloadServiceError.couldNotCreateModelFile
+            }
+
             let outputHandle = try FileHandle(forWritingTo: temporaryURL)
             defer {
                 try? outputHandle.close()
@@ -175,6 +218,9 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
             for try await byte in bytes {
                 chunkBuffer.append(byte)
+                if bytesWritten + Int64(chunkBuffer.count) > model.maximumDownloadSizeBytes {
+                    throw ModelDownloadServiceError.downloadTooLarge
+                }
 
                 if chunkBuffer.count >= 64 * 1024 {
                     try outputHandle.write(contentsOf: chunkBuffer)
@@ -199,10 +245,16 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             }
 
             if fileManager.fileExists(atPath: destinationURL.path) {
+                var isDirectory = ObjCBool(false)
+                if fileManager.fileExists(atPath: destinationURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                    throw ModelDownloadServiceError.invalidLocalModelFile
+                }
+
                 try fileManager.removeItem(at: destinationURL)
             }
 
             try fileManager.moveItem(at: temporaryURL, to: destinationURL)
+            shouldKeepTemporaryFile = true
             progressHandler(.finished(destinationURL))
             return destinationURL
         }
@@ -229,10 +281,32 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
     nonisolated private static func ensureModelsDirectoryExists(at directoryURL: URL, using fileManager: FileManager) throws {
         do {
-            try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            try fileManager.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: NSNumber(value: Int16(0o700))]
+            )
+
+            let resourceValues = try directoryURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard resourceValues.isDirectory == true, resourceValues.isSymbolicLink != true else {
+                throw ModelDownloadServiceError.couldNotCreateModelsDirectory
+            }
+
+            try fileManager.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o700))],
+                ofItemAtPath: directoryURL.path
+            )
         } catch {
             throw ModelDownloadServiceError.couldNotCreateModelsDirectory
         }
+    }
+
+    nonisolated private static func isRegularModelFile(at fileURL: URL) -> Bool {
+        guard let resourceValues = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else {
+            return false
+        }
+
+        return resourceValues.isRegularFile == true && resourceValues.isSymbolicLink != true
     }
 
     nonisolated private static func modelFileMatchesChecksum(at fileURL: URL, expectedChecksum: ModelChecksum) throws -> Bool {
@@ -303,7 +377,9 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         let fileURL = directoryURL.appendingPathComponent(model.filename, isDirectory: false)
         var isDirectory = ObjCBool(false)
 
-        guard fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+        guard fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue,
+              isRegularModelFile(at: fileURL) else {
             return nil
         }
 

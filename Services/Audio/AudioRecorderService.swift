@@ -14,6 +14,7 @@ enum AudioRecorderServiceError: LocalizedError {
     case failedToPrepare
     case failedToStart
     case temporaryDirectoryCreationFailed
+    case temporaryFileProtectionFailed
 
     var errorDescription: String? {
         switch self {
@@ -27,6 +28,8 @@ enum AudioRecorderServiceError: LocalizedError {
             return "The recorder failed to begin capturing microphone audio."
         case .temporaryDirectoryCreationFailed:
             return "DictaFlow could not create its temporary recording folder."
+        case .temporaryFileProtectionFailed:
+            return "DictaFlow could not secure its temporary recording file."
         }
     }
 }
@@ -57,11 +60,21 @@ final class SystemAudioRecorderService: NSObject, AudioRecorderServiceProtocol {
         recorder.isMeteringEnabled = false
 
         guard recorder.prepareToRecord() else {
+            try? FileManager.default.removeItem(at: fileURL)
             throw AudioRecorderServiceError.failedToPrepare
         }
 
         guard recorder.record() else {
+            try? FileManager.default.removeItem(at: fileURL)
             throw AudioRecorderServiceError.failedToStart
+        }
+
+        do {
+            try secureRecordingFile(at: fileURL)
+        } catch {
+            recorder.stop()
+            try? FileManager.default.removeItem(at: fileURL)
+            throw AudioRecorderServiceError.temporaryFileProtectionFailed
         }
 
         self.recorder = recorder
@@ -94,17 +107,47 @@ final class SystemAudioRecorderService: NSObject, AudioRecorderServiceProtocol {
     private func makeRecordingURL() throws -> URL {
         let directoryURL = FileManager.default.temporaryDirectory.appendingPathComponent("DictaFlowRecordings", isDirectory: true)
 
-        do {
-            try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        } catch {
-            throw AudioRecorderServiceError.temporaryDirectoryCreationFailed
-        }
+        try ensureRecordingDirectoryExists(at: directoryURL)
 
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
         let timestamp = formatter.string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let filename = "capture-\(timestamp)-\(UUID().uuidString.lowercased()).m4a"
         return directoryURL.appendingPathComponent(filename)
+    }
+
+    private func ensureRecordingDirectoryExists(at directoryURL: URL) throws {
+        do {
+            try FileManager.default.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: NSNumber(value: Int16(0o700))]
+            )
+
+            let resourceValues = try directoryURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard resourceValues.isDirectory == true, resourceValues.isSymbolicLink != true else {
+                throw AudioRecorderServiceError.temporaryDirectoryCreationFailed
+            }
+
+            try FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o700))],
+                ofItemAtPath: directoryURL.path
+            )
+        } catch {
+            throw AudioRecorderServiceError.temporaryDirectoryCreationFailed
+        }
+    }
+
+    private func secureRecordingFile(at fileURL: URL) throws {
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o600))],
+            ofItemAtPath: fileURL.path
+        )
+
+        var excludedURL = fileURL
+        var resourceValues = URLResourceValues()
+        resourceValues.isExcludedFromBackup = true
+        try excludedURL.setResourceValues(resourceValues)
     }
 
     private func measuredDuration(of fileURL: URL) -> TimeInterval? {

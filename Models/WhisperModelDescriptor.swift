@@ -50,6 +50,23 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable, Sendable, 
         .sha1(sha1Checksum)
     }
 
+    nonisolated var approximateDiskSizeBytes: Int64 {
+        switch self {
+        case .tiny:
+            return 75_000_000
+        case .base:
+            return 142_000_000
+        case .small:
+            return 466_000_000
+        case .medium:
+            return 1_500_000_000
+        }
+    }
+
+    nonisolated var maximumDownloadSizeBytes: Int64 {
+        approximateDiskSizeBytes + 250_000_000
+    }
+
     nonisolated var approximateDiskSizeDescription: String {
         switch self {
         case .tiny:

@@ -6,6 +6,7 @@ protocol LocalModelDescriptor: Hashable, Sendable {
     nonisolated var filename: String { get }
     nonisolated var downloadURL: URL { get }
     nonisolated var checksum: ModelChecksum { get }
+    nonisolated var maximumDownloadSizeBytes: Int64 { get }
 }
 
 struct LocalModelFile: Identifiable, Equatable, Sendable {

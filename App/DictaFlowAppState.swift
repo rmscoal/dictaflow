@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import OSLog
 
 @MainActor
 protocol MainWindowRouting: AnyObject {
@@ -49,6 +50,10 @@ final class DictaFlowAppState: ObservableObject {
     private let whisperService: WhisperServiceProtocol
     private let transcriptRefinementService: TranscriptRefinementServiceProtocol
     private let textInsertionService: TextInsertionServiceProtocol
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "DictaFlow",
+        category: "AppState"
+    )
     private weak var mainWindowRouter: MainWindowRouting?
     private weak var settingsWindowRouter: SettingsWindowRouting?
     private var workspaceObservers = Set<AnyCancellable>()
@@ -1043,6 +1048,11 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func transcribe(capture: DictationCapture) async {
+        var shouldSurfaceCleanupFailure = false
+        defer {
+            removeTemporaryCapture(capture, shouldSurfaceFailure: shouldSurfaceCleanupFailure)
+        }
+
         let model = whisperConfiguration.model
 
         if !transcriptionState.isPreparingModel {
@@ -1073,10 +1083,39 @@ final class DictaFlowAppState: ObservableObject {
             updateStatusMessage()
             let insertionTranscription = await refinedTranscriptionIfNeeded(transcription)
             await insert(transcription: insertionTranscription, targetApplication: pendingInsertionTargetApplication)
+            shouldSurfaceCleanupFailure = true
         } catch {
             transcriptionState = .idle
             setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)")
             showMainWindow()
+        }
+    }
+
+    private func removeTemporaryCapture(_ capture: DictationCapture, shouldSurfaceFailure: Bool) {
+        let recordingsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DictaFlowRecordings", isDirectory: true)
+            .standardizedFileURL
+        let captureURL = capture.fileURL.standardizedFileURL
+
+        guard captureURL.path.hasPrefix(recordingsDirectory.path + "/") else {
+            return
+        }
+
+        do {
+            try FileManager.default.removeItem(at: captureURL)
+        } catch {
+            logger.error(
+                "Could not delete temporary recording \(captureURL.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
+            )
+            if shouldSurfaceFailure {
+                setPreservedStatusMessage("DictaFlow could not delete its temporary recording. Check the temporary recordings folder if you need to remove it manually.")
+                updateStatusMessage()
+            }
+            return
+        }
+
+        if lastCapture?.fileURL == capture.fileURL {
+            lastCapture = nil
         }
     }
 

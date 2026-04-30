@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 protocol TranscriptRefinementServiceProtocol: AnyObject {
@@ -12,7 +13,9 @@ protocol TranscriptRefinementServiceProtocol: AnyObject {
 enum TranscriptRefinementServiceError: LocalizedError {
     case missingRuntime
     case failedToRun(String)
+    case timedOut
     case emptyOutput
+    case outputTooLarge
 
     var errorDescription: String? {
         switch self {
@@ -20,13 +23,21 @@ enum TranscriptRefinementServiceError: LocalizedError {
             return "DictaFlow could not find a local llama.cpp runtime for transcript refinement."
         case .failedToRun(let details):
             return "The local refinement model could not clean the transcript. \(details)"
+        case .timedOut:
+            return "The local refinement model took too long to respond."
         case .emptyOutput:
             return "The local refinement model returned an empty result."
+        case .outputTooLarge:
+            return "The local refinement model produced more output than DictaFlow can safely process."
         }
     }
 }
 
 actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
+    nonisolated private static let outputCaptureLimitBytes = 1_000_000
+    nonisolated private static let errorCaptureLimitBytes = 256_000
+    nonisolated private static let promptDirectoryName = "DictaFlowRefinementPrompts"
+
     private let executableURL: URL?
 
     init(executableURL: URL? = nil) {
@@ -83,14 +94,16 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
             return bundledResourceURL
         }
 
-        let developmentPaths = [
-            "/opt/homebrew/bin/llama-cli",
-            "/usr/local/bin/llama-cli"
-        ]
+        #if DEBUG
+            let developmentPaths = [
+                "/opt/homebrew/bin/llama-cli",
+                "/usr/local/bin/llama-cli"
+            ]
 
-        if let path = developmentPaths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-            return URL(fileURLWithPath: path)
-        }
+            if let path = developmentPaths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+                return URL(fileURLWithPath: path)
+            }
+        #endif
 
         throw TranscriptRefinementServiceError.missingRuntime
     }
@@ -102,11 +115,16 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         maxTokens: Int
     ) async throws -> String {
         try await Task.detached(priority: .userInitiated) {
+            let promptFileURL = try Self.writePromptToTemporaryFile(prompt)
+            defer {
+                try? FileManager.default.removeItem(at: promptFileURL)
+            }
+
             let process = Process()
             process.executableURL = runtimeURL
             process.arguments = [
                 "-m", modelURL.path,
-                "-p", prompt,
+                "--file", promptFileURL.path,
                 "-n", "\(maxTokens)",
                 "--temp", "0.0",
                 "--top-p", "0.9",
@@ -118,25 +136,107 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
             process.standardOutput = outputPipe
             process.standardError = errorPipe
 
+            let outputCapture = LimitedPipeCapture(limit: Self.outputCaptureLimitBytes)
+            let errorCapture = LimitedPipeCapture(limit: Self.errorCaptureLimitBytes)
+
             do {
                 try process.run()
             } catch {
                 throw TranscriptRefinementServiceError.failedToRun(error.localizedDescription)
             }
 
-            process.waitUntilExit()
+            let outputTask = Task.detached(priority: .utility) {
+                outputCapture.read(from: outputPipe.fileHandleForReading)
+            }
+            let errorTask = Task.detached(priority: .utility) {
+                errorCapture.read(from: errorPipe.fileHandleForReading)
+            }
 
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let didExit = await Self.waitForExit(process, timeoutNanoseconds: 60_000_000_000)
+            guard didExit else {
+                process.terminate()
+                let didTerminate = await Self.waitForExit(process, timeoutNanoseconds: 2_000_000_000)
+                if !didTerminate, process.isRunning {
+                    Darwin.kill(process.processIdentifier, SIGKILL)
+                    _ = await Self.waitForExit(process, timeoutNanoseconds: 1_000_000_000)
+                }
+                Self.closePipeReaders(outputPipe, errorPipe)
+                await outputTask.value
+                await errorTask.value
+                throw TranscriptRefinementServiceError.timedOut
+            }
+
+            await outputTask.value
+            await errorTask.value
+
+            let outputData = try outputCapture.capturedData()
+            _ = try errorCapture.capturedData()
             let output = String(data: outputData, encoding: .utf8) ?? ""
-            let errorOutput = String(data: errorData, encoding: .utf8) ?? ""
 
             guard process.terminationStatus == 0 else {
-                throw TranscriptRefinementServiceError.failedToRun(errorOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+                throw TranscriptRefinementServiceError.failedToRun("Exit status \(process.terminationStatus).")
             }
 
             return output
         }.value
+    }
+
+    nonisolated private static func writePromptToTemporaryFile(_ prompt: String) throws -> URL {
+        let fileManager = FileManager.default
+        let directoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent(promptDirectoryName, isDirectory: true)
+        try ensurePrivateTemporaryDirectory(at: directoryURL, using: fileManager)
+
+        let fileURL = directoryURL
+            .appendingPathComponent("prompt-\(UUID().uuidString.lowercased()).txt", isDirectory: false)
+        guard let promptData = prompt.data(using: .utf8),
+              fileManager.createFile(
+                atPath: fileURL.path,
+                contents: promptData,
+                attributes: [.posixPermissions: NSNumber(value: Int16(0o600))]
+              ) else {
+            throw TranscriptRefinementServiceError.failedToRun("Could not create a secure local prompt file.")
+        }
+
+        var excludedURL = fileURL
+        var resourceValues = URLResourceValues()
+        resourceValues.isExcludedFromBackup = true
+        try excludedURL.setResourceValues(resourceValues)
+        return fileURL
+    }
+
+    nonisolated private static func ensurePrivateTemporaryDirectory(at directoryURL: URL, using fileManager: FileManager) throws {
+        do {
+            try fileManager.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: NSNumber(value: Int16(0o700))]
+            )
+
+            let resourceValues = try directoryURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard resourceValues.isDirectory == true, resourceValues.isSymbolicLink != true else {
+                throw TranscriptRefinementServiceError.failedToRun("The local prompt folder is not a private directory.")
+            }
+
+            try fileManager.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o700))],
+                ofItemAtPath: directoryURL.path
+            )
+        } catch let error as TranscriptRefinementServiceError {
+            throw error
+        } catch {
+            throw TranscriptRefinementServiceError.failedToRun("Could not create a secure local prompt folder.")
+        }
+    }
+
+    nonisolated private static func closePipeReaders(_ pipes: Pipe...) {
+        for pipe in pipes {
+            try? pipe.fileHandleForReading.close()
+        }
+    }
+
+    nonisolated private static func waitForExit(_ process: Process, timeoutNanoseconds: UInt64) async -> Bool {
+        await ProcessExitWaiter().wait(for: process, timeoutNanoseconds: timeoutNanoseconds)
     }
 
     nonisolated private static func makePrompt(transcript: String, whisperTaskMode: WhisperTaskMode) -> String {
@@ -208,5 +308,112 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         }
 
         return cleanedOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private final class LimitedPipeCapture: @unchecked Sendable {
+    private let limit: Int
+    private let lock = NSLock()
+    nonisolated(unsafe) private var data = Data()
+    nonisolated(unsafe) private var didExceedLimit = false
+
+    nonisolated init(limit: Int) {
+        self.limit = limit
+    }
+
+    nonisolated func read(from fileHandle: FileHandle) {
+        while true {
+            let chunk = fileHandle.readData(ofLength: 64 * 1024)
+            if chunk.isEmpty {
+                break
+            }
+
+            append(chunk)
+        }
+    }
+
+    nonisolated func capturedData() throws -> Data {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+
+        if didExceedLimit {
+            throw TranscriptRefinementServiceError.outputTooLarge
+        }
+
+        return data
+    }
+
+    nonisolated private func append(_ chunk: Data) {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+
+        guard !didExceedLimit else {
+            return
+        }
+
+        if data.count + chunk.count <= limit {
+            data.append(chunk)
+            return
+        }
+
+        let remainingByteCount = max(0, limit - data.count)
+        if remainingByteCount > 0 {
+            data.append(chunk.prefix(remainingByteCount))
+        }
+        didExceedLimit = true
+    }
+}
+
+private final class ProcessExitWaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    nonisolated(unsafe) private var didResume = false
+    nonisolated(unsafe) private var continuation: CheckedContinuation<Bool, Never>?
+
+    nonisolated func wait(for process: Process, timeoutNanoseconds: UInt64) async -> Bool {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            self.continuation = continuation
+            lock.unlock()
+
+            process.terminationHandler = { [waiter = self] process in
+                process.terminationHandler = nil
+                Task { @MainActor in
+                    waiter.resume(returning: true)
+                }
+            }
+
+            guard process.isRunning else {
+                process.terminationHandler = nil
+                resume(returning: true)
+                return
+            }
+
+            Task { [waiter = self] in
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                process.terminationHandler = nil
+                waiter.resume(returning: false)
+            }
+        }
+    }
+
+    nonisolated private func resume(returning result: Bool) {
+        let continuationToResume: CheckedContinuation<Bool, Never>?
+
+        lock.lock()
+        if didResume {
+            lock.unlock()
+            return
+        }
+
+        didResume = true
+        continuationToResume = continuation
+        continuation = nil
+        lock.unlock()
+
+        continuationToResume?.resume(returning: result)
     }
 }
