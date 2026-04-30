@@ -422,8 +422,51 @@ final class DictaFlowAppState: ObservableObject {
         WhisperLanguageCatalog.additionalLanguages
     }
 
+    var installedLocalModelFiles: [LocalModelFile] {
+        modelDownloadService.installedModelFiles()
+    }
+
+    var unusedLocalModelFiles: [LocalModelFile] {
+        installedLocalModelFiles.filter { !isActiveLocalModelFile($0) }
+    }
+
+    var canReviewUnusedModelDeletion: Bool {
+        !whisperSettingsLocked && !unusedLocalModelFiles.isEmpty
+    }
+
+    var modelStorageStatusText: String {
+        let installedFiles = installedLocalModelFiles
+
+        guard !installedFiles.isEmpty else {
+            return "No local model files are stored yet."
+        }
+
+        let unusedFiles = installedFiles.filter { !isActiveLocalModelFile($0) }
+
+        guard !unusedFiles.isEmpty else {
+            return "Only active local models are stored."
+        }
+
+        return "\(unusedFiles.count) unused \(unusedFiles.count == 1 ? "model" : "models") can be deleted to free \(formattedLocalModelSize(totalByteCount(for: unusedFiles)))."
+    }
+
+    func isActiveLocalModelFile(_ file: LocalModelFile) -> Bool {
+        activeLocalModelIdentifiers.contains(file.modelIdentifier)
+    }
+
+    func formattedLocalModelSize(_ byteCount: Int64) -> String {
+        Self.formattedByteCount(byteCount)
+    }
+
     private var preparedRefinementModels: Set<RefinementModelDescriptor> {
         Set(RefinementModelDescriptor.allCases.filter { modelDownloadService.isRefinementModelPrepared($0) })
+    }
+
+    private var activeLocalModelIdentifiers: Set<String> {
+        [
+            whisperConfiguration.model.modelIdentifier,
+            refinementConfiguration.model.modelIdentifier
+        ]
     }
 
     var textInsertionStatusText: String {
@@ -648,6 +691,41 @@ final class DictaFlowAppState: ObservableObject {
         let modelsDirectoryURL = modelDownloadService.modelsDirectoryURL
         try? FileManager.default.createDirectory(at: modelsDirectoryURL, withIntermediateDirectories: true)
         NSWorkspace.shared.open(modelsDirectoryURL)
+    }
+
+    func deleteUnusedModelFiles(matching candidates: [LocalModelFile]) {
+        guard !whisperSettingsLocked else {
+            setPreservedStatusMessage("Wait until the current recording, transcription, or model preparation finishes before deleting models.")
+            return
+        }
+
+        let candidateIdentifiers = Set(candidates.map(\.modelIdentifier))
+        let filesToDelete = unusedLocalModelFiles.filter { candidateIdentifiers.contains($0.modelIdentifier) }
+
+        guard !filesToDelete.isEmpty else {
+            setPreservedStatusMessage("No unused local models are available to delete.")
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                let deletedByteCount = try await self.modelDownloadService.deleteModelFiles(filesToDelete)
+
+                await MainActor.run {
+                    let fileCount = filesToDelete.count
+                    self.modelDownloadProgressText = nil
+                    self.setPreservedStatusMessage("Deleted \(fileCount) unused \(fileCount == 1 ? "model" : "models") and freed \(self.formattedLocalModelSize(deletedByteCount)).")
+                }
+            } catch {
+                await MainActor.run {
+                    self.setPreservedStatusMessage("Could not delete unused models. \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     func prepareForTermination() {
@@ -875,6 +953,17 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         return "Downloading \(modelName) model: \(writtenText)"
+    }
+
+    private func totalByteCount(for files: [LocalModelFile]) -> Int64 {
+        files.reduce(0) { $0 + $1.byteCount }
+    }
+
+    private static func formattedByteCount(_ byteCount: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: byteCount)
     }
 
     private func unsupportedRefinementModelMessage(for model: RefinementModelDescriptor) -> String {

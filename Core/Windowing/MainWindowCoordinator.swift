@@ -42,7 +42,7 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
 
         let hostingController = NSHostingController(rootView: ContentView(appState: appState))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 560),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -52,6 +52,7 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.contentViewController = hostingController
+        window.minSize = NSSize(width: 660, height: 520)
         window.center()
         window.isOpaque = true
         window.backgroundColor = .black

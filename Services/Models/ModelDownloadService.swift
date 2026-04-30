@@ -3,6 +3,8 @@ import Foundation
 
 protocol ModelDownloadServiceProtocol: AnyObject {
     var modelsDirectoryURL: URL { get }
+    func installedModelFiles() -> [LocalModelFile]
+    func deleteModelFiles(_ files: [LocalModelFile]) async throws -> Int64
     func ensureModelAvailable(
         _ model: WhisperModelDescriptor,
         progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
@@ -19,6 +21,8 @@ enum ModelDownloadServiceError: LocalizedError {
     case couldNotCreateModelsDirectory
     case invalidServerResponse
     case checksumMismatch
+    case invalidModelDeletionRequest
+    case modelDeletionUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +32,10 @@ enum ModelDownloadServiceError: LocalizedError {
             return "The model download returned an invalid response."
         case .checksumMismatch:
             return "The downloaded model did not match its expected checksum."
+        case .invalidModelDeletionRequest:
+            return "DictaFlow can only delete local model files it recognizes."
+        case .modelDeletionUnavailable:
+            return "A model is still being prepared. Try deleting unused models after it finishes."
         }
     }
 }
@@ -60,6 +68,49 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
     ) async throws -> URL {
         try await ensureLocalModelAvailable(model, progressHandler: progressHandler)
+    }
+
+    nonisolated func installedModelFiles() -> [LocalModelFile] {
+        Self.installedModelFiles(in: modelsDirectoryURL, fileManager: .default)
+    }
+
+    func deleteModelFiles(_ files: [LocalModelFile]) async throws -> Int64 {
+        let uniqueFiles = files.reduce(into: [LocalModelFile]()) { result, file in
+            guard !result.contains(where: { $0.modelIdentifier == file.modelIdentifier }) else {
+                return
+            }
+
+            result.append(file)
+        }
+
+        for file in uniqueFiles {
+            guard activeDownloads[file.modelIdentifier] == nil else {
+                throw ModelDownloadServiceError.modelDeletionUnavailable
+            }
+
+            guard let expectedURL = Self.knownModelURL(for: file, in: modelsDirectoryURL),
+                  expectedURL.standardizedFileURL.path == file.fileURL.standardizedFileURL.path else {
+                throw ModelDownloadServiceError.invalidModelDeletionRequest
+            }
+        }
+
+        var deletedByteCount: Int64 = 0
+
+        for file in uniqueFiles {
+            guard let fileURL = Self.knownModelURL(for: file, in: modelsDirectoryURL) else {
+                throw ModelDownloadServiceError.invalidModelDeletionRequest
+            }
+
+            var isDirectory = ObjCBool(false)
+            guard fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+                continue
+            }
+
+            deletedByteCount += Self.byteCount(at: fileURL, fileManager: fileManager)
+            try fileManager.removeItem(at: fileURL)
+        }
+
+        return deletedByteCount
     }
 
     nonisolated func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool {
@@ -220,5 +271,79 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             let checksum = hasher.finalize().map { String(format: "%02x", $0) }.joined()
             return checksum == expectedSHA256
         }
+    }
+
+    nonisolated private static func installedModelFiles(
+        in directoryURL: URL,
+        fileManager: FileManager
+    ) -> [LocalModelFile] {
+        let whisperFiles = WhisperModelDescriptor.allCases.compactMap {
+            localModelFile(for: $0, category: .whisper, in: directoryURL, fileManager: fileManager)
+        }
+
+        let refinementFiles = RefinementModelDescriptor.allCases.compactMap {
+            localModelFile(for: $0, category: .refinement, in: directoryURL, fileManager: fileManager)
+        }
+
+        return (whisperFiles + refinementFiles).sorted {
+            if $0.category.sortIndex != $1.category.sortIndex {
+                return $0.category.sortIndex < $1.category.sortIndex
+            }
+
+            return $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+        }
+    }
+
+    nonisolated private static func localModelFile<Model: LocalModelDescriptor>(
+        for model: Model,
+        category: LocalModelFile.Category,
+        in directoryURL: URL,
+        fileManager: FileManager
+    ) -> LocalModelFile? {
+        let fileURL = directoryURL.appendingPathComponent(model.filename, isDirectory: false)
+        var isDirectory = ObjCBool(false)
+
+        guard fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            return nil
+        }
+
+        return LocalModelFile(
+            category: category,
+            modelIdentifier: model.modelIdentifier,
+            displayName: model.displayName,
+            filename: model.filename,
+            fileURL: fileURL,
+            byteCount: byteCount(at: fileURL, fileManager: fileManager)
+        )
+    }
+
+    nonisolated private static func knownModelURL(
+        for file: LocalModelFile,
+        in directoryURL: URL
+    ) -> URL? {
+        switch file.category {
+        case .whisper:
+            guard let model = WhisperModelDescriptor.allCases.first(where: { $0.modelIdentifier == file.modelIdentifier }),
+                  model.filename == file.filename else {
+                return nil
+            }
+
+            return directoryURL.appendingPathComponent(model.filename, isDirectory: false)
+        case .refinement:
+            guard let model = RefinementModelDescriptor.allCases.first(where: { $0.modelIdentifier == file.modelIdentifier }),
+                  model.filename == file.filename else {
+                return nil
+            }
+
+            return directoryURL.appendingPathComponent(model.filename, isDirectory: false)
+        }
+    }
+
+    nonisolated private static func byteCount(at fileURL: URL, fileManager: FileManager) -> Int64 {
+        guard let size = try? fileManager.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber else {
+            return 0
+        }
+
+        return size.int64Value
     }
 }
