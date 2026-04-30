@@ -56,7 +56,11 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         }
 
         let runtimeURL = try resolveRuntimeURL()
-        let prompt = Self.makePrompt(transcript: trimmedTranscript, whisperTaskMode: whisperTaskMode)
+        let prompt = Self.makePrompt(
+            transcript: trimmedTranscript,
+            whisperTaskMode: whisperTaskMode,
+            configuration: configuration
+        )
         let maxTokens = Self.maxPredictionTokens(for: trimmedTranscript)
         let output = try await runLlamaCLI(
             runtimeURL: runtimeURL,
@@ -239,55 +243,109 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         await ProcessExitWaiter().wait(for: process, timeoutNanoseconds: timeoutNanoseconds)
     }
 
-    nonisolated private static func makePrompt(transcript: String, whisperTaskMode: WhisperTaskMode) -> String {
-        """
+    private enum PromptProfile {
+        case compact
+        case standard
+    }
+
+    nonisolated private static func makePrompt(
+        transcript: String,
+        whisperTaskMode: WhisperTaskMode,
+        configuration: RefinementConfiguration
+    ) -> String {
+        let instructions = promptInstructions(for: promptProfile(for: configuration.model))
+
+        return """
         <|im_start|>system
-        You clean dictated transcripts for insertion into another app.
-
-        Rules:
-        - Preserve the speaker's meaning and intent. Do not add facts, answer questions, or explain.
-        - If Whisper mode is transcribe, preserve the spoken language. If Whisper mode is translateToEnglish, output English.
-        - Be aggressive about cleanup when the transcript contains dictated speech artifacts.
-        - Remove filler words and discourse markers that do not add meaning, including "um", "uh", "like", "you know", "basically", "kind of", "sort of", "well", and "so". Keep "like" only when it means enjoy or similar to.
-        - Remove hesitation, repeated words, duplicated phrases, false starts, and repeated ideas.
-        - If two nearby words, phrases, or clauses express the same meaning, keep only the clearest version.
-        - If a word or phrase can be deleted without changing the intended meaning, delete it.
-        - Resolve explicit self-corrections. When the speaker revises with words like "sorry", "actually", "I mean", "no", "scratch that", or "never mind", keep the corrected later wording and remove the abandoned wording.
-        - When the output language is English, edit like a strict but natural copy editor: improve grammar, sentence structure, word choice, and clarity.
-        - Rephrase awkward dictated wording into fluent written English when the intended meaning is clear.
-        - Prefer concise, natural phrasing. Smooth awkward dictation without changing tone or rewriting into a different style.
-        - Keep the speaker's tone: casual text should stay casual, and professional text should stay professional.
-        - Do not over-polish, add emphasis, or make the text sound more formal than intended.
-        - Fix punctuation, grammar, casing, and spacing.
-        - Preserve names, numbers, dates, times, URLs, code, commands, and formatting-sensitive text unless the transcript clearly corrects them.
-        - Use paragraphs, bullets, or numbered lists only when clearly implied.
-        - Output only the cleaned text.
-
-        Examples:
-        Raw: let's meet at 5 a.m. never mind sorry let's meet at 6 a.m.
-        Cleaned: Let's meet at 6 a.m.
-
-        Raw: I I think we should ship this tomorrow actually no ship it Friday
-        Cleaned: I think we should ship this Friday.
-
-        Raw: I was wondering maybe we can trying to finish this today
-        Cleaned: I was wondering if we could try to finish this today.
-
-        Raw: I want to like meet tomorrow like at noon
-        Cleaned: I want to meet tomorrow at noon.
-
-        Raw: I'm still seeing like duplicates like the same meaning and duplicates in the result
-        Cleaned: I'm still seeing duplicate wording and repeated meaning in the result.
-
-        Raw: We need more time because we need more time to prepare for the launch
-        Cleaned: We need more time to prepare for the launch.<|im_end|>
+        \(instructions)<|im_end|>
         <|im_start|>user
-        Task: Smart cleanup
+        Task: \(configuration.mode.rawValue)
         Whisper mode: \(whisperTaskMode.rawValue)
         Transcript:
         \(transcript)<|im_end|>
         <|im_start|>assistant
         """
+    }
+
+    nonisolated private static func promptProfile(for model: RefinementModelDescriptor) -> PromptProfile {
+        switch model {
+        case .qwen25HalfB:
+            return .compact
+        case .qwen25OneAndHalfB, .qwen25ThreeB, .smolLM2OnePointSevenB:
+            return .standard
+        }
+    }
+
+    nonisolated private static func promptInstructions(for profile: PromptProfile) -> String {
+        switch profile {
+        case .compact:
+            return """
+            You clean dictated transcripts for insertion into another app. Convert dictated speech into concise written text.
+
+            Rules:
+            - Output only the cleaned text.
+            - Preserve meaning, intent, facts, names, technical terms, code, URLs, numbers, and dates.
+            - Preserve the spoken language when Whisper mode is transcribe. Output English when Whisper mode is translateToEnglish.
+            - Remove filler and discourse markers by default: um, uh, so, now, like, basically, kind of, sort of, in a way, in a sense, you know.
+            - Remove repeated words, repeated meanings, false starts, and self-corrections.
+            - Fix grammar, punctuation, casing, and spacing.
+            - Rewrite awkward dictated wording into natural written text.
+            - Prefer the shortest clear version.
+
+            Examples:
+            Raw: let's meet at 5 a.m. never mind sorry let's meet at 6 a.m.
+            Cleaned: Let's meet at 6 a.m.
+
+            Raw: So I want you to review whether all exports are using the shared export handler. I know there is like a flag that changes the output format, but basically I want you to make sure every export path goes through that same handler.
+            Cleaned: Please review whether all exports use the shared export handler. I know a flag changes the output format, but I want to make sure every export path goes through that same handler.
+            """
+        case .standard:
+            return """
+            You clean dictated transcripts for insertion into another app. Convert dictated speech into concise written text.
+
+            Rules:
+            - Preserve the speaker's meaning and intent. Do not add facts, answer questions, or explain.
+            - If Whisper mode is transcribe, preserve the spoken language. If Whisper mode is translateToEnglish, output English.
+            - Be aggressive about cleanup when the transcript contains dictated speech artifacts.
+            - Remove filler words and discourse markers that do not add meaning, including "um", "uh", "so", "now", "like", "you know", "basically", "kind of", "sort of", "in a way", "in a sense", and "well". Keep "like" only when it means enjoy or similar to.
+            - Remove hesitation, repeated words, duplicated phrases, false starts, and repeated ideas.
+            - If two nearby words, phrases, or clauses express the same meaning, keep only the clearest version.
+            - If a word or phrase can be deleted without changing the intended meaning, delete it.
+            - Resolve explicit self-corrections. When the speaker revises with words like "sorry", "actually", "I mean", "no", "scratch that", or "never mind", keep the corrected later wording and remove the abandoned wording.
+            - When the output language is English, edit like a strict but natural copy editor: improve grammar, sentence structure, word choice, and clarity.
+            - Rephrase awkward dictated wording into fluent written English when the intended meaning is clear.
+            - Prefer the shortest clear version. Smooth awkward dictation without changing tone or rewriting into a different style.
+            - For task requests, make the result sound like a clear written instruction.
+            - Keep the speaker's tone: casual text should stay casual, and professional text should stay professional.
+            - Do not over-polish, add emphasis, or make the text sound more formal than intended.
+            - Fix punctuation, grammar, casing, and spacing.
+            - Preserve names, numbers, dates, times, URLs, code, commands, and formatting-sensitive text unless the transcript clearly corrects them.
+            - Use paragraphs, bullets, or numbered lists only when clearly implied.
+            - Output only the cleaned text.
+
+            Examples:
+            Raw: let's meet at 5 a.m. never mind sorry let's meet at 6 a.m.
+            Cleaned: Let's meet at 6 a.m.
+
+            Raw: I I think we should ship this tomorrow actually no ship it Friday
+            Cleaned: I think we should ship this Friday.
+
+            Raw: I was wondering maybe we can trying to finish this today
+            Cleaned: I was wondering if we could try to finish this today.
+
+            Raw: I want to like meet tomorrow like at noon
+            Cleaned: I want to meet tomorrow at noon.
+
+            Raw: I'm still seeing like duplicates like the same meaning and duplicates in the result
+            Cleaned: I'm still seeing duplicate wording and repeated meaning in the result.
+
+            Raw: We need more time because we need more time to prepare for the launch
+            Cleaned: We need more time to prepare for the launch.
+
+            Raw: So I want you to review whether all exports are using the shared export handler. I know there is like a flag that changes the output format, but basically I want you to make sure every export path goes through that same handler.
+            Cleaned: Please review whether all exports use the shared export handler. I know a flag changes the output format, but I want to make sure every export path goes through that same handler.
+            """
+        }
     }
 
     nonisolated private static func maxPredictionTokens(for transcript: String) -> Int {
