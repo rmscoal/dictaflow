@@ -8,6 +8,6 @@ struct WhisperConfiguration: Codable, Equatable {
     static let `default` = WhisperConfiguration(
         model: .recommendedDefault,
         inputLanguage: .automatic,
-        taskMode: .translateToEnglish
+        taskMode: .transcribe
     )
 }
