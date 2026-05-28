@@ -1,5 +1,6 @@
 import AppKit
 
+@MainActor
 final class DictaFlowAppDelegate: NSObject, NSApplicationDelegate {
     let appState = DictaFlowAppState()
     private lazy var mainWindowCoordinator = MainWindowCoordinator(appState: appState)

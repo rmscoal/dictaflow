@@ -97,6 +97,13 @@ Use the main Xcode scheme:
 xcodebuild -project DictaFlow.xcodeproj -scheme "DictaFlow Dev" -configuration Debug -derivedDataPath .build/DerivedData build
 ```
 
+For local-only builds on a Mac that does not have the project owner's Apple
+Development signing identity, use ad-hoc signing:
+
+```sh
+xcodebuild -project DictaFlow.xcodeproj -scheme "DictaFlow Dev" -configuration Debug -derivedDataPath .build/DerivedData build DEVELOPMENT_TEAM= CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=-
+```
+
 The `Ensure Whisper XCFramework` Xcode build phase builds
 `Vendor/whisper.cpp/build-apple/whisper.xcframework` via
 `Vendor/whisper.cpp/build-xcframework.sh` when needed.
