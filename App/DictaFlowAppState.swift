@@ -37,6 +37,8 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var statusMessage: String
     @Published private(set) var isHotkeyRegistered = false
     @Published private(set) var modelDownloadProgressText: String?
+    @Published private(set) var isRefinementRuntimeAvailable = false
+    @Published private(set) var isRefinementServerPreparing = false
 
     let launchExperience: AppLaunchExperience
     @Published private(set) var whisperConfiguration: WhisperConfiguration
@@ -50,6 +52,7 @@ final class DictaFlowAppState: ObservableObject {
     private let whisperService: WhisperServiceProtocol
     private let transcriptRefinementService: TranscriptRefinementServiceProtocol
     private let textInsertionService: TextInsertionServiceProtocol
+    private let localNotificationService: LocalNotificationServiceProtocol
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "DictaFlow",
         category: "AppState"
@@ -70,7 +73,8 @@ final class DictaFlowAppState: ObservableObject {
             modelDownloadService: WhisperModelDownloadService(),
             whisperService: WhisperCPPService(),
             transcriptRefinementService: LlamaCLITranscriptRefinementService(),
-            textInsertionService: SystemTextInsertionService()
+            textInsertionService: SystemTextInsertionService(),
+            localNotificationService: UserLocalNotificationService()
         )
     }
 
@@ -82,7 +86,8 @@ final class DictaFlowAppState: ObservableObject {
         modelDownloadService: ModelDownloadServiceProtocol,
         whisperService: WhisperServiceProtocol,
         transcriptRefinementService: TranscriptRefinementServiceProtocol,
-        textInsertionService: TextInsertionServiceProtocol
+        textInsertionService: TextInsertionServiceProtocol,
+        localNotificationService: LocalNotificationServiceProtocol
     ) {
         self.settingsStore = settingsStore
         self.permissionService = permissionService
@@ -92,6 +97,7 @@ final class DictaFlowAppState: ObservableObject {
         self.whisperService = whisperService
         self.transcriptRefinementService = transcriptRefinementService
         self.textInsertionService = textInsertionService
+        self.localNotificationService = localNotificationService
         self.launchExperience = settingsStore.shouldShowMainWindowOnLaunch ? .firstLaunch : .returningUser
         self.whisperConfiguration = settingsStore.whisperConfiguration
         self.refinementConfiguration = settingsStore.refinementConfiguration
@@ -109,6 +115,8 @@ final class DictaFlowAppState: ObservableObject {
         self.lastTextInsertion = nil
         self.statusMessage = ""
         self.modelDownloadProgressText = nil
+        self.isRefinementRuntimeAvailable = false
+        self.isRefinementServerPreparing = false
         self.preservedStatusMessage = nil
         self.lastKnownExternalTargetApplication = Self.makeInsertionTargetApplication(from: NSWorkspace.shared.frontmostApplication)
         configureWorkspaceObservers()
@@ -283,6 +291,10 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     var refinementStatusText: String {
+        if isRefinementServerPreparing {
+            return "Starting the local llama-server and loading \(refinementConfiguration.model.displayName)."
+        }
+
         if let progress = modelDownloadProgressText,
            case .downloadingRefinementModel = transcriptionState {
             return progress
@@ -290,6 +302,10 @@ final class DictaFlowAppState: ObservableObject {
 
         if let unsupportedReason = refinementModelSupport(for: refinementConfiguration.model).unsupportedReason {
             return "\(refinementConfiguration.model.displayName) is unavailable on this Mac. \(unsupportedReason)"
+        }
+
+        if !isRefinementRuntimeAvailable {
+            return "Install llama.cpp so DictaFlow can run llama-server for local refinement. Preparing only downloads the selected LLM model."
         }
 
         if refinementConfiguration.isEnabled {
@@ -405,6 +421,10 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     var whisperSettingsLocked: Bool {
+        if isRefinementServerPreparing {
+            return true
+        }
+
         switch recordingState {
         case .idle:
             break
@@ -520,6 +540,7 @@ final class DictaFlowAppState: ObservableObject {
         refreshMicrophonePermissionStatus()
         refreshAccessibilityPermissionStatus()
         registerGlobalHotkey()
+        refreshRefinementRuntimeAvailability()
         prepareDefaultModelIfNeeded()
 
         if launchExperience == .firstLaunch {
@@ -577,22 +598,37 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
-        guard !isEnabled || isSelectedRefinementModelSupported else {
+        if !isEnabled {
+            refinementConfiguration.isEnabled = false
+            persistRefinementConfiguration()
+            isRefinementServerPreparing = false
+            Task { [transcriptRefinementService] in
+                await transcriptRefinementService.stop()
+            }
+            updateStatusMessage()
+            return
+        }
+
+        guard isSelectedRefinementModelSupported else {
             setPreservedStatusMessage(unsupportedRefinementModelMessage(for: refinementConfiguration.model))
             showMainWindow()
             return
         }
 
-        guard !isEnabled || isSelectedRefinementModelPrepared else {
+        guard isRefinementRuntimeAvailable else {
+            setPreservedStatusMessage("Install llama.cpp so DictaFlow can run llama-server before turning on local refinement.")
+            showMainWindow()
+            return
+        }
+
+        guard isSelectedRefinementModelPrepared else {
             mainWindowPage = .settings
             setPreservedStatusMessage("Choose and prepare a refinement model before turning on local cleanup.")
             showMainWindow()
             return
         }
 
-        refinementConfiguration.isEnabled = isEnabled
-        persistRefinementConfiguration()
-        updateStatusMessage()
+        startPreparedRefinementServer(enableAfterStart: true)
     }
 
     func updateRefinementModel(_ model: RefinementModelDescriptor) {
@@ -613,6 +649,10 @@ final class DictaFlowAppState: ObservableObject {
     func resetWhisperSettingsToDefaults() {
         whisperConfiguration = .default
         refinementConfiguration = .default
+        isRefinementServerPreparing = false
+        Task { [transcriptRefinementService] in
+            await transcriptRefinementService.stop()
+        }
         persistWhisperConfiguration()
         persistRefinementConfiguration()
         updateStatusMessage()
@@ -626,6 +666,83 @@ final class DictaFlowAppState: ObservableObject {
     func refreshAccessibilityPermissionStatus() {
         accessibilityPermissionState = resolvedAccessibilityPermissionState()
         updateStatusMessage()
+    }
+
+    func refreshRefinementRuntimeAvailability() {
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            let isAvailable = await self.transcriptRefinementService.isRuntimeAvailable()
+
+            await MainActor.run {
+                self.isRefinementRuntimeAvailable = isAvailable
+                if !isAvailable, self.refinementConfiguration.isEnabled {
+                    self.refinementConfiguration.isEnabled = false
+                    self.persistRefinementConfiguration()
+                    self.setPreservedStatusMessage("Refinement was turned off because DictaFlow could not find llama-server. Install llama.cpp, then turn refinement back on.")
+                } else if isAvailable, self.refinementConfiguration.isEnabled {
+                    self.startPreparedRefinementServer(enableAfterStart: false)
+                }
+                self.updateStatusMessage()
+            }
+        }
+    }
+
+    private func startPreparedRefinementServer(enableAfterStart: Bool) {
+        let model = refinementConfiguration.model
+
+        guard let modelURL = modelDownloadService.preparedRefinementModelURL(for: model) else {
+            setPreservedStatusMessage("Choose and prepare a refinement model before turning on local cleanup.")
+            showMainWindow()
+            return
+        }
+
+        isRefinementServerPreparing = true
+        clearPreservedStatusMessage()
+        updateStatusMessage()
+
+        Task { [weak self, transcriptRefinementService] in
+            do {
+                try await transcriptRefinementService.prepare(modelURL: modelURL)
+
+                await MainActor.run {
+                    guard let self else {
+                        return
+                    }
+
+                    self.isRefinementServerPreparing = false
+                    guard self.refinementConfiguration.model == model else {
+                        Task { [transcriptRefinementService] in
+                            await transcriptRefinementService.stop()
+                        }
+                        return
+                    }
+
+                    if enableAfterStart {
+                        self.refinementConfiguration.isEnabled = true
+                        self.persistRefinementConfiguration()
+                    }
+
+                    self.clearPreservedStatusMessage()
+                    self.updateStatusMessage()
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else {
+                        return
+                    }
+
+                    self.isRefinementServerPreparing = false
+                    self.refinementConfiguration.isEnabled = false
+                    self.persistRefinementConfiguration()
+                    self.setPreservedStatusMessage("Could not start local LLM refinement. \(error.localizedDescription)")
+                    self.showMainWindow()
+                    self.updateStatusMessage()
+                }
+            }
+        }
     }
 
     func retryModelPreparation() {
@@ -643,6 +760,12 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func prepareRefinementModel() {
+        guard isRefinementRuntimeAvailable else {
+            setPreservedStatusMessage("Install llama.cpp so DictaFlow can run llama-server before preparing LLM refinement.")
+            showMainWindow()
+            return
+        }
+
         prepareRefinementModelIfNeeded(force: true)
     }
 
@@ -652,11 +775,20 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
-        if refinementConfiguration.model != model {
-            refinementConfiguration.model = model
-            persistRefinementConfiguration()
-            updateStatusMessage()
+        guard isRefinementRuntimeAvailable else {
+            setPreservedStatusMessage("Install llama.cpp so DictaFlow can run llama-server before preparing LLM refinement.")
+            showMainWindow()
+            return
         }
+
+        if refinementConfiguration.model != model {
+        refinementConfiguration.model = model
+        persistRefinementConfiguration()
+        if refinementConfiguration.isEnabled {
+            startPreparedRefinementServer(enableAfterStart: false)
+        }
+        updateStatusMessage()
+    }
 
         prepareRefinementModelIfNeeded(force: true, enableAfterPreparation: true)
     }
@@ -735,6 +867,9 @@ final class DictaFlowAppState: ObservableObject {
 
     func prepareForTermination() {
         hotkeyService.unregisterToggleHotkey()
+        Task { [transcriptRefinementService] in
+            await transcriptRefinementService.stop()
+        }
     }
 
     func quit() {
@@ -854,13 +989,11 @@ final class DictaFlowAppState: ObservableObject {
                         return
                     }
 
-                    if enableAfterPreparation {
-                        self.refinementConfiguration.isEnabled = true
-                        self.persistRefinementConfiguration()
-                    }
-
                     self.transcriptionState = .idle
                     self.modelDownloadProgressText = "Ready at \(self.modelsDirectoryPath)"
+                    if enableAfterPreparation {
+                        self.startPreparedRefinementServer(enableAfterStart: true)
+                    }
                     self.updateStatusMessage()
                 }
             } catch {
@@ -1127,19 +1260,26 @@ final class DictaFlowAppState: ObservableObject {
         let model = refinementConfiguration.model
 
         guard isRefinementModelSupported(model) else {
-            setPreservedStatusMessage("Could not refine the transcript locally, so DictaFlow will use the raw Whisper text. \(unsupportedRefinementModelMessage(for: model))")
+            let message = unsupportedRefinementModelMessage(for: model)
+            var skippedTranscription = transcription
+            skippedTranscription.refinementStatus = .skipped(reason: message)
+            lastTranscription = skippedTranscription
+            setPreservedStatusMessage("Could not refine the transcript locally, so DictaFlow will use the raw Whisper text. \(message)")
             showMainWindow()
             updateStatusMessage()
-            return transcription
+            return skippedTranscription
         }
 
         guard let modelURL = modelDownloadService.preparedRefinementModelURL(for: model) else {
             refinementConfiguration.isEnabled = false
             persistRefinementConfiguration()
+            var skippedTranscription = transcription
+            skippedTranscription.refinementStatus = .skipped(reason: "\(model.displayName) was not prepared.")
+            lastTranscription = skippedTranscription
             setPreservedStatusMessage("Refinement was turned off because \(model.displayName) is not prepared. DictaFlow will use the raw Whisper text.")
             showMainWindow()
             updateStatusMessage()
-            return transcription
+            return skippedTranscription
         }
 
         do {
@@ -1155,6 +1295,11 @@ final class DictaFlowAppState: ObservableObject {
 
             var refinedTranscription = transcription
             refinedTranscription.refinement = refinement
+            refinedTranscription.refinementStatus = .succeeded(
+                model: refinement.model,
+                mode: refinement.mode,
+                completedAt: refinement.completedAt
+            )
             lastTranscription = refinedTranscription
             transcriptionState = .idle
             clearPreservedStatusMessage()
@@ -1162,10 +1307,22 @@ final class DictaFlowAppState: ObservableObject {
             return refinedTranscription
         } catch {
             transcriptionState = .idle
-            setPreservedStatusMessage("Could not refine the transcript locally, so DictaFlow will use the raw Whisper text. \(error.localizedDescription)")
+            let message = "Could not refine the transcript locally, so DictaFlow will use the raw Whisper text. \(error.localizedDescription)"
+            var failedTranscription = transcription
+            failedTranscription.refinementStatus = .failed(
+                model: model,
+                errorMessage: error.localizedDescription,
+                completedAt: Date()
+            )
+            lastTranscription = failedTranscription
+            setPreservedStatusMessage(message)
+            localNotificationService.show(
+                title: "DictaFlow refinement failed",
+                body: "Using the raw Whisper transcript instead."
+            )
             showMainWindow()
             updateStatusMessage()
-            return transcription
+            return failedTranscription
         }
     }
 
@@ -1324,6 +1481,11 @@ final class DictaFlowAppState: ObservableObject {
             return
         case .inserting(let targetApplicationName):
             statusMessage = "Inserting the latest transcript into \(targetApplicationName ?? "the focused app")."
+            return
+        }
+
+        if isRefinementServerPreparing {
+            statusMessage = "Starting local LLM refinement with \(refinementConfiguration.model.displayName)."
             return
         }
 

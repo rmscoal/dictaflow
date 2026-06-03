@@ -8,6 +8,7 @@ struct WhisperTranscriptionResult: Equatable {
     let taskMode: WhisperTaskMode
     let completedAt: Date
     var refinement: TranscriptRefinementResult? = nil
+    var refinementStatus: TranscriptRefinementStatus = .disabled
 
     var insertionText: String {
         refinement?.refinedText ?? text

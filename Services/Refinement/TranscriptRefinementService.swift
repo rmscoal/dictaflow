@@ -2,6 +2,10 @@ import Darwin
 import Foundation
 
 protocol TranscriptRefinementServiceProtocol: AnyObject {
+    func isRuntimeAvailable() async -> Bool
+    func prepare(modelURL: URL) async throws
+    func stop() async
+
     func refine(
         transcript: String,
         whisperTaskMode: WhisperTaskMode,
@@ -39,9 +43,31 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
     nonisolated private static let promptDirectoryName = "DictaFlowRefinementPrompts"
 
     private let executableURL: URL?
+    private let urlSession: URLSession
+    private var serverProcess: Process?
+    private var serverModelURL: URL?
+    private var serverBaseURL: URL?
 
-    init(executableURL: URL? = nil) {
+    init(executableURL: URL? = nil, urlSession: URLSession = .shared) {
         self.executableURL = executableURL
+        self.urlSession = urlSession
+    }
+
+    func isRuntimeAvailable() async -> Bool {
+        do {
+            _ = try resolveRuntimeURL()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func stop() async {
+        stopServer()
+    }
+
+    func prepare(modelURL: URL) async throws {
+        _ = try await ensureServer(for: modelURL)
     }
 
     func refine(
@@ -55,15 +81,13 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
             throw TranscriptRefinementServiceError.emptyOutput
         }
 
-        let runtimeURL = try resolveRuntimeURL()
         let prompt = Self.makePrompt(
             transcript: trimmedTranscript,
             whisperTaskMode: whisperTaskMode,
             configuration: configuration
         )
         let maxTokens = Self.maxPredictionTokens(for: trimmedTranscript)
-        let output = try await runLlamaCLI(
-            runtimeURL: runtimeURL,
+        let output = try await runPromptOnServer(
             modelURL: modelURL,
             prompt: prompt,
             maxTokens: maxTokens
@@ -88,20 +112,20 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
             return executableURL
         }
 
-        if let bundledURL = Bundle.main.url(forAuxiliaryExecutable: "llama-cli"),
-           FileManager.default.isExecutableFile(atPath: bundledURL.path) {
+        if let bundledURL = Bundle.main.url(forAuxiliaryExecutable: "llama-server"),
+            FileManager.default.isExecutableFile(atPath: bundledURL.path) {
             return bundledURL
         }
 
-        if let bundledResourceURL = Bundle.main.url(forResource: "llama-cli", withExtension: nil),
-           FileManager.default.isExecutableFile(atPath: bundledResourceURL.path) {
+        if let bundledResourceURL = Bundle.main.url(forResource: "llama-server", withExtension: nil),
+            FileManager.default.isExecutableFile(atPath: bundledResourceURL.path) {
             return bundledResourceURL
         }
 
         #if DEBUG
             let developmentPaths = [
-                "/opt/homebrew/bin/llama-cli",
-                "/usr/local/bin/llama-cli"
+                "/opt/homebrew/bin/llama-server",
+                "/usr/local/bin/llama-server"
             ]
 
             if let path = developmentPaths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
@@ -110,6 +134,138 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         #endif
 
         throw TranscriptRefinementServiceError.missingRuntime
+    }
+
+    private func runPromptOnServer(
+        modelURL: URL,
+        prompt: String,
+        maxTokens: Int
+    ) async throws -> String {
+        let baseURL = try await ensureServer(for: modelURL)
+        let requestURL = baseURL.appendingPathComponent("completion")
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 120
+
+        let payload: [String: Any] = [
+            "prompt": prompt,
+            "n_predict": maxTokens,
+            "temperature": 0.0,
+            "top_p": 0.9,
+            "stream": false,
+            "cache_prompt": true
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TranscriptRefinementServiceError.failedToRun("The local llama-server returned an invalid response.")
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let responseText = String(data: data, encoding: .utf8) ?? "HTTP status \(httpResponse.statusCode)."
+            throw TranscriptRefinementServiceError.failedToRun(responseText)
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw TranscriptRefinementServiceError.failedToRun("The local llama-server returned invalid JSON.")
+        }
+
+        if let content = json["content"] as? String {
+            return content
+        }
+
+        if let choices = json["choices"] as? [[String: Any]],
+           let text = choices.first?["text"] as? String {
+            return text
+        }
+
+        throw TranscriptRefinementServiceError.emptyOutput
+    }
+
+    private func ensureServer(for modelURL: URL) async throws -> URL {
+        if let serverProcess,
+           serverProcess.isRunning,
+           serverModelURL == modelURL,
+           let serverBaseURL {
+            return serverBaseURL
+        }
+
+        stopServer()
+
+        let runtimeURL = try resolveRuntimeURL()
+        let port = try Self.availableLocalPort()
+        let baseURL = URL(string: "http://127.0.0.1:\(port)")!
+        let process = Process()
+        process.executableURL = runtimeURL
+        process.arguments = [
+            "--model", modelURL.path,
+            "--host", "127.0.0.1",
+            "--port", "\(port)",
+            "--n-gpu-layers", "all",
+            "--flash-attn", "auto",
+            "--threads", "\(Self.optimalThreadCount())",
+            "--threads-batch", "\(Self.optimalThreadCount())",
+            "--ctx-size", "2048",
+            "--batch-size", "512",
+            "--parallel", "1",
+            "--no-ui",
+            "--no-webui",
+            "--log-disable"
+        ]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+        } catch {
+            throw TranscriptRefinementServiceError.failedToRun(error.localizedDescription)
+        }
+
+        serverProcess = process
+        serverModelURL = modelURL
+        serverBaseURL = baseURL
+
+        try await waitForServerReady(baseURL: baseURL, process: process)
+        return baseURL
+    }
+
+    private func waitForServerReady(baseURL: URL, process: Process) async throws {
+        let healthURL = baseURL.appendingPathComponent("health")
+        let deadline = Date().addingTimeInterval(120)
+
+        while Date() < deadline {
+            if !process.isRunning {
+                throw TranscriptRefinementServiceError.failedToRun("The local llama-server exited before it was ready.")
+            }
+
+            do {
+                let (_, response) = try await urlSession.data(from: healthURL)
+                if let httpResponse = response as? HTTPURLResponse,
+                   (200..<300).contains(httpResponse.statusCode) {
+                    return
+                }
+            } catch {
+                try await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+
+        throw TranscriptRefinementServiceError.timedOut
+    }
+
+    private func stopServer() {
+        guard let serverProcess else {
+            return
+        }
+
+        if serverProcess.isRunning {
+            serverProcess.terminate()
+        }
+
+        self.serverProcess = nil
+        self.serverModelURL = nil
+        self.serverBaseURL = nil
     }
 
     private func runLlamaCLI(
@@ -129,10 +285,17 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
             process.arguments = [
                 "-m", modelURL.path,
                 "--file", promptFileURL.path,
+                "--n-gpu-layers", "all",
+                "--flash-attn", "auto",
+                "--threads", "\(Self.optimalThreadCount())",
+                "--threads-batch", "\(Self.optimalThreadCount())",
+                "--ctx-size", "2048",
+                "--batch-size", "512",
                 "-n", "\(maxTokens)",
                 "--temp", "0.0",
                 "--top-p", "0.9",
-                "--no-display-prompt"
+                "--no-display-prompt",
+                "--no-show-timings"
             ]
 
             let outputPipe = Pipe()
@@ -156,7 +319,7 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
                 errorCapture.read(from: errorPipe.fileHandleForReading)
             }
 
-            let didExit = await Self.waitForExit(process, timeoutNanoseconds: 60_000_000_000)
+            let didExit = await Self.waitForExit(process, timeoutNanoseconds: 180_000_000_000)
             guard didExit else {
                 process.terminate()
                 let didTerminate = await Self.waitForExit(process, timeoutNanoseconds: 2_000_000_000)
@@ -243,6 +406,51 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         await ProcessExitWaiter().wait(for: process, timeoutNanoseconds: timeoutNanoseconds)
     }
 
+    nonisolated private static func optimalThreadCount() -> Int {
+        max(2, ProcessInfo.processInfo.activeProcessorCount - 2)
+    }
+
+    nonisolated private static func availableLocalPort() throws -> Int {
+        let socketDescriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard socketDescriptor >= 0 else {
+            throw TranscriptRefinementServiceError.failedToRun("Could not create a local socket for llama-server.")
+        }
+
+        defer {
+            Darwin.close(socketDescriptor)
+        }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = in_port_t(0).bigEndian
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+        let bindResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.bind(socketDescriptor, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+
+        guard bindResult == 0 else {
+            throw TranscriptRefinementServiceError.failedToRun("Could not reserve a local port for llama-server.")
+        }
+
+        var resolvedAddress = sockaddr_in()
+        var resolvedAddressLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nameResult = withUnsafeMutablePointer(to: &resolvedAddress) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.getsockname(socketDescriptor, sockaddrPointer, &resolvedAddressLength)
+            }
+        }
+
+        guard nameResult == 0 else {
+            throw TranscriptRefinementServiceError.failedToRun("Could not inspect the local port for llama-server.")
+        }
+
+        return Int(UInt16(bigEndian: resolvedAddress.sin_port))
+    }
+
     private enum PromptProfile {
         case compact
         case standard
@@ -280,70 +488,75 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         switch profile {
         case .compact:
             return """
-            You clean dictated transcripts for insertion into another app. Convert dictated speech into concise written text.
+            You clean up Whisper transcripts for insertion into another app.
+
+            Output only the corrected text.
 
             Rules:
-            - Output only the cleaned text.
-            - Preserve meaning, intent, facts, names, technical terms, code, URLs, numbers, and dates.
-            - Preserve the spoken language when Whisper mode is transcribe. Output English when Whisper mode is translateToEnglish.
-            - Remove filler and discourse markers by default: um, uh, so, now, like, basically, kind of, sort of, in a way, in a sense, you know.
-            - Remove repeated words, repeated meanings, false starts, and self-corrections.
-            - Fix grammar, punctuation, casing, and spacing.
-            - Rewrite awkward dictated wording into natural written text.
-            - Prefer the shortest clear version.
+            - Preserve meaning, facts, names, numbers, dates, URLs, code, and commands.
+            - Preserve the original language unless translation mode requires English output.
+            - Remove filler words, hesitation, repetitions, false starts, and redundant wording.
+            - Resolve self-corrections by keeping the final intended wording.
+            - Fix grammar, punctuation, capitalization, and spacing.
+            - Rewrite awkward dictated speech into natural written language.
+            - Do not add information or explanations.
 
             Examples:
+
             Raw: let's meet at 5 a.m. never mind sorry let's meet at 6 a.m.
-            Cleaned: Let's meet at 6 a.m.
-
-            Raw: So I want you to review whether all exports are using the shared export handler. I know there is like a flag that changes the output format, but basically I want you to make sure every export path goes through that same handler.
-            Cleaned: Please review whether all exports use the shared export handler. I know a flag changes the output format, but I want to make sure every export path goes through that same handler.
-            """
-        case .standard:
-            return """
-            You clean dictated transcripts for insertion into another app. Convert dictated speech into concise written text.
-
-            Rules:
-            - Preserve the speaker's meaning and intent. Do not add facts, answer questions, or explain.
-            - If Whisper mode is transcribe, preserve the spoken language. If Whisper mode is translateToEnglish, output English.
-            - Be aggressive about cleanup when the transcript contains dictated speech artifacts.
-            - Remove filler words and discourse markers that do not add meaning, including "um", "uh", "so", "now", "like", "you know", "basically", "kind of", "sort of", "in a way", "in a sense", and "well". Keep "like" only when it means enjoy or similar to.
-            - Remove hesitation, repeated words, duplicated phrases, false starts, and repeated ideas.
-            - If two nearby words, phrases, or clauses express the same meaning, keep only the clearest version.
-            - If a word or phrase can be deleted without changing the intended meaning, delete it.
-            - Resolve explicit self-corrections. When the speaker revises with words like "sorry", "actually", "I mean", "no", "scratch that", or "never mind", keep the corrected later wording and remove the abandoned wording.
-            - When the output language is English, edit like a strict but natural copy editor: improve grammar, sentence structure, word choice, and clarity.
-            - Rephrase awkward dictated wording into fluent written English when the intended meaning is clear.
-            - Prefer the shortest clear version. Smooth awkward dictation without changing tone or rewriting into a different style.
-            - For task requests, make the result sound like a clear written instruction.
-            - Keep the speaker's tone: casual text should stay casual, and professional text should stay professional.
-            - Do not over-polish, add emphasis, or make the text sound more formal than intended.
-            - Fix punctuation, grammar, casing, and spacing.
-            - Preserve names, numbers, dates, times, URLs, code, commands, and formatting-sensitive text unless the transcript clearly corrects them.
-            - Use paragraphs, bullets, or numbered lists only when clearly implied.
-            - Output only the cleaned text.
-
-            Examples:
-            Raw: let's meet at 5 a.m. never mind sorry let's meet at 6 a.m.
-            Cleaned: Let's meet at 6 a.m.
+            Output: Let's meet at 6 a.m.
 
             Raw: I I think we should ship this tomorrow actually no ship it Friday
-            Cleaned: I think we should ship this Friday.
-
-            Raw: I was wondering maybe we can trying to finish this today
-            Cleaned: I was wondering if we could try to finish this today.
+            Output: I think we should ship this Friday.
 
             Raw: I want to like meet tomorrow like at noon
-            Cleaned: I want to meet tomorrow at noon.
+            Output: I want to meet tomorrow at noon.
+            """
 
-            Raw: I'm still seeing like duplicates like the same meaning and duplicates in the result
-            Cleaned: I'm still seeing duplicate wording and repeated meaning in the result.
+        case .standard:
+            return """
+            You clean up Whisper transcripts for insertion into another app.
+
+            Output only the corrected text.
+
+            Rules:
+            - Preserve meaning, facts, names, numbers, dates, URLs, code, and commands.
+            - Preserve the original language unless translation mode requires English output.
+            - Remove filler words, hesitation, repetitions, false starts, and redundant wording.
+            - Resolve self-corrections by keeping the final intended wording.
+            - Fix grammar, punctuation, capitalization, and spacing.
+            - Rewrite awkward dictated speech into natural written language.
+            - Compress redundant wording but do not remove distinct ideas, requests, facts, or action items.
+            - Format paragraphs for readability.
+            - Convert spoken enumerations into numbered lists.
+            - Use bullet points when the speaker clearly lists multiple related items.
+            - Do not add information or explanations.
+
+            Examples:
+
+            Raw: let's meet at 5 a.m. never mind sorry let's meet at 6 a.m.
+            Output: Let's meet at 6 a.m.
+
+            Raw: I I think we should ship this tomorrow actually no ship it Friday
+            Output: I think we should ship this Friday.
+
+            Raw: point one review exports point two verify the flag behavior point three add tests
+            Output:
+            1. Review exports.
+            2. Verify the flag behavior.
+            3. Add tests.
+
+            Raw: we need to fix login improve onboarding and update documentation
+            Output:
+            - Fix login.
+            - Improve onboarding.
+            - Update documentation.
+
+            Raw: I want to like meet tomorrow like at noon
+            Output: I want to meet tomorrow at noon.
 
             Raw: We need more time because we need more time to prepare for the launch
-            Cleaned: We need more time to prepare for the launch.
-
-            Raw: So I want you to review whether all exports are using the shared export handler. I know there is like a flag that changes the output format, but basically I want you to make sure every export path goes through that same handler.
-            Cleaned: Please review whether all exports use the shared export handler. I know a flag changes the output format, but I want to make sure every export path goes through that same handler.
+            Output: We need more time to prepare for the launch.
             """
         }
     }
