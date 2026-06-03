@@ -74,7 +74,7 @@ Current local data behavior:
 | Data | Current behavior |
 | --- | --- |
 | Recordings | Written as temporary local `.m4a` files under `FileManager.default.temporaryDirectory/DictaFlowRecordings` with user-only permissions, then deleted after transcription finishes or fails. |
-| Transcripts | Kept in process memory as the latest transcript for display, copy, and re-insertion. Local refinement writes a user-only temporary prompt file that is deleted after `llama-cli` exits or is killed. There is no durable transcript history file or database. |
+ | Transcripts | Kept in process memory as the latest transcript for display, copy, and re-insertion. Local refinement sends the prompt to a persistent `llama-server` process over HTTP. There is no durable transcript history file or database. |
 | Models | Stored under `~/Library/Application Support/DictaFlow/Models`. |
 | Clipboard | Clipboard insertion may temporarily place transcript text on the pasteboard with transient/concealed pasteboard markers. DictaFlow attempts to restore previous pasteboard contents when it can confirm the paste succeeded. |
 | Logs | Whisper diagnostics log audio statistics and transcript length, not transcript contents. |
@@ -86,7 +86,7 @@ Current local data behavior:
 - Network access for first-time model downloads.
 - Microphone permission for recording.
 - Accessibility permission for automatic insertion into other apps.
-- Optional: `llama-cli` available in the app bundle. Debug builds can also use
+- Optional: `llama-server` available in the app bundle. Debug builds can also use
   `/opt/homebrew/bin` or `/usr/local/bin` for transcript refinement during development.
 
 ## Build
