@@ -151,7 +151,7 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         let payload: [String: Any] = [
             "prompt": prompt,
             "n_predict": maxTokens,
-            "temperature": 0.0,
+            "temperature": 0.2,
             "top_p": 0.9,
             "stream": false,
             "cache_prompt": true
@@ -461,15 +461,15 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         whisperTaskMode: WhisperTaskMode,
         configuration: RefinementConfiguration
     ) -> String {
-        let instructions = promptInstructions(for: promptProfile(for: configuration.model))
+        let instructions = promptInstructions(
+            for: promptProfile(for: configuration.model),
+            whisperTaskMode: whisperTaskMode
+        )
 
         return """
         <|im_start|>system
         \(instructions)<|im_end|>
         <|im_start|>user
-        Task: \(configuration.mode.rawValue)
-        Whisper mode: \(whisperTaskMode.rawValue)
-        Transcript:
         \(transcript)<|im_end|>
         <|im_start|>assistant
         """
@@ -484,79 +484,56 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         }
     }
 
-    nonisolated private static func promptInstructions(for profile: PromptProfile) -> String {
+    nonisolated private static func promptInstructions(
+        for profile: PromptProfile,
+        whisperTaskMode: WhisperTaskMode
+    ) -> String {
+        let languageInstruction: String
+        switch whisperTaskMode {
+        case .transcribe:
+            languageInstruction = "Preserve the original language."
+        case .translateToEnglish:
+            languageInstruction = "Output English."
+        }
+
         switch profile {
         case .compact:
             return """
-            You clean up Whisper transcripts for insertion into another app.
-
+            Clean up the transcript.
             Output only the corrected text.
+            \(languageInstruction)
 
             Rules:
-            - Preserve meaning, facts, names, numbers, dates, URLs, code, and commands.
-            - Preserve the original language unless translation mode requires English output.
-            - Remove filler words, hesitation, repetitions, false starts, and redundant wording.
+            - Preserve meaning.
+            - Preserve names, numbers, dates, URLs, code, and commands.
+            - Remove filler words, repetitions, false starts, and speech disfluencies.
             - Resolve self-corrections by keeping the final intended wording.
             - Fix grammar, punctuation, capitalization, and spacing.
             - Rewrite awkward dictated speech into natural written language.
-            - Do not add information or explanations.
-
-            Examples:
-
-            Raw: let's meet at 5 a.m. never mind sorry let's meet at 6 a.m.
-            Output: Let's meet at 6 a.m.
-
-            Raw: I I think we should ship this tomorrow actually no ship it Friday
-            Output: I think we should ship this Friday.
-
-            Raw: I want to like meet tomorrow like at noon
-            Output: I want to meet tomorrow at noon.
+            - Do not add information.
+            - Do not explain changes.
             """
 
         case .standard:
             return """
-            You clean up Whisper transcripts for insertion into another app.
-
+            Clean up the transcript.
             Output only the corrected text.
+            \(languageInstruction)
 
             Rules:
-            - Preserve meaning, facts, names, numbers, dates, URLs, code, and commands.
-            - Preserve the original language unless translation mode requires English output.
-            - Remove filler words, hesitation, repetitions, false starts, and redundant wording.
+            - Preserve meaning.
+            - Preserve names, numbers, dates, URLs, code, and commands.
+            - Remove filler words, repetitions, false starts, and speech disfluencies.
             - Resolve self-corrections by keeping the final intended wording.
             - Fix grammar, punctuation, capitalization, and spacing.
             - Rewrite awkward dictated speech into natural written language.
-            - Compress redundant wording but do not remove distinct ideas, requests, facts, or action items.
+            - Compress redundant wording.
+            - Preserve distinct ideas, requests, facts, and action items.
             - Format paragraphs for readability.
-            - Convert spoken enumerations into numbered lists.
-            - Use bullet points when the speaker clearly lists multiple related items.
-            - Do not add information or explanations.
-
-            Examples:
-
-            Raw: let's meet at 5 a.m. never mind sorry let's meet at 6 a.m.
-            Output: Let's meet at 6 a.m.
-
-            Raw: I I think we should ship this tomorrow actually no ship it Friday
-            Output: I think we should ship this Friday.
-
-            Raw: point one review exports point two verify the flag behavior point three add tests
-            Output:
-            1. Review exports.
-            2. Verify the flag behavior.
-            3. Add tests.
-
-            Raw: we need to fix login improve onboarding and update documentation
-            Output:
-            - Fix login.
-            - Improve onboarding.
-            - Update documentation.
-
-            Raw: I want to like meet tomorrow like at noon
-            Output: I want to meet tomorrow at noon.
-
-            Raw: We need more time because we need more time to prepare for the launch
-            Output: We need more time to prepare for the launch.
+            - Convert spoken enumerations into numbered lists when clearly intended.
+            - Use bullet points for clear itemized lists.
+            - Do not add information.
+            - Do not explain changes.
             """
         }
     }
