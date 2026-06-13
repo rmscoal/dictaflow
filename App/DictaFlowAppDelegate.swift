@@ -4,9 +4,11 @@ import AppKit
 final class DictaFlowAppDelegate: NSObject, NSApplicationDelegate {
     let appState = DictaFlowAppState()
     private lazy var mainWindowCoordinator = MainWindowCoordinator(appState: appState)
+    private lazy var recordingOverlayCoordinator = RecordingOverlayCoordinator()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         appState.attach(mainWindowRouter: mainWindowCoordinator)
+        appState.attach(recordingOverlayRouter: recordingOverlayCoordinator)
         appState.handleApplicationLaunch()
     }
 

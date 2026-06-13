@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 protocol AudioRecorderServiceProtocol: AnyObject {
     var isRecording: Bool { get }
+    var currentPowerLevel: Double { get }
     func startRecording() async throws -> URL
     func stopRecording() async throws -> DictationCapture
 }
@@ -43,6 +44,21 @@ final class SystemAudioRecorderService: NSObject, AudioRecorderServiceProtocol {
         recorder?.isRecording ?? false
     }
 
+    var currentPowerLevel: Double {
+        guard let recorder, recorder.isRecording else {
+            return 0
+        }
+
+        recorder.updateMeters()
+        let averagePower = Double(recorder.averagePower(forChannel: 0))
+        guard averagePower.isFinite else {
+            return 0
+        }
+
+        let normalizedPower = (averagePower + 55) / 55
+        return min(max(normalizedPower, 0), 1)
+    }
+
     func startRecording() async throws -> URL {
         guard !isRecording else {
             throw AudioRecorderServiceError.alreadyRecording
@@ -57,7 +73,7 @@ final class SystemAudioRecorderService: NSObject, AudioRecorderServiceProtocol {
         ]
 
         let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
-        recorder.isMeteringEnabled = false
+        recorder.isMeteringEnabled = true
 
         guard recorder.prepareToRecord() else {
             try? FileManager.default.removeItem(at: fileURL)

@@ -152,4 +152,13 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
             return "Alternative compact language model with strong rewriting-oriented training."
         }
     }
+
+    nonisolated var defaultPromptProfile: RefinementPromptProfile {
+        switch self {
+        case .qwen25HalfB:
+            return .compact
+        case .qwen25OneAndHalfB, .qwen25ThreeB, .smolLM2OnePointSevenB:
+            return .standard
+        }
+    }
 }

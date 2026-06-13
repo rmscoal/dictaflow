@@ -10,7 +10,8 @@ protocol TranscriptRefinementServiceProtocol: AnyObject {
         transcript: String,
         whisperTaskMode: WhisperTaskMode,
         modelURL: URL,
-        configuration: RefinementConfiguration
+        configuration: RefinementConfiguration,
+        promptTemplate: String
     ) async throws -> TranscriptRefinementResult
 }
 
@@ -74,7 +75,8 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         transcript: String,
         whisperTaskMode: WhisperTaskMode,
         modelURL: URL,
-        configuration: RefinementConfiguration
+        configuration: RefinementConfiguration,
+        promptTemplate: String
     ) async throws -> TranscriptRefinementResult {
         let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTranscript.isEmpty else {
@@ -84,7 +86,8 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         let prompt = Self.makePrompt(
             transcript: trimmedTranscript,
             whisperTaskMode: whisperTaskMode,
-            configuration: configuration
+            configuration: configuration,
+            promptTemplate: promptTemplate
         )
         let maxTokens = Self.maxPredictionTokens(for: trimmedTranscript)
         let output = try await runPromptOnServer(
@@ -451,18 +454,16 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         return Int(UInt16(bigEndian: resolvedAddress.sin_port))
     }
 
-    private enum PromptProfile {
-        case compact
-        case standard
-    }
-
     nonisolated private static func makePrompt(
         transcript: String,
         whisperTaskMode: WhisperTaskMode,
-        configuration: RefinementConfiguration
+        configuration: RefinementConfiguration,
+        promptTemplate: String
     ) -> String {
-        let instructions = promptInstructions(
-            for: promptProfile(for: configuration.model),
+        let profile = configuration.resolvedPromptProfile
+        let instructions = RefinementPromptTemplate.renderedInstructions(
+            from: promptTemplate,
+            profile: profile,
             whisperTaskMode: whisperTaskMode
         )
 
@@ -473,69 +474,6 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         \(transcript)<|im_end|>
         <|im_start|>assistant
         """
-    }
-
-    nonisolated private static func promptProfile(for model: RefinementModelDescriptor) -> PromptProfile {
-        switch model {
-        case .qwen25HalfB:
-            return .compact
-        case .qwen25OneAndHalfB, .qwen25ThreeB, .smolLM2OnePointSevenB:
-            return .standard
-        }
-    }
-
-    nonisolated private static func promptInstructions(
-        for profile: PromptProfile,
-        whisperTaskMode: WhisperTaskMode
-    ) -> String {
-        let languageInstruction: String
-        switch whisperTaskMode {
-        case .transcribe:
-            languageInstruction = "Preserve the original language."
-        case .translateToEnglish:
-            languageInstruction = "Output English."
-        }
-
-        switch profile {
-        case .compact:
-            return """
-            Clean up the transcript.
-            Output only the corrected text.
-            \(languageInstruction)
-
-            Rules:
-            - Preserve meaning.
-            - Preserve names, numbers, dates, URLs, code, and commands.
-            - Remove filler words, repetitions, false starts, and speech disfluencies.
-            - Resolve self-corrections by keeping the final intended wording.
-            - Fix grammar, punctuation, capitalization, and spacing.
-            - Rewrite awkward dictated speech into natural written language.
-            - Do not add information.
-            - Do not explain changes.
-            """
-
-        case .standard:
-            return """
-            Clean up the transcript.
-            Output only the corrected text.
-            \(languageInstruction)
-
-            Rules:
-            - Preserve meaning.
-            - Preserve names, numbers, dates, URLs, code, and commands.
-            - Remove filler words, repetitions, false starts, and speech disfluencies.
-            - Resolve self-corrections by keeping the final intended wording.
-            - Fix grammar, punctuation, capitalization, and spacing.
-            - Rewrite awkward dictated speech into natural written language.
-            - Compress redundant wording.
-            - Preserve distinct ideas, requests, facts, and action items.
-            - Format paragraphs for readability.
-            - Convert spoken enumerations into numbered lists when clearly intended.
-            - Use bullet points for clear itemized lists.
-            - Do not add information.
-            - Do not explain changes.
-            """
-        }
     }
 
     nonisolated private static func maxPredictionTokens(for transcript: String) -> Int {

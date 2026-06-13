@@ -14,6 +14,11 @@ protocol SettingsWindowRouting: AnyObject {
     func showSettingsWindow()
 }
 
+@MainActor
+protocol RecordingOverlayRouting: AnyObject {
+    func updateOverlay(_ presentation: RecordingOverlayPresentation?)
+}
+
 enum MainWindowPage {
     case dashboard
     case models
@@ -28,17 +33,37 @@ final class DictaFlowAppState: ObservableObject {
     @Published var mainWindowPage: MainWindowPage = .dashboard
     @Published private(set) var microphonePermissionState: MicrophonePermissionState
     @Published private(set) var accessibilityPermissionState: AccessibilityPermissionState
-    @Published private(set) var recordingState: DictationRecordingState
-    @Published private(set) var transcriptionState: TranscriptionPipelineState
-    @Published private(set) var textInsertionState: TextInsertionState
+    @Published private(set) var recordingState: DictationRecordingState {
+        didSet {
+            updateRecordingOverlay()
+        }
+    }
+    @Published private(set) var transcriptionState: TranscriptionPipelineState {
+        didSet {
+            updateRecordingOverlay()
+        }
+    }
+    @Published private(set) var textInsertionState: TextInsertionState {
+        didSet {
+            updateRecordingOverlay()
+        }
+    }
     @Published private(set) var lastCapture: DictationCapture?
     @Published private(set) var lastTranscription: WhisperTranscriptionResult?
     @Published private(set) var lastTextInsertion: TextInsertionResult?
     @Published private(set) var statusMessage: String
+    @Published private(set) var recordingAudioLevel: Double {
+        didSet {
+            updateRecordingOverlay()
+        }
+    }
     @Published private(set) var isHotkeyRegistered = false
     @Published private(set) var modelDownloadProgressText: String?
     @Published private(set) var isRefinementRuntimeAvailable = false
     @Published private(set) var isRefinementServerPreparing = false
+    @Published private(set) var refinementPromptText: String
+    @Published private(set) var isRefinementPromptDirty = false
+    @Published private(set) var hasCustomRefinementPrompt = false
 
     let launchExperience: AppLaunchExperience
     @Published private(set) var whisperConfiguration: WhisperConfiguration
@@ -51,6 +76,7 @@ final class DictaFlowAppState: ObservableObject {
     private let modelDownloadService: ModelDownloadServiceProtocol
     private let whisperService: WhisperServiceProtocol
     private let transcriptRefinementService: TranscriptRefinementServiceProtocol
+    private let refinementPromptStore: RefinementPromptStoreProtocol
     private let textInsertionService: TextInsertionServiceProtocol
     private let localNotificationService: LocalNotificationServiceProtocol
     private let logger = Logger(
@@ -59,10 +85,14 @@ final class DictaFlowAppState: ObservableObject {
     )
     private weak var mainWindowRouter: MainWindowRouting?
     private weak var settingsWindowRouter: SettingsWindowRouting?
+    private weak var recordingOverlayRouter: RecordingOverlayRouting?
     private var workspaceObservers = Set<AnyCancellable>()
+    private var recordingMeterTimer: Timer?
+    private var isRecordingOverlaySessionActive = false
     private var lastKnownExternalTargetApplication: InsertionTargetApplication?
     private var pendingInsertionTargetApplication: InsertionTargetApplication?
     private var preservedStatusMessage: String?
+    private var savedRefinementPromptText: String
 
     convenience init() {
         self.init(
@@ -73,6 +103,7 @@ final class DictaFlowAppState: ObservableObject {
             modelDownloadService: WhisperModelDownloadService(),
             whisperService: WhisperCPPService(),
             transcriptRefinementService: LlamaCLITranscriptRefinementService(),
+            refinementPromptStore: FileRefinementPromptStore(),
             textInsertionService: SystemTextInsertionService(),
             localNotificationService: UserLocalNotificationService()
         )
@@ -86,9 +117,14 @@ final class DictaFlowAppState: ObservableObject {
         modelDownloadService: ModelDownloadServiceProtocol,
         whisperService: WhisperServiceProtocol,
         transcriptRefinementService: TranscriptRefinementServiceProtocol,
+        refinementPromptStore: RefinementPromptStoreProtocol,
         textInsertionService: TextInsertionServiceProtocol,
         localNotificationService: LocalNotificationServiceProtocol
     ) {
+        let initialRefinementConfiguration = settingsStore.refinementConfiguration
+        let initialPromptProfile = initialRefinementConfiguration.resolvedPromptProfile
+        let initialPromptText = refinementPromptStore.promptTemplate(for: initialPromptProfile)
+
         self.settingsStore = settingsStore
         self.permissionService = permissionService
         self.audioRecorderService = audioRecorderService
@@ -96,11 +132,15 @@ final class DictaFlowAppState: ObservableObject {
         self.modelDownloadService = modelDownloadService
         self.whisperService = whisperService
         self.transcriptRefinementService = transcriptRefinementService
+        self.refinementPromptStore = refinementPromptStore
         self.textInsertionService = textInsertionService
         self.localNotificationService = localNotificationService
         self.launchExperience = settingsStore.shouldShowMainWindowOnLaunch ? .firstLaunch : .returningUser
         self.whisperConfiguration = settingsStore.whisperConfiguration
-        self.refinementConfiguration = settingsStore.refinementConfiguration
+        self.refinementConfiguration = initialRefinementConfiguration
+        self.refinementPromptText = initialPromptText
+        self.savedRefinementPromptText = initialPromptText
+        self.hasCustomRefinementPrompt = refinementPromptStore.hasCustomPromptTemplate(for: initialPromptProfile)
         self.isSettingsWindowVisible = false
         self.microphonePermissionState = permissionService.currentMicrophonePermissionStatus()
         self.accessibilityPermissionState = AccessibilityPermissionState(
@@ -114,6 +154,7 @@ final class DictaFlowAppState: ObservableObject {
         self.lastTranscription = nil
         self.lastTextInsertion = nil
         self.statusMessage = ""
+        self.recordingAudioLevel = 0
         self.modelDownloadProgressText = nil
         self.isRefinementRuntimeAvailable = false
         self.isRefinementServerPreparing = false
@@ -264,6 +305,31 @@ final class DictaFlowAppState: ObservableObject {
 
     var modelsDirectoryPath: String {
         modelDownloadService.modelsDirectoryURL.path
+    }
+
+    var refinementPromptsDirectoryPath: String {
+        refinementPromptStore.promptsDirectoryURL.path
+    }
+
+    var activeRefinementPromptProfile: RefinementPromptProfile {
+        refinementConfiguration.resolvedPromptProfile
+    }
+
+    var refinementPromptStyleDetailText: String {
+        let profile = activeRefinementPromptProfile
+
+        if refinementConfiguration.promptStyle == .automatic {
+            return "Automatic uses the \(profile.title.lowercased()) prompt for \(refinementConfiguration.model.displayName). \(profile.detailText)"
+        }
+
+        return "\(profile.detailText) This overrides the model-based automatic choice."
+    }
+
+    var refinementPromptStorageText: String {
+        let profile = activeRefinementPromptProfile.title
+        let source = hasCustomRefinementPrompt ? "custom file" : "built-in default"
+        let dirtySuffix = isRefinementPromptDirty ? " Unsaved changes." : ""
+        return "\(profile) prompt from \(source) in Application Support.\(dirtySuffix)"
     }
 
     var modelStatusText: String {
@@ -536,6 +602,11 @@ final class DictaFlowAppState: ObservableObject {
         self.settingsWindowRouter = settingsWindowRouter
     }
 
+    func attach(recordingOverlayRouter: RecordingOverlayRouting) {
+        self.recordingOverlayRouter = recordingOverlayRouter
+        updateRecordingOverlay()
+    }
+
     func handleApplicationLaunch() {
         refreshMicrophonePermissionStatus()
         refreshAccessibilityPermissionStatus()
@@ -641,14 +712,66 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
+        let previousPromptProfile = activeRefinementPromptProfile
         refinementConfiguration.model = model
         persistRefinementConfiguration()
+        reloadRefinementPromptTextIfNeeded(previousPromptProfile: previousPromptProfile)
         updateStatusMessage()
+    }
+
+    func updateRefinementPromptStyle(_ promptStyle: RefinementPromptStyle) {
+        guard refinementConfiguration.promptStyle != promptStyle else {
+            return
+        }
+
+        let previousPromptProfile = activeRefinementPromptProfile
+        refinementConfiguration.promptStyle = promptStyle
+        persistRefinementConfiguration()
+        reloadRefinementPromptTextIfNeeded(previousPromptProfile: previousPromptProfile)
+        updateStatusMessage()
+    }
+
+    func updateRefinementPromptText(_ promptText: String) {
+        refinementPromptText = promptText
+        isRefinementPromptDirty = promptText != savedRefinementPromptText
+    }
+
+    func saveRefinementPromptText() {
+        let promptProfile = activeRefinementPromptProfile
+
+        do {
+            try refinementPromptStore.savePromptTemplate(refinementPromptText, for: promptProfile)
+            savedRefinementPromptText = refinementPromptText
+            isRefinementPromptDirty = false
+            hasCustomRefinementPrompt = true
+            setPreservedStatusMessage("Saved the \(promptProfile.title.lowercased()) refinement prompt in Application Support.")
+            updateStatusMessage()
+        } catch {
+            setPreservedStatusMessage("Could not save the refinement prompt. \(error.localizedDescription)")
+            showMainWindow()
+            updateStatusMessage()
+        }
+    }
+
+    func resetActiveRefinementPrompt() {
+        let promptProfile = activeRefinementPromptProfile
+
+        do {
+            try refinementPromptStore.resetPromptTemplate(for: promptProfile)
+            reloadRefinementPromptText()
+            setPreservedStatusMessage("Reset the \(promptProfile.title.lowercased()) refinement prompt to the built-in default.")
+            updateStatusMessage()
+        } catch {
+            setPreservedStatusMessage("Could not reset the refinement prompt. \(error.localizedDescription)")
+            showMainWindow()
+            updateStatusMessage()
+        }
     }
 
     func resetWhisperSettingsToDefaults() {
         whisperConfiguration = .default
         refinementConfiguration = .default
+        reloadRefinementPromptText()
         isRefinementServerPreparing = false
         Task { [transcriptRefinementService] in
             await transcriptRefinementService.stop()
@@ -782,13 +905,15 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         if refinementConfiguration.model != model {
-        refinementConfiguration.model = model
-        persistRefinementConfiguration()
-        if refinementConfiguration.isEnabled {
-            startPreparedRefinementServer(enableAfterStart: false)
+            let previousPromptProfile = activeRefinementPromptProfile
+            refinementConfiguration.model = model
+            persistRefinementConfiguration()
+            reloadRefinementPromptTextIfNeeded(previousPromptProfile: previousPromptProfile)
+            if refinementConfiguration.isEnabled {
+                startPreparedRefinementServer(enableAfterStart: false)
+            }
+            updateStatusMessage()
         }
-        updateStatusMessage()
-    }
 
         prepareRefinementModelIfNeeded(force: true, enableAfterPreparation: true)
     }
@@ -830,6 +955,12 @@ final class DictaFlowAppState: ObservableObject {
         NSWorkspace.shared.open(modelsDirectoryURL)
     }
 
+    func openRefinementPromptsFolder() {
+        let promptsDirectoryURL = refinementPromptStore.promptsDirectoryURL
+        try? FileManager.default.createDirectory(at: promptsDirectoryURL, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(promptsDirectoryURL)
+    }
+
     func deleteUnusedModelFiles(matching candidates: [LocalModelFile]) {
         guard !whisperSettingsLocked else {
             setPreservedStatusMessage("Wait until the current recording, transcription, or model preparation finishes before deleting models.")
@@ -866,6 +997,8 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func prepareForTermination() {
+        stopRecordingMetering()
+        recordingOverlayRouter?.updateOverlay(nil)
         hotkeyService.unregisterToggleHotkey()
         Task { [transcriptRefinementService] in
             await transcriptRefinementService.stop()
@@ -1120,6 +1253,23 @@ final class DictaFlowAppState: ObservableObject {
         settingsStore.saveRefinementConfiguration(refinementConfiguration)
     }
 
+    private func reloadRefinementPromptTextIfNeeded(previousPromptProfile: RefinementPromptProfile) {
+        guard previousPromptProfile != activeRefinementPromptProfile else {
+            return
+        }
+
+        reloadRefinementPromptText()
+    }
+
+    private func reloadRefinementPromptText() {
+        let promptProfile = activeRefinementPromptProfile
+        let promptText = refinementPromptStore.promptTemplate(for: promptProfile)
+        refinementPromptText = promptText
+        savedRefinementPromptText = promptText
+        isRefinementPromptDirty = false
+        hasCustomRefinementPrompt = refinementPromptStore.hasCustomPromptTemplate(for: promptProfile)
+    }
+
     private func performDictationToggle() async {
         if transcriptionState.isBusy || textInsertionState.isBusy {
             return
@@ -1137,6 +1287,7 @@ final class DictaFlowAppState: ObservableObject {
 
     private func beginRecordingFlow() async {
         clearPreservedStatusMessage()
+        setRecordingOverlaySessionActive(true)
         pendingInsertionTargetApplication = captureCurrentInsertionTargetApplication()
         recordingState = .requestingPermission
         updateStatusMessage()
@@ -1146,6 +1297,7 @@ final class DictaFlowAppState: ObservableObject {
 
         guard permissionState == .granted else {
             recordingState = .idle
+            setRecordingOverlaySessionActive(false)
             updateStatusMessage()
             showMainWindow()
             return
@@ -1154,9 +1306,12 @@ final class DictaFlowAppState: ObservableObject {
         do {
             let fileURL = try await audioRecorderService.startRecording()
             recordingState = .recording(startedAt: Date(), fileURL: fileURL)
+            startRecordingMetering()
             updateStatusMessage()
         } catch {
+            stopRecordingMetering()
             recordingState = .idle
+            setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Could not start recording. \(error.localizedDescription)")
             showMainWindow()
         }
@@ -1164,6 +1319,7 @@ final class DictaFlowAppState: ObservableObject {
 
     private func finishRecordingFlow() async {
         recordingState = .stopping
+        stopRecordingMetering()
         updateStatusMessage()
 
         do {
@@ -1174,9 +1330,156 @@ final class DictaFlowAppState: ObservableObject {
             updateStatusMessage()
             await transcribe(capture: capture)
         } catch {
+            stopRecordingMetering()
             recordingState = .idle
+            setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Could not stop recording cleanly. \(error.localizedDescription)")
             showMainWindow()
+        }
+    }
+
+    private func startRecordingMetering() {
+        stopRecordingMetering(resetLevel: false)
+        recordingAudioLevel = audioRecorderService.currentPowerLevel
+
+        let timer = Timer(timeInterval: 1.0 / 24.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+
+                self.recordingAudioLevel = self.audioRecorderService.currentPowerLevel
+            }
+        }
+        timer.tolerance = 0.02
+        RunLoop.main.add(timer, forMode: .common)
+        recordingMeterTimer = timer
+    }
+
+    private func stopRecordingMetering(resetLevel: Bool = true) {
+        recordingMeterTimer?.invalidate()
+        recordingMeterTimer = nil
+
+        if resetLevel {
+            recordingAudioLevel = 0
+        }
+    }
+
+    private func setRecordingOverlaySessionActive(_ isActive: Bool) {
+        guard isRecordingOverlaySessionActive != isActive else {
+            return
+        }
+
+        isRecordingOverlaySessionActive = isActive
+        updateRecordingOverlay()
+    }
+
+    private func updateRecordingOverlay() {
+        recordingOverlayRouter?.updateOverlay(recordingOverlayPresentation)
+    }
+
+    private var recordingOverlayPresentation: RecordingOverlayPresentation? {
+        guard isRecordingOverlaySessionActive else {
+            return nil
+        }
+
+        switch recordingState {
+        case .requestingPermission:
+            return RecordingOverlayPresentation(
+                phase: .requestingPermission,
+                title: "Microphone Access",
+                detail: "Waiting for permission",
+                audioLevel: 0
+            )
+        case .recording:
+            return RecordingOverlayPresentation(
+                phase: .recording,
+                title: "Recording",
+                detail: "Press again to stop",
+                audioLevel: recordingAudioLevel
+            )
+        case .stopping:
+            return RecordingOverlayPresentation(
+                phase: .stopping,
+                title: "Finishing",
+                detail: "Saving the local recording",
+                audioLevel: 0
+            )
+        case .idle:
+            break
+        }
+
+        switch transcriptionState {
+        case .idle:
+            break
+        case .preparingModel(let model):
+            return RecordingOverlayPresentation(
+                phase: .preparingModel,
+                title: "Preparing Whisper",
+                detail: model.displayName,
+                audioLevel: 0
+            )
+        case .downloadingModel(let model, let progress):
+            let progressText = progress.map { " • \(Int($0 * 100))%" } ?? ""
+            return RecordingOverlayPresentation(
+                phase: .downloadingModel,
+                title: "Downloading Model",
+                detail: "\(model.displayName)\(progressText)",
+                audioLevel: 0
+            )
+        case .transcribing(let model):
+            return RecordingOverlayPresentation(
+                phase: .transcribing,
+                title: "Transcribing",
+                detail: "\(model.displayName) locally",
+                audioLevel: 0
+            )
+        case .preparingRefinementModel(let model):
+            return RecordingOverlayPresentation(
+                phase: .preparingModel,
+                title: "Preparing Refinement",
+                detail: model.displayName,
+                audioLevel: 0
+            )
+        case .downloadingRefinementModel(let model, let progress):
+            let progressText = progress.map { " • \(Int($0 * 100))%" } ?? ""
+            return RecordingOverlayPresentation(
+                phase: .downloadingModel,
+                title: "Downloading Refinement",
+                detail: "\(model.displayName)\(progressText)",
+                audioLevel: 0
+            )
+        case .refining(let model):
+            return RecordingOverlayPresentation(
+                phase: .refining,
+                title: "Refining",
+                detail: "\(model.displayName) locally",
+                audioLevel: 0
+            )
+        }
+
+        switch textInsertionState {
+        case .idle:
+            return RecordingOverlayPresentation(
+                phase: .stopping,
+                title: "Processing",
+                detail: "Preparing the next step",
+                audioLevel: 0
+            )
+        case .requestingAccessibilityPermission(let targetApplicationName):
+            return RecordingOverlayPresentation(
+                phase: .requestingAccessibilityPermission,
+                title: "Accessibility Access",
+                detail: "Needed for \(targetApplicationName ?? "the target app")",
+                audioLevel: 0
+            )
+        case .inserting(let targetApplicationName):
+            return RecordingOverlayPresentation(
+                phase: .inserting,
+                title: "Inserting Text",
+                detail: targetApplicationName ?? "Focused app",
+                audioLevel: 0
+            )
         }
     }
 
@@ -1219,6 +1522,7 @@ final class DictaFlowAppState: ObservableObject {
             shouldSurfaceCleanupFailure = true
         } catch {
             transcriptionState = .idle
+            setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)")
             showMainWindow()
         }
@@ -1290,7 +1594,8 @@ final class DictaFlowAppState: ObservableObject {
                 transcript: transcription.text,
                 whisperTaskMode: transcription.taskMode,
                 modelURL: modelURL,
-                configuration: refinementConfiguration
+                configuration: refinementConfiguration,
+                promptTemplate: refinementPromptText
             )
 
             var refinedTranscription = transcription
@@ -1330,6 +1635,7 @@ final class DictaFlowAppState: ObservableObject {
         let text = transcription.insertionText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             pendingInsertionTargetApplication = nil
+            setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Whisper returned an empty transcript, so there was nothing to insert.")
             showMainWindow()
             return
@@ -1361,6 +1667,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         updateStatusMessage()
+        setRecordingOverlaySessionActive(false)
     }
 
     private func ensureAccessibilityPermissionForInsertion(targetApplicationName: String?) {

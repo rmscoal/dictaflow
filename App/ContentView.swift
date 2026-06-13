@@ -466,6 +466,82 @@ struct ContentView: View {
                             .foregroundStyle(appState.isRefinementModelSupported(selectedRefinementModel) ? AppTheme.secondaryText : Color.orange.opacity(0.86))
                             .fixedSize(horizontal: false, vertical: true)
 
+                        Divider()
+                            .overlay(AppTheme.border)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            SettingLabel(
+                                title: "Prompt",
+                                value: appState.activeRefinementPromptProfile.title,
+                                systemImage: "text.alignleft"
+                            )
+
+                            Picker("Prompt Style", selection: refinementPromptStyleBinding) {
+                                ForEach(RefinementPromptStyle.allCases, id: \.self) { promptStyle in
+                                    Text(promptStyle.title).tag(promptStyle)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
+                            .disabled(appState.whisperSettingsLocked)
+
+                            Text(appState.refinementPromptStyleDetailText)
+                                .font(.system(size: 12))
+                                .foregroundStyle(AppTheme.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            TextEditor(text: refinementPromptTextBinding)
+                                .font(.system(size: 12, design: .monospaced))
+                                .scrollContentBackground(.hidden)
+                                .frame(minHeight: 170)
+                                .padding(8)
+                                .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(AppTheme.border, lineWidth: 0.75)
+                                )
+                                .disabled(appState.whisperSettingsLocked)
+
+                            Text("Use \(RefinementPromptTemplate.languageInstructionPlaceholder) where the transcribe or translate instruction should appear.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(AppTheme.tertiaryText)
+
+                            HStack(spacing: 10) {
+                                Button {
+                                    appState.saveRefinementPromptText()
+                                } label: {
+                                    Label("Save Prompt", systemImage: "square.and.arrow.down")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(AppTheme.accent)
+                                .disabled(
+                                    appState.whisperSettingsLocked ||
+                                    !appState.isRefinementPromptDirty ||
+                                    appState.refinementPromptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                )
+
+                                Button {
+                                    appState.resetActiveRefinementPrompt()
+                                } label: {
+                                    Label("Reset", systemImage: "arrow.counterclockwise")
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(appState.whisperSettingsLocked)
+
+                                Button {
+                                    appState.openRefinementPromptsFolder()
+                                } label: {
+                                    Label("Folder", systemImage: "folder")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+
+                            Text(appState.refinementPromptStorageText)
+                                .font(.system(size: 12))
+                                .foregroundStyle(AppTheme.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
                         HStack(spacing: 8) {
                             if appState.isRefinementServerPreparing {
                                 ProgressView()
@@ -711,6 +787,20 @@ struct ContentView: View {
         Binding(
             get: { selectedRefinementModel },
             set: { selectedRefinementModel = $0 }
+        )
+    }
+
+    private var refinementPromptStyleBinding: Binding<RefinementPromptStyle> {
+        Binding(
+            get: { appState.refinementConfiguration.promptStyle },
+            set: { appState.updateRefinementPromptStyle($0) }
+        )
+    }
+
+    private var refinementPromptTextBinding: Binding<String> {
+        Binding(
+            get: { appState.refinementPromptText },
+            set: { appState.updateRefinementPromptText($0) }
         )
     }
 
