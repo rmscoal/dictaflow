@@ -10,6 +10,17 @@ It does not replace the upstream license texts.
 - Copyright: Copyright (c) 2023-2026 The ggml authors
 - License file: `Vendor/whisper.cpp/LICENSE`
 
+## llama.cpp
+
+- Bundled binary: `llama-server` in public macOS app builds
+- Source: <https://github.com/ggml-org/llama.cpp>
+- Pinned release: `b9627`
+- License: MIT
+- Copyright: Copyright (c) 2023-2026 The ggml authors
+- Notes: DictaFlow bundles `llama-server` so local transcript refinement can run
+  without requiring users to install Homebrew, Ollama, or a separate llama.cpp
+  runtime.
+
 ## Whisper Models
 
 - Referenced from: `Models/WhisperModelDescriptor.swift`

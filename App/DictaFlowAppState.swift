@@ -371,7 +371,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         if !isRefinementRuntimeAvailable {
-            return "Install llama.cpp so DictaFlow can run llama-server for local refinement. Preparing only downloads the selected LLM model."
+            return missingRefinementRuntimeStatusText
         }
 
         if refinementConfiguration.isEnabled {
@@ -687,7 +687,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         guard isRefinementRuntimeAvailable else {
-            setPreservedStatusMessage("Install llama.cpp so DictaFlow can run llama-server before turning on local refinement.")
+            setPreservedStatusMessage(missingRefinementRuntimeEnableMessage)
             showMainWindow()
             return
         }
@@ -804,7 +804,7 @@ final class DictaFlowAppState: ObservableObject {
                 if !isAvailable, self.refinementConfiguration.isEnabled {
                     self.refinementConfiguration.isEnabled = false
                     self.persistRefinementConfiguration()
-                    self.setPreservedStatusMessage("Refinement was turned off because DictaFlow could not find llama-server. Install llama.cpp, then turn refinement back on.")
+                    self.setPreservedStatusMessage(self.missingRefinementRuntimeDisabledMessage)
                 } else if isAvailable, self.refinementConfiguration.isEnabled {
                     self.startPreparedRefinementServer(enableAfterStart: false)
                 }
@@ -884,7 +884,7 @@ final class DictaFlowAppState: ObservableObject {
 
     func prepareRefinementModel() {
         guard isRefinementRuntimeAvailable else {
-            setPreservedStatusMessage("Install llama.cpp so DictaFlow can run llama-server before preparing LLM refinement.")
+            setPreservedStatusMessage(missingRefinementRuntimeActionMessage)
             showMainWindow()
             return
         }
@@ -899,7 +899,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         guard isRefinementRuntimeAvailable else {
-            setPreservedStatusMessage("Install llama.cpp so DictaFlow can run llama-server before preparing LLM refinement.")
+            setPreservedStatusMessage(missingRefinementRuntimeActionMessage)
             showMainWindow()
             return
         }
@@ -1243,6 +1243,38 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         return "\(model.displayName) is unavailable on this Mac. Choose a smaller model."
+    }
+
+    private var missingRefinementRuntimeStatusText: String {
+        #if DEBUG
+            return "Install llama.cpp so DictaFlow can run llama-server for local refinement. Preparing only downloads the selected LLM model."
+        #else
+            return "DictaFlow could not find its bundled local refinement runtime. Reinstall DictaFlow, then try local cleanup again."
+        #endif
+    }
+
+    private var missingRefinementRuntimeActionMessage: String {
+        #if DEBUG
+            return "Install llama.cpp so DictaFlow can run llama-server before preparing LLM refinement."
+        #else
+            return "DictaFlow could not find its bundled local refinement runtime. Reinstall DictaFlow before preparing LLM refinement."
+        #endif
+    }
+
+    private var missingRefinementRuntimeEnableMessage: String {
+        #if DEBUG
+            return "Install llama.cpp so DictaFlow can run llama-server before turning on local refinement."
+        #else
+            return "DictaFlow could not find its bundled local refinement runtime. Reinstall DictaFlow before turning on local refinement."
+        #endif
+    }
+
+    private var missingRefinementRuntimeDisabledMessage: String {
+        #if DEBUG
+            return "Refinement was turned off because DictaFlow could not find llama-server. Install llama.cpp, then turn refinement back on."
+        #else
+            return "Refinement was turned off because DictaFlow could not find its bundled local refinement runtime. Reinstall DictaFlow, then turn refinement back on."
+        #endif
     }
 
     private func persistWhisperConfiguration() {

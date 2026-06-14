@@ -1,0 +1,89 @@
+name: Release macOS App
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, notarize, and publish DMG
+    runs-on: macos-latest
+
+    env:
+      APP_NAME: DictaFlow
+      PROJECT: DictaFlow.xcodeproj
+      SCHEME: DictaFlow
+      CONFIGURATION: Release
+      DEVELOPER_ID_APPLICATION_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION_IDENTITY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare artifact version
+        run: echo "ARTIFACT_VERSION=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_ENV"
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Import Developer ID certificate
+        run: ./script/ci_import_certificate.sh
+        env:
+          DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+
+      - name: Build archive
+        run: |
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -archivePath "$RUNNER_TEMP/$APP_NAME.xcarchive" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_IDENTITY="$DEVELOPER_ID_APPLICATION_IDENTITY" \
+            SWIFT_OPTIMIZATION_LEVEL=-Onone
+
+      - name: Export Developer ID app
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/$APP_NAME.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist ci/ExportOptions-DeveloperID.plist
+
+      - name: Package DMG
+        run: |
+          mkdir -p dist
+          ./script/package_dmg.sh "$RUNNER_TEMP/export/$APP_NAME.app" "dist/$APP_NAME-${ARTIFACT_VERSION}.dmg"
+        env:
+          DMG_CODE_SIGN_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION_IDENTITY }}
+
+      - name: Notarize DMG
+        run: |
+          xcrun notarytool submit "dist/$APP_NAME-${ARTIFACT_VERSION}.dmg" \
+            --apple-id "${{ secrets.APPLE_ID }}" \
+            --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+            --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
+            --wait
+          xcrun stapler staple "dist/$APP_NAME-${ARTIFACT_VERSION}.dmg"
+
+      - name: Verify release artifact
+        run: ./script/verify_release_artifact.sh "dist/$APP_NAME-${ARTIFACT_VERSION}.dmg"
+        env:
+          REQUIRE_NOTARIZATION: "1"
+
+      - name: Generate checksum
+        run: shasum -a 256 "dist/$APP_NAME-${ARTIFACT_VERSION}.dmg" > "dist/$APP_NAME-${ARTIFACT_VERSION}.dmg.sha256"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.dmg
+            dist/*.sha256
