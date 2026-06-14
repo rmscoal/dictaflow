@@ -138,7 +138,7 @@ case "$MODE" in
     ;;
   --package|package)
     build_release_app
-    /usr/bin/rm -f "$PACKAGE_DMG_PATH"
+    rm -f "$PACKAGE_DMG_PATH"
     "$ROOT_DIR/script/package_dmg.sh" "$RELEASE_BUILT_APP" "$PACKAGE_DMG_PATH"
     exit 0
     ;;
