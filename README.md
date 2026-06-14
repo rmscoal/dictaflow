@@ -34,6 +34,10 @@ quiet, available in every writing surface, and not dependent on a cloud service.
 DictaFlow is in active development. The main development target is
 `DictaFlow Dev` with bundle id `com.dictaflow.dev`.
 
+The public release target is `DictaFlow` with bundle id `com.dictaflow`.
+Release packaging is prepared for GitHub Releases, but notarized public builds
+require Apple Developer Program membership and Developer ID credentials.
+
 The app is macOS-only and currently targets macOS 13.0 or newer.
 
 ## Features
@@ -86,8 +90,26 @@ Current local data behavior:
 - Network access for first-time model downloads.
 - Microphone permission for recording.
 - Accessibility permission for automatic insertion into other apps.
-- Optional: `llama-server` available in the app bundle. Debug builds can also use
-  `/opt/homebrew/bin` or `/usr/local/bin` for transcript refinement during development.
+- `llama-server` bundled in public builds for local transcript refinement. Debug
+  builds can also use `/opt/homebrew/bin` or `/usr/local/bin` during development.
+
+## Install
+
+Public binary releases should be downloaded from the repository's GitHub
+Releases page, not from files committed into the repository.
+
+For a signed and notarized release:
+
+1. Download `DictaFlow-vX.Y.Z.dmg` and the matching `.sha256` file.
+2. Open the DMG.
+3. Drag `DictaFlow.app` into `/Applications`.
+4. Launch `DictaFlow`.
+5. Approve Microphone access when prompted.
+6. Approve Accessibility access when DictaFlow needs to insert text into another app.
+
+Accessibility approval is always user controlled by macOS. Signing and
+notarization do not bypass that prompt; they make the app's identity stable for
+Gatekeeper and future updates.
 
 ## Build
 
@@ -108,6 +130,28 @@ The `Ensure Whisper XCFramework` Xcode build phase builds
 `Vendor/whisper.cpp/build-apple/whisper.xcframework` via
 `Vendor/whisper.cpp/build-xcframework.sh` when needed.
 
+The public `DictaFlow` target also bundles a pinned `llama-server` runtime for
+local refinement through `script/ensure_llama_server.sh`. The script downloads
+the pinned macOS llama.cpp release asset, verifies its SHA-256 checksum, copies
+`llama-server` into the app bundle, and signs it with the same build identity.
+
+To test the public target locally without Apple Developer Program membership,
+use ad-hoc signing:
+
+```sh
+xcodebuild -project DictaFlow.xcodeproj -scheme DictaFlow -configuration Release -derivedDataPath .build/ReleaseDerivedData build DEVELOPMENT_TEAM= CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- SWIFT_OPTIMIZATION_LEVEL=-Onone
+```
+
+Then create a local test DMG:
+
+```sh
+./script/package_dmg.sh .build/ReleaseDerivedData/Build/Products/Release/DictaFlow.app .build/DictaFlow-local.dmg
+./script/verify_release_artifact.sh .build/DictaFlow-local.dmg
+```
+
+This local DMG is not notarized and is only for packaging tests. See
+[docs/RELEASE.md](docs/RELEASE.md) for the signed GitHub Release workflow.
+
 ## Run Locally
 
 For behavior involving permissions, hotkeys, text insertion, model storage, or
@@ -123,7 +167,15 @@ make verify     # build, install, verify signing, and launch
 make logs       # build, install, launch, and stream process logs
 make telemetry  # build, install, launch, and stream subsystem logs
 make debug      # build, install, then start lldb
+make install-release # build and install the bundled DictaFlow app
+make package    # build the bundled DictaFlow app and create a local DMG
+make uninstall  # remove DictaFlow and DictaFlow Dev from /Applications
 ```
+
+`make uninstall` removes only the installed app bundles. It does not delete
+your models in `~/Library/Application Support/DictaFlow/Models`.
+
+`make package` writes `.build/DictaFlow-local.dmg`.
 
 ## First Run
 
