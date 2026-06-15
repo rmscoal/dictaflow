@@ -139,7 +139,7 @@ case "$MODE" in
   --package|package)
     build_release_app
     rm -f "$PACKAGE_DMG_PATH"
-    "$ROOT_DIR/script/package_dmg.sh" "$RELEASE_BUILT_APP" "$PACKAGE_DMG_PATH"
+    DICTAFLOW_LOCAL_TEST_DMG=1 "$ROOT_DIR/script/package_dmg.sh" "$RELEASE_BUILT_APP" "$PACKAGE_DMG_PATH"
     exit 0
     ;;
   --uninstall|uninstall)

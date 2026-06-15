@@ -103,6 +103,11 @@ xcodebuild \
 This validates packaging only. It does not validate Gatekeeper acceptance,
 notarization, or long-lived Accessibility trust.
 
+`make package` sets `DICTAFLOW_LOCAL_TEST_DMG=1`, so the generated DMG uses the
+volume name `DictaFlow Local Test` and includes `LOCAL_TEST_BUILD.txt`. Do not
+remove that marker from ad-hoc builds; it keeps local packaging artifacts from
+being mistaken for public releases.
+
 Note: the current Xcode 26.4 Release optimizer crashes in
 `RecordingOverlayCoordinator.swift`. The local packaging command and CI workflow
 temporarily pass `SWIFT_OPTIMIZATION_LEVEL=-Onone` so release packaging can be
