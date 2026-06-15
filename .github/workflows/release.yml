@@ -23,8 +23,15 @@ jobs:
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
     steps:
+      - name: Validate release ref
+        run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "error: release workflow must run from a v* tag, got $GITHUB_REF" >&2
+            exit 1
+          fi
+
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Prepare artifact version
         run: echo "ARTIFACT_VERSION=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_ENV"
@@ -82,8 +89,14 @@ jobs:
         run: shasum -a 256 "dist/$APP_NAME-${ARTIFACT_VERSION}.dmg" > "dist/$APP_NAME-${ARTIFACT_VERSION}.dmg.sha256"
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           files: |
             dist/*.dmg
             dist/*.sha256
+
+      - name: Clean up signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/dictaflow-signing.keychain-db" >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/developer-id-certificate.p12"

@@ -7,6 +7,49 @@ The repository also supports local ad-hoc DMG packaging so the install flow can
 be tested before Apple Developer Program membership is available. Ad-hoc builds
 are for local testing only and should not be the primary public download.
 
+## Release Engine Overview
+
+The release engine is the set of project targets, scripts, and CI workflow that
+turn the source tree into an installable macOS app. It has two lanes:
+
+- Local packaging: builds `DictaFlow.app` with ad-hoc signing and creates a
+  `.dmg` for testing the install flow.
+- Public release: builds `DictaFlow.app` with Developer ID signing, notarizes
+  the `.dmg` with Apple, staples the notarization ticket, and publishes the
+  artifact to GitHub Releases.
+
+The development app and public app are intentionally separate:
+
+- `DictaFlow Dev` is the day-to-day development target. It uses bundle id
+  `com.dictaflow.dev` and can use local developer tools such as a Homebrew
+  `llama-server`.
+- `DictaFlow` is the public distribution target. It uses bundle id
+  `com.dictaflow` and bundles its own `llama-server` runtime so users do not
+  need to install llama.cpp separately.
+
+The important pieces are:
+
+| File | Role |
+| --- | --- |
+| `DictaFlow.xcodeproj/project.pbxproj` | Defines the `DictaFlow` and `DictaFlow Dev` targets, bundle ids, signing settings, hardened runtime, entitlements, and release build phases. |
+| `.github/workflows/release.yml` | Future CI path for signed, notarized GitHub Release DMGs. It requires Apple Developer credentials in GitHub Secrets. |
+| `script/ensure_llama_server.sh` | Downloads a pinned llama.cpp release, verifies its checksum, copies `llama-server` and dylibs into the app bundle, and signs them. |
+| `script/package_dmg.sh` | Creates the installer DMG with `DictaFlow.app` and an `/Applications` symlink. |
+| `script/verify_release_artifact.sh` | Mounts the DMG and verifies app signing, bundled `llama-server`, and optionally notarization. |
+| `script/ci_import_certificate.sh` | Imports the Developer ID certificate into a temporary CI keychain for release signing. |
+| `ci/ExportOptions-DeveloperID.plist` | Tells `xcodebuild -exportArchive` to export a Developer ID signed macOS app. |
+| `Config/DictaFlow.entitlements` | Holds the app entitlements used by both targets. |
+| `Makefile` and `script/build_and_run.sh` | Provide local commands such as `make package`, `make install-release`, and `make uninstall`. |
+
+Without Apple Developer Program membership, only the local packaging lane is
+expected to work. That lane is useful for checking that the public target builds,
+that `llama-server` is bundled, and that the DMG layout is correct. It does not
+prove that Gatekeeper will accept the app on another Mac.
+
+For a real public download, the DMG must be built with a Developer ID
+Application certificate, notarized by Apple, stapled, and verified with
+`spctl`/`stapler`.
+
 ## Distribution Targets
 
 | Target | Bundle ID | Purpose |
@@ -68,13 +111,16 @@ fix.
 
 ## GitHub Release Workflow
 
-The release workflow is `.github/workflows/release.yml`. It runs for tags that
-match `v*`, for example:
+The release workflow is `.github/workflows/release.yml`. It publishes only when
+the workflow runs from a tag that matches `v*`, for example:
 
 ```sh
 git tag v1.0.0
 git push origin v1.0.0
 ```
+
+Manual `workflow_dispatch` runs are allowed only when the selected ref is also a
+`v*` tag. This prevents accidentally notarizing and publishing a branch build.
 
 The workflow:
 

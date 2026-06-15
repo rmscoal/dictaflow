@@ -39,39 +39,35 @@ THIRD_PARTY_DIR="$CONTENTS_DIR/Resources/ThirdParty"
 
 mkdir -p "$CACHE_DIR" "$DESTINATION_DIR"
 
-if [ ! -x "$RUNTIME_CACHE_DIR/llama-server" ]; then
-  if [ ! -f "$ARCHIVE_PATH" ]; then
-    echo "Downloading $DOWNLOAD_URL"
-    curl --fail --location --retry 3 --output "$ARCHIVE_PATH" "$DOWNLOAD_URL"
-  fi
+if [ ! -f "$ARCHIVE_PATH" ]; then
+  echo "Downloading $DOWNLOAD_URL"
+  curl --fail --location --retry 3 --output "$ARCHIVE_PATH" "$DOWNLOAD_URL"
+fi
 
-  printf "%s  %s\n" "$ARCHIVE_SHA256" "$ARCHIVE_PATH" | shasum -a 256 --check
+printf "%s  %s\n" "$ARCHIVE_SHA256" "$ARCHIVE_PATH" | shasum -a 256 --check
 
-  rm -rf "$EXTRACT_DIR"
-  mkdir -p "$EXTRACT_DIR"
-  tar -xzf "$ARCHIVE_PATH" -C "$EXTRACT_DIR"
+rm -rf "$EXTRACT_DIR" "$RUNTIME_CACHE_DIR"
+mkdir -p "$EXTRACT_DIR" "$RUNTIME_CACHE_DIR"
+tar -xzf "$ARCHIVE_PATH" -C "$EXTRACT_DIR"
 
-  EXTRACTED_RUNTIME="$(find "$EXTRACT_DIR" -type f -name llama-server | head -1)"
-  if [ -z "$EXTRACTED_RUNTIME" ]; then
-    echo "error: llama-server not found in $ARCHIVE_NAME" >&2
-    exit 1
-  fi
+EXTRACTED_RUNTIME="$(find "$EXTRACT_DIR" -type f -name llama-server | head -1)"
+if [ -z "$EXTRACTED_RUNTIME" ]; then
+  echo "error: llama-server not found in $ARCHIVE_NAME" >&2
+  exit 1
+fi
 
-  EXTRACTED_RUNTIME_DIR="$(dirname "$EXTRACTED_RUNTIME")"
-  rm -rf "$RUNTIME_CACHE_DIR"
-  mkdir -p "$RUNTIME_CACHE_DIR"
+EXTRACTED_RUNTIME_DIR="$(dirname "$EXTRACTED_RUNTIME")"
 
-  cp -p "$EXTRACTED_RUNTIME" "$RUNTIME_CACHE_DIR/llama-server"
-  chmod 755 "$RUNTIME_CACHE_DIR/llama-server"
+cp -p "$EXTRACTED_RUNTIME" "$RUNTIME_CACHE_DIR/llama-server"
+chmod 755 "$RUNTIME_CACHE_DIR/llama-server"
 
-  for dylib in "$EXTRACTED_RUNTIME_DIR"/*.dylib; do
-    [ -e "$dylib" ] || continue
-    cp -pR "$dylib" "$RUNTIME_CACHE_DIR/$(basename "$dylib")"
-  done
+for dylib in "$EXTRACTED_RUNTIME_DIR"/*.dylib; do
+  [ -e "$dylib" ] || continue
+  cp -pR "$dylib" "$RUNTIME_CACHE_DIR/$(basename "$dylib")"
+done
 
-  if [ -f "$EXTRACTED_RUNTIME_DIR/LICENSE" ]; then
-    cp -p "$EXTRACTED_RUNTIME_DIR/LICENSE" "$RUNTIME_CACHE_DIR/LICENSE"
-  fi
+if [ -f "$EXTRACTED_RUNTIME_DIR/LICENSE" ]; then
+  cp -p "$EXTRACTED_RUNTIME_DIR/LICENSE" "$RUNTIME_CACHE_DIR/LICENSE"
 fi
 
 rm -f "$DESTINATION_PATH"
