@@ -2,10 +2,10 @@ import Foundation
 
 protocol RefinementPromptStoreProtocol: AnyObject {
     var promptsDirectoryURL: URL { get }
-    func promptTemplate(for profile: RefinementPromptProfile) -> String
-    func hasCustomPromptTemplate(for profile: RefinementPromptProfile) -> Bool
-    func savePromptTemplate(_ template: String, for profile: RefinementPromptProfile) throws
-    func resetPromptTemplate(for profile: RefinementPromptProfile) throws
+    func promptTemplate() -> String
+    func hasCustomPromptTemplate() -> Bool
+    func savePromptTemplate(_ template: String) throws
+    func resetPromptTemplate() throws
 }
 
 enum RefinementPromptStoreError: LocalizedError {
@@ -33,21 +33,22 @@ final class FileRefinementPromptStore: RefinementPromptStoreProtocol {
     init(fileManager: FileManager = .default) {
         self.fileManager = fileManager
         self.promptsDirectoryURL = Self.makePromptsDirectoryURL(fileManager: fileManager)
+        try? migrateLegacyStandardPromptIfNeeded()
     }
 
-    func promptTemplate(for profile: RefinementPromptProfile) -> String {
-        let promptURL = promptURL(for: profile)
+    func promptTemplate() -> String {
+        let promptURL = promptURL
         guard Self.isRegularPromptFile(at: promptURL),
               let prompt = try? String(contentsOf: promptURL, encoding: .utf8),
               !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return RefinementPromptTemplate.defaultTemplate(for: profile)
+            return RefinementPromptTemplate.defaultTemplate
         }
 
         return prompt
     }
 
-    func hasCustomPromptTemplate(for profile: RefinementPromptProfile) -> Bool {
-        let promptURL = promptURL(for: profile)
+    func hasCustomPromptTemplate() -> Bool {
+        let promptURL = promptURL
         guard Self.isRegularPromptFile(at: promptURL),
               let prompt = try? String(contentsOf: promptURL, encoding: .utf8) else {
             return false
@@ -56,13 +57,13 @@ final class FileRefinementPromptStore: RefinementPromptStoreProtocol {
         return !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    func savePromptTemplate(_ template: String, for profile: RefinementPromptProfile) throws {
+    func savePromptTemplate(_ template: String) throws {
         guard !template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw RefinementPromptStoreError.emptyPrompt
         }
 
         try Self.ensurePromptsDirectoryExists(at: promptsDirectoryURL, using: fileManager)
-        let promptURL = promptURL(for: profile)
+        let promptURL = promptURL
 
         if fileManager.fileExists(atPath: promptURL.path), !Self.isRegularPromptFile(at: promptURL) {
             throw RefinementPromptStoreError.invalidPromptFile
@@ -75,8 +76,8 @@ final class FileRefinementPromptStore: RefinementPromptStoreProtocol {
         )
     }
 
-    func resetPromptTemplate(for profile: RefinementPromptProfile) throws {
-        let promptURL = promptURL(for: profile)
+    func resetPromptTemplate() throws {
+        let promptURL = promptURL
         guard fileManager.fileExists(atPath: promptURL.path) else {
             return
         }
@@ -88,8 +89,23 @@ final class FileRefinementPromptStore: RefinementPromptStoreProtocol {
         try fileManager.removeItem(at: promptURL)
     }
 
-    private func promptURL(for profile: RefinementPromptProfile) -> URL {
-        promptsDirectoryURL.appendingPathComponent(profile.promptFilename, isDirectory: false)
+    private var promptURL: URL {
+        promptsDirectoryURL.appendingPathComponent("refinement.txt", isDirectory: false)
+    }
+
+    private func migrateLegacyStandardPromptIfNeeded() throws {
+        guard !fileManager.fileExists(atPath: promptURL.path) else {
+            return
+        }
+
+        let legacyURL = promptsDirectoryURL.appendingPathComponent("refinement-standard.txt", isDirectory: false)
+        guard Self.isRegularPromptFile(at: legacyURL),
+              let prompt = try? String(contentsOf: legacyURL, encoding: .utf8),
+              !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        try savePromptTemplate(prompt)
     }
 
     private static func makePromptsDirectoryURL(fileManager: FileManager) -> URL {

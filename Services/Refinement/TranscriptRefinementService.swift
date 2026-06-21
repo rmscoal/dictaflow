@@ -83,8 +83,7 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
             throw TranscriptRefinementServiceError.emptyOutput
         }
 
-        let prompt = Self.makePrompt(
-            transcript: trimmedTranscript,
+        let instructions = Self.makeInstructions(
             whisperTaskMode: whisperTaskMode,
             configuration: configuration,
             promptTemplate: promptTemplate
@@ -92,7 +91,8 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         let maxTokens = Self.maxPredictionTokens(for: trimmedTranscript)
         let output = try await runPromptOnServer(
             modelURL: modelURL,
-            prompt: prompt,
+            instructions: instructions,
+            transcript: trimmedTranscript,
             maxTokens: maxTokens
         )
         let refinedText = Self.cleanedModelOutput(output)
@@ -141,23 +141,29 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
 
     private func runPromptOnServer(
         modelURL: URL,
-        prompt: String,
+        instructions: String,
+        transcript: String,
         maxTokens: Int
     ) async throws -> String {
         let baseURL = try await ensureServer(for: modelURL)
-        let requestURL = baseURL.appendingPathComponent("completion")
+        let requestURL = baseURL
+            .appendingPathComponent("v1")
+            .appendingPathComponent("chat")
+            .appendingPathComponent("completions")
         var request = URLRequest(url: requestURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 120
 
         let payload: [String: Any] = [
-            "prompt": prompt,
-            "n_predict": maxTokens,
+            "messages": [
+                ["role": "system", "content": instructions],
+                ["role": "user", "content": transcript]
+            ],
+            "max_tokens": maxTokens,
             "temperature": 0.2,
             "top_p": 0.9,
-            "stream": false,
-            "cache_prompt": true
+            "stream": false
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
@@ -175,13 +181,10 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
             throw TranscriptRefinementServiceError.failedToRun("The local llama-server returned invalid JSON.")
         }
 
-        if let content = json["content"] as? String {
-            return content
-        }
-
         if let choices = json["choices"] as? [[String: Any]],
-           let text = choices.first?["text"] as? String {
-            return text
+           let message = choices.first?["message"] as? [String: Any],
+           let content = message["content"] as? String {
+            return content
         }
 
         throw TranscriptRefinementServiceError.emptyOutput
@@ -454,26 +457,15 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         return Int(UInt16(bigEndian: resolvedAddress.sin_port))
     }
 
-    nonisolated private static func makePrompt(
-        transcript: String,
+    nonisolated private static func makeInstructions(
         whisperTaskMode: WhisperTaskMode,
         configuration: RefinementConfiguration,
         promptTemplate: String
     ) -> String {
-        let profile = configuration.resolvedPromptProfile
-        let instructions = RefinementPromptTemplate.renderedInstructions(
+        return RefinementPromptTemplate.renderedInstructions(
             from: promptTemplate,
-            profile: profile,
             whisperTaskMode: whisperTaskMode
         )
-
-        return """
-        <|im_start|>system
-        \(instructions)<|im_end|>
-        <|im_start|>user
-        \(transcript)<|im_end|>
-        <|im_start|>assistant
-        """
     }
 
     nonisolated private static func maxPredictionTokens(for transcript: String) -> Int {

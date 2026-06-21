@@ -122,8 +122,7 @@ final class DictaFlowAppState: ObservableObject {
         localNotificationService: LocalNotificationServiceProtocol
     ) {
         let initialRefinementConfiguration = settingsStore.refinementConfiguration
-        let initialPromptProfile = initialRefinementConfiguration.resolvedPromptProfile
-        let initialPromptText = refinementPromptStore.promptTemplate(for: initialPromptProfile)
+        let initialPromptText = refinementPromptStore.promptTemplate()
 
         self.settingsStore = settingsStore
         self.permissionService = permissionService
@@ -140,7 +139,7 @@ final class DictaFlowAppState: ObservableObject {
         self.refinementConfiguration = initialRefinementConfiguration
         self.refinementPromptText = initialPromptText
         self.savedRefinementPromptText = initialPromptText
-        self.hasCustomRefinementPrompt = refinementPromptStore.hasCustomPromptTemplate(for: initialPromptProfile)
+        self.hasCustomRefinementPrompt = refinementPromptStore.hasCustomPromptTemplate()
         self.isSettingsWindowVisible = false
         self.microphonePermissionState = permissionService.currentMicrophonePermissionStatus()
         self.accessibilityPermissionState = AccessibilityPermissionState(
@@ -311,25 +310,10 @@ final class DictaFlowAppState: ObservableObject {
         refinementPromptStore.promptsDirectoryURL.path
     }
 
-    var activeRefinementPromptProfile: RefinementPromptProfile {
-        refinementConfiguration.resolvedPromptProfile
-    }
-
-    var refinementPromptStyleDetailText: String {
-        let profile = activeRefinementPromptProfile
-
-        if refinementConfiguration.promptStyle == .automatic {
-            return "Automatic uses the \(profile.title.lowercased()) prompt for \(refinementConfiguration.model.displayName). \(profile.detailText)"
-        }
-
-        return "\(profile.detailText) This overrides the model-based automatic choice."
-    }
-
     var refinementPromptStorageText: String {
-        let profile = activeRefinementPromptProfile.title
         let source = hasCustomRefinementPrompt ? "custom file" : "built-in default"
         let dirtySuffix = isRefinementPromptDirty ? " Unsaved changes." : ""
-        return "\(profile) prompt from \(source) in Application Support.\(dirtySuffix)"
+        return "System prompt from \(source) in Application Support.\(dirtySuffix)"
     }
 
     var modelStatusText: String {
@@ -712,22 +696,8 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
-        let previousPromptProfile = activeRefinementPromptProfile
         refinementConfiguration.model = model
         persistRefinementConfiguration()
-        reloadRefinementPromptTextIfNeeded(previousPromptProfile: previousPromptProfile)
-        updateStatusMessage()
-    }
-
-    func updateRefinementPromptStyle(_ promptStyle: RefinementPromptStyle) {
-        guard refinementConfiguration.promptStyle != promptStyle else {
-            return
-        }
-
-        let previousPromptProfile = activeRefinementPromptProfile
-        refinementConfiguration.promptStyle = promptStyle
-        persistRefinementConfiguration()
-        reloadRefinementPromptTextIfNeeded(previousPromptProfile: previousPromptProfile)
         updateStatusMessage()
     }
 
@@ -737,32 +707,28 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func saveRefinementPromptText() {
-        let promptProfile = activeRefinementPromptProfile
-
         do {
-            try refinementPromptStore.savePromptTemplate(refinementPromptText, for: promptProfile)
+            try refinementPromptStore.savePromptTemplate(refinementPromptText)
             savedRefinementPromptText = refinementPromptText
             isRefinementPromptDirty = false
             hasCustomRefinementPrompt = true
-            setPreservedStatusMessage("Saved the \(promptProfile.title.lowercased()) refinement prompt in Application Support.")
+            setPreservedStatusMessage("Saved the refinement system prompt in Application Support.")
             updateStatusMessage()
         } catch {
-            setPreservedStatusMessage("Could not save the refinement prompt. \(error.localizedDescription)")
+            setPreservedStatusMessage("Could not save the refinement system prompt. \(error.localizedDescription)")
             showMainWindow()
             updateStatusMessage()
         }
     }
 
     func resetActiveRefinementPrompt() {
-        let promptProfile = activeRefinementPromptProfile
-
         do {
-            try refinementPromptStore.resetPromptTemplate(for: promptProfile)
+            try refinementPromptStore.resetPromptTemplate()
             reloadRefinementPromptText()
-            setPreservedStatusMessage("Reset the \(promptProfile.title.lowercased()) refinement prompt to the built-in default.")
+            setPreservedStatusMessage("Reset the refinement system prompt to the built-in default.")
             updateStatusMessage()
         } catch {
-            setPreservedStatusMessage("Could not reset the refinement prompt. \(error.localizedDescription)")
+            setPreservedStatusMessage("Could not reset the refinement system prompt. \(error.localizedDescription)")
             showMainWindow()
             updateStatusMessage()
         }
@@ -905,10 +871,8 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         if refinementConfiguration.model != model {
-            let previousPromptProfile = activeRefinementPromptProfile
             refinementConfiguration.model = model
             persistRefinementConfiguration()
-            reloadRefinementPromptTextIfNeeded(previousPromptProfile: previousPromptProfile)
             if refinementConfiguration.isEnabled {
                 startPreparedRefinementServer(enableAfterStart: false)
             }
@@ -1253,21 +1217,12 @@ final class DictaFlowAppState: ObservableObject {
         settingsStore.saveRefinementConfiguration(refinementConfiguration)
     }
 
-    private func reloadRefinementPromptTextIfNeeded(previousPromptProfile: RefinementPromptProfile) {
-        guard previousPromptProfile != activeRefinementPromptProfile else {
-            return
-        }
-
-        reloadRefinementPromptText()
-    }
-
     private func reloadRefinementPromptText() {
-        let promptProfile = activeRefinementPromptProfile
-        let promptText = refinementPromptStore.promptTemplate(for: promptProfile)
+        let promptText = refinementPromptStore.promptTemplate()
         refinementPromptText = promptText
         savedRefinementPromptText = promptText
         isRefinementPromptDirty = false
-        hasCustomRefinementPrompt = refinementPromptStore.hasCustomPromptTemplate(for: promptProfile)
+        hasCustomRefinementPrompt = refinementPromptStore.hasCustomPromptTemplate()
     }
 
     private func performDictationToggle() async {
