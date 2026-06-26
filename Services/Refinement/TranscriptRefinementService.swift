@@ -25,7 +25,7 @@ enum TranscriptRefinementServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingRuntime:
-            return "DictaFlow could not find a local llama.cpp runtime for transcript refinement."
+            return "DictaFlow could not find its local llama-server runtime for transcript refinement."
         case .failedToRun(let details):
             return "The local refinement model could not clean the transcript. \(details)"
         case .timedOut:

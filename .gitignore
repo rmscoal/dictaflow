@@ -1,2 +1,33 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM/
+*.xcarchive/
+
+# User-specific Xcode state
+**/xcuserdata/
+**/*.xcuserdatad/
+
+# SwiftPM / local build output
 .build/
+.swiftpm/
+
+# Editor / tool state
 .codex/
+*.swp
+*.swo
+*~
