@@ -35,8 +35,9 @@ DictaFlow is in active development. The main development target is
 `DictaFlow Dev` with bundle id `com.dictaflow.dev`.
 
 The public release target is `DictaFlow` with bundle id `com.dictaflow`.
-Release packaging is prepared for GitHub Releases, but notarized public builds
-require Apple Developer Program membership and Developer ID credentials.
+Release packaging scripts are committed to the repo so the same flow can run
+locally. Notarized public builds still require Apple Developer Program
+membership and Developer ID credentials.
 
 The app is macOS-only and currently targets macOS 13.0 or newer.
 
@@ -149,8 +150,9 @@ Then create a local test DMG:
 ./script/verify_release_artifact.sh .build/DictaFlow-local.dmg
 ```
 
-This local DMG is not notarized and is only for packaging tests. See
-[docs/RELEASE.md](docs/RELEASE.md) for the signed GitHub Release workflow.
+This local DMG is not notarized and is only for packaging tests. Use
+`make install-release` to install the release build locally, or `make package`
+to create the local DMG.
 
 ## Run Locally
 
