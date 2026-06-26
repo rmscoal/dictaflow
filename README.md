@@ -59,32 +59,24 @@ DictaFlow is local-first:
 - Network access for first-time model downloads.
 - `llama-server` bundled in public builds for local transcript refinement.
 
-## Install
-
-Public releases should be downloaded as a DMG. Local test DMGs are not
-notarized yet, so macOS may show a warning the first time you open them.
-
-1. Download the DMG and open it.
-2. Drag `DictaFlow.app` into `/Applications`.
-3. If macOS warns that the app is from an unidentified developer, control-click
-   the app and choose Open, or **allow it in System Settings > Privacy & Security**.
-4. Launch DictaFlow.
-5. Approve Microphone access when prompted.
-6. Approve Accessibility access when DictaFlow needs to insert text into
-   another app.
-
 ## Build and Run Locally
 
 Clone the repo, then use the Make targets:
 
 ```sh
 make run            # build, install to /Applications, and launch DictaFlow Dev
-make install-release # build and install the bundled DictaFlow app
-make package-dev    # build the bundled DictaFlow app and create .build/DictaFlow.dmg
-make package-release # build the bundled DictaFlow app, tag the DMG, and create .dmg.sha256
+make package-dev    # build DictaFlow Dev and create .build/DictaFlow.dmg
 ```
 
-`make run` is the fastest loop for day-to-day work.
+`make run` is the fastest loop to get started.
+
+If you want the explicit install path:
+
+1. Run `make install-dev`.
+2. Open `DictaFlow Dev` from `/Applications`.
+3. Approve Microphone access when prompted.
+4. Approve Accessibility access when DictaFlow needs to insert text into
+   another app.
 
 ## Testing
 

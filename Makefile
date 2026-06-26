@@ -2,7 +2,7 @@
 
 RUN_SCRIPT := ./script/build_and_run.sh
 
-.PHONY: help run build install install-dev install-release package-dev package-release uninstall verify logs telemetry debug
+.PHONY: help run build install install-dev package-dev uninstall verify logs telemetry debug
 
 help:
 	@printf "DictaFlow local commands:\n"
@@ -10,9 +10,7 @@ help:
 	@printf "  make build          Build and install DictaFlow Dev without launching\n"
 	@printf "  make install        Alias for make build\n"
 	@printf "  make install-dev    Build and install DictaFlow Dev\n"
-	@printf "  make install-release Build and install the bundled DictaFlow app\n"
-	@printf "  make package-dev    Build the bundled DictaFlow app and create a local DMG\n"
-	@printf "  make package-release Build the bundled DictaFlow app, tag the DMG, and create its .dmg.sha256 checksum\n"
+	@printf "  make package-dev    Build DictaFlow Dev and create a local DMG\n"
 	@printf "  make uninstall      Remove DictaFlow and DictaFlow Dev from /Applications\n"
 	@printf "  make verify         Build, install, verify signing, and launch\n"
 	@printf "  make logs           Build, install, launch, and stream process logs\n"
@@ -30,14 +28,8 @@ install: build
 install-dev:
 	$(RUN_SCRIPT) --install-dev
 
-install-release:
-	$(RUN_SCRIPT) --install-release
-
 package-dev:
 	$(RUN_SCRIPT) --package-dev
-
-package-release:
-	$(RUN_SCRIPT) --package-release
 
 uninstall:
 	$(RUN_SCRIPT) --uninstall

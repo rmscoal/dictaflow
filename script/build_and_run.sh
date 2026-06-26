@@ -10,20 +10,15 @@ DEV_APP_NAME="DictaFlow Dev"
 DEV_BUNDLE_ID="com.dictaflow.dev"
 DEV_BUILT_APP="$DEV_DERIVED_DATA/Build/Products/$DEV_CONFIGURATION/$DEV_APP_NAME.app"
 DEV_INSTALLED_APP="/Applications/$DEV_APP_NAME.app"
-
-RELEASE_SCHEME="DictaFlow"
-RELEASE_CONFIGURATION="Release"
-RELEASE_DERIVED_DATA="$ROOT_DIR/.build/ReleaseDerivedData"
 RELEASE_APP_NAME="DictaFlow"
 RELEASE_BUNDLE_ID="com.dictaflow"
-RELEASE_BUILT_APP="$RELEASE_DERIVED_DATA/Build/Products/$RELEASE_CONFIGURATION/$RELEASE_APP_NAME.app"
 RELEASE_INSTALLED_APP="/Applications/$RELEASE_APP_NAME.app"
 PACKAGE_DMG_PATH="$ROOT_DIR/.build/DictaFlow.dmg"
 
 MODE="${1:-run}"
 
 usage() {
-  echo "usage: $0 [run|--no-launch|--verify|--logs|--telemetry|--debug|--install-dev|--install-release|--package-dev|--package-release|--uninstall]" >&2
+  echo "usage: $0 [run|--no-launch|--verify|--logs|--telemetry|--debug|--install-dev|--package-dev|--uninstall]" >&2
 }
 
 stop_app() {
@@ -60,31 +55,13 @@ build_dev_app() {
     build
 }
 
-build_release_app() {
-  xcodebuild \
-    -project "$PROJECT" \
-    -scheme "$RELEASE_SCHEME" \
-    -configuration "$RELEASE_CONFIGURATION" \
-    -derivedDataPath "$RELEASE_DERIVED_DATA" \
-    DEVELOPMENT_TEAM= \
-    CODE_SIGN_STYLE=Manual \
-    CODE_SIGN_IDENTITY=- \
-    SWIFT_OPTIMIZATION_LEVEL=-Onone \
-    build
-}
-
 install_dev_app() {
   /usr/bin/ditto "$DEV_BUILT_APP" "$DEV_INSTALLED_APP"
-}
-
-install_release_app() {
-  /usr/bin/ditto "$RELEASE_BUILT_APP" "$RELEASE_INSTALLED_APP"
 }
 
 uninstall_apps() {
   stop_dev_app
   stop_release_app
-
   rm -rf "$DEV_INSTALLED_APP" "$RELEASE_INSTALLED_APP"
 }
 
@@ -112,7 +89,7 @@ case "$MODE" in
     usage
     exit 0
     ;;
-  --install-dev|install-dev|--install-release|install-release|--package-dev|package-dev|--package-release|package-release|--uninstall|uninstall)
+  --install-dev|install-dev|--package-dev|package-dev|--uninstall|uninstall)
     ;;
   *)
     usage
@@ -131,27 +108,10 @@ case "$MODE" in
     build_dev_app
     install_dev_app
     ;;
-  --install-release|install-release)
-    stop_release_app
-    build_release_app
-    install_release_app
-    ;;
   --package-dev|package-dev)
-    build_release_app
-    rm -f "$PACKAGE_DMG_PATH" "$PACKAGE_DMG_PATH.sha256"
-    DICTAFLOW_LOCAL_TEST_DMG=1 "$ROOT_DIR/script/package_dmg.sh" "$RELEASE_BUILT_APP" "$PACKAGE_DMG_PATH"
-    exit 0
-    ;;
-  --package-release|package-release)
-    build_release_app
-    GIT_TAG="$(git -C "$ROOT_DIR" describe --tags --exact-match 2>/dev/null || true)"
-    PACKAGE_RELEASE_DMG_PATH="$PACKAGE_DMG_PATH"
-    rm -f "$ROOT_DIR/.build/DictaFlow.dmg" "$ROOT_DIR/.build/DictaFlow.dmg.sha256"
-    if [ -n "$GIT_TAG" ]; then
-      PACKAGE_RELEASE_DMG_PATH="$ROOT_DIR/.build/DictaFlow-${GIT_TAG//\//-}.dmg"
-    fi
-    rm -f "$PACKAGE_RELEASE_DMG_PATH" "$PACKAGE_RELEASE_DMG_PATH.sha256"
-    GENERATE_SHA256=1 "$ROOT_DIR/script/package_dmg.sh" "$RELEASE_BUILT_APP" "$PACKAGE_RELEASE_DMG_PATH"
+    build_dev_app
+    rm -f "$PACKAGE_DMG_PATH"
+    "$ROOT_DIR/script/package_dmg.sh" "$DEV_BUILT_APP" "$PACKAGE_DMG_PATH"
     exit 0
     ;;
   --uninstall|uninstall)
@@ -183,6 +143,6 @@ case "$MODE" in
   debug|--debug)
     lldb -- "$DEV_INSTALLED_APP/Contents/MacOS/$DEV_APP_NAME"
     ;;
-  --install-dev|install-dev|--install-release|install-release|--package-dev|package-dev|--package-release|package-release|--uninstall|uninstall)
+  --install-dev|install-dev|--package-dev|package-dev|--uninstall|uninstall)
     ;;
 esac
