@@ -18,12 +18,12 @@ RELEASE_APP_NAME="DictaFlow"
 RELEASE_BUNDLE_ID="com.dictaflow"
 RELEASE_BUILT_APP="$RELEASE_DERIVED_DATA/Build/Products/$RELEASE_CONFIGURATION/$RELEASE_APP_NAME.app"
 RELEASE_INSTALLED_APP="/Applications/$RELEASE_APP_NAME.app"
-PACKAGE_DMG_PATH="$ROOT_DIR/.build/DictaFlow-local.dmg"
+PACKAGE_DMG_PATH="$ROOT_DIR/.build/DictaFlow.dmg"
 
 MODE="${1:-run}"
 
 usage() {
-  echo "usage: $0 [run|--no-launch|--verify|--logs|--telemetry|--debug|--install-dev|--install-release|--package|--uninstall]" >&2
+  echo "usage: $0 [run|--no-launch|--verify|--logs|--telemetry|--debug|--install-dev|--install-release|--package-dev|--package-release|--uninstall]" >&2
 }
 
 stop_app() {
@@ -112,7 +112,7 @@ case "$MODE" in
     usage
     exit 0
     ;;
-  --install-dev|install-dev|--install-release|install-release|--package|package|--uninstall|uninstall)
+  --install-dev|install-dev|--install-release|install-release|--package-dev|package-dev|--package-release|package-release|--uninstall|uninstall)
     ;;
   *)
     usage
@@ -136,10 +136,22 @@ case "$MODE" in
     build_release_app
     install_release_app
     ;;
-  --package|package)
+  --package-dev|package-dev)
     build_release_app
-    rm -f "$PACKAGE_DMG_PATH"
+    rm -f "$PACKAGE_DMG_PATH" "$PACKAGE_DMG_PATH.sha256"
     DICTAFLOW_LOCAL_TEST_DMG=1 "$ROOT_DIR/script/package_dmg.sh" "$RELEASE_BUILT_APP" "$PACKAGE_DMG_PATH"
+    exit 0
+    ;;
+  --package-release|package-release)
+    build_release_app
+    GIT_TAG="$(git -C "$ROOT_DIR" describe --tags --exact-match 2>/dev/null || true)"
+    PACKAGE_RELEASE_DMG_PATH="$PACKAGE_DMG_PATH"
+    rm -f "$ROOT_DIR/.build/DictaFlow.dmg" "$ROOT_DIR/.build/DictaFlow.dmg.sha256"
+    if [ -n "$GIT_TAG" ]; then
+      PACKAGE_RELEASE_DMG_PATH="$ROOT_DIR/.build/DictaFlow-${GIT_TAG//\//-}.dmg"
+    fi
+    rm -f "$PACKAGE_RELEASE_DMG_PATH" "$PACKAGE_RELEASE_DMG_PATH.sha256"
+    GENERATE_SHA256=1 "$ROOT_DIR/script/package_dmg.sh" "$RELEASE_BUILT_APP" "$PACKAGE_RELEASE_DMG_PATH"
     exit 0
     ;;
   --uninstall|uninstall)
@@ -171,6 +183,6 @@ case "$MODE" in
   debug|--debug)
     lldb -- "$DEV_INSTALLED_APP/Contents/MacOS/$DEV_APP_NAME"
     ;;
-  --install-dev|install-dev|--install-release|install-release|--package|package|--uninstall|uninstall)
+  --install-dev|install-dev|--install-release|install-release|--package-dev|package-dev|--package-release|package-release|--uninstall|uninstall)
     ;;
 esac

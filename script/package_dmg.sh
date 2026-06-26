@@ -51,4 +51,9 @@ if [ -n "${DMG_CODE_SIGN_IDENTITY:-}" ]; then
   codesign --force --sign "$DMG_CODE_SIGN_IDENTITY" "$DMG_PATH"
 fi
 
+if [ "${GENERATE_SHA256:-0}" = "1" ]; then
+  shasum -a 256 "$DMG_PATH" > "$DMG_PATH.sha256"
+  echo "Created $DMG_PATH.sha256"
+fi
+
 echo "Created $DMG_PATH"

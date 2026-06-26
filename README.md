@@ -80,7 +80,8 @@ Clone the repo, then use the Make targets:
 ```sh
 make run            # build, install to /Applications, and launch DictaFlow Dev
 make install-release # build and install the bundled DictaFlow app
-make package        # build the bundled DictaFlow app and create .build/DictaFlow-local.dmg
+make package-dev    # build the bundled DictaFlow app and create .build/DictaFlow.dmg
+make package-release # build the bundled DictaFlow app, tag the DMG, and create .dmg.sha256
 ```
 
 `make run` is the fastest loop for day-to-day work.
