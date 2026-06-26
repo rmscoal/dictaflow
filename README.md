@@ -1,237 +1,97 @@
-# DictaFlow
+<p align="center">
+  <img src="public/dictaflow-logo.png" alt="DictaFlow" width="720" />
+</p>
 
-Turn speech into polished text, privately, from anywhere on your Mac.
+<p align="center">Turn speech into polished text, locally.</p>
+<p align="center">
+  <span style="display:inline-block;padding:0.35rem 0.8rem;border-radius:999px;background:#111827;color:#f8fafc;font-size:0.82rem;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">
+    For Apple Silicon Macs
+  </span>
+</p>
 
-DictaFlow is a native macOS menu bar app for private dictation. It records
-your voice, runs local Whisper transcription or translation, optionally cleans
-the text with a local LLM, and inserts the result back into the app you were
-using.
+DictaFlow was built for the moment when typing slows you down. It turns
+speech into text on your Mac, optionally cleans it up with a local LLM, and
+puts the result back where you were already working.
 
-It is for people who want dictation to feel like a keyboard shortcut: quick,
-quiet, available in every writing surface, and not dependent on a cloud service.
+It is for people who think better out loud, write faster when they can speak
+naturally, and want to use the CPU and GPU already built into their Mac
+instead of sending audio anywhere else.
 
-## Why DictaFlow
+## Why Local
 
-- Private notes, messages, and drafts should stay on your Mac.
-- Dictation should work in the app you are already using, not in a separate
-  transcript box you have to copy from.
-- Raw speech often needs cleanup before it reads well. DictaFlow can polish the
-  transcript locally before insertion.
-- Open source dictation should be inspectable, hackable, and honest about where
-  data is stored.
+DictaFlow runs locally because the hardware is already there. If you have a
+MacBook Pro with Apple silicon, you already have fast CPU and GPU resources
+right next to your keyboard. DictaFlow uses that power for private
+speech-to-text and local refinement instead of turning the workflow into a
+cloud round trip.
 
-## Highlights
+## What It Does
 
-- Local transcription through vendored `whisper.cpp`.
-- One shortcut to start recording, stop recording, transcribe, and insert.
-- App-aware insertion back into the previously focused app.
-- Optional local cleanup through a `llama.cpp` compatible GGUF model.
-- Checksum-verified model downloads.
-- Transparent storage and privacy notes.
-
-## Current Status
-
-DictaFlow is in active development. The main development target is
-`DictaFlow Dev` with bundle id `com.dictaflow.dev`.
-
-The public release target is `DictaFlow` with bundle id `com.dictaflow`.
-Release packaging scripts are committed to the repo so the same flow can run
-locally. Notarized public builds still require Apple Developer Program
-membership and Developer ID credentials.
-
-The app is macOS-only and currently targets macOS 13.0 or newer.
-
-## Features
-
-- Menu bar app with a compact dictation control surface.
-- Global toggle shortcut: `Command + Shift + Backslash`.
-- Local Whisper task modes:
-  - Transcribe in the spoken language.
-  - Translate supported source languages into English.
-- Whisper model choices:
-  - Tiny
-  - Base
-  - Small, the default
-  - Medium
-- Optional local transcript refinement with supported GGUF models.
-- Automatic model download with checksum verification.
-- Insertion fallback order:
-  - Accessibility direct insert
-  - Clipboard paste
-  - Simulated typing
-  - Manual copy panel
-- Settings for model choice, task mode, input language, refinement, and model
-  storage cleanup.
+- Local transcription through `whisper.cpp`.
+- Optional transcript refinement with an editable local prompt.
+- Insertion back into the focused app with Accessibility, clipboard, typing,
+  or a copy panel fallback.
 
 ## Privacy Model
 
-DictaFlow is intended to be local-first:
+DictaFlow is local-first:
 
 - Microphone audio is recorded locally.
-- Whisper transcription runs locally through `whisper.cpp`.
-- Optional transcript refinement runs locally through a `llama.cpp` compatible
-  runtime.
-- There is no cloud transcription path, analytics pipeline, or remote inference
-  service in the app code.
+- Whisper transcription runs locally.
+- Optional refinement runs locally through `llama-server`.
+- There is no cloud transcription path, analytics pipeline, or remote
+  inference service in the app code.
 
-Current local data behavior:
-
-| Data | Current behavior |
+| Data | Behavior |
 | --- | --- |
-| Recordings | Written as temporary local `.m4a` files under `FileManager.default.temporaryDirectory/DictaFlowRecordings` with user-only permissions, then deleted after transcription finishes or fails. |
- | Transcripts | Kept in process memory as the latest transcript for display, copy, and re-insertion. Local refinement sends the prompt to a persistent `llama-server` process over HTTP. There is no durable transcript history file or database. |
+| Recordings | Temporary local `.m4a` files under `FileManager.default.temporaryDirectory/DictaFlowRecordings`, deleted after transcription finishes or fails. |
+| Transcripts | Kept in memory as the latest transcript for display, copy, and re-insertion. |
 | Models | Stored under `~/Library/Application Support/DictaFlow/Models`. |
-| Clipboard | Clipboard insertion may temporarily place transcript text on the pasteboard with transient/concealed pasteboard markers. DictaFlow attempts to restore previous pasteboard contents when it can confirm the paste succeeded. |
-| Logs | Whisper diagnostics log audio statistics and transcript length, not transcript contents. |
+| Clipboard | May be used briefly for paste-based insertion, with an attempt to restore the previous contents. |
+| Logs | Whisper logs audio stats and transcript length, not transcript contents. |
 
 ## Requirements
 
 - macOS 13.0 or newer.
 - Xcode with macOS SwiftUI/AppKit tooling.
-- Network access for first-time model downloads.
 - Microphone permission for recording.
 - Accessibility permission for automatic insertion into other apps.
-- `llama-server` bundled in public builds for local transcript refinement. Debug
-  builds can also use `/opt/homebrew/bin` or `/usr/local/bin` during development.
+- Network access for first-time model downloads.
+- `llama-server` bundled in public builds for local transcript refinement.
 
 ## Install
 
-Public binary releases should be downloaded from the repository's GitHub
-Releases page, not from files committed into the repository.
+Public releases should be downloaded as a DMG. Local test DMGs are not
+notarized yet, so macOS may show a warning the first time you open them.
 
-For a signed and notarized release:
-
-1. Download `DictaFlow-vX.Y.Z.dmg` and the matching `.sha256` file.
-2. Open the DMG.
-3. Drag `DictaFlow.app` into `/Applications`.
-4. Launch `DictaFlow`.
+1. Download the DMG and open it.
+2. Drag `DictaFlow.app` into `/Applications`.
+3. If macOS warns that the app is from an unidentified developer, control-click
+   the app and choose Open, or **allow it in System Settings > Privacy & Security**.
+4. Launch DictaFlow.
 5. Approve Microphone access when prompted.
-6. Approve Accessibility access when DictaFlow needs to insert text into another app.
+6. Approve Accessibility access when DictaFlow needs to insert text into
+   another app.
 
-Accessibility approval is always user controlled by macOS. Signing and
-notarization do not bypass that prompt; they make the app's identity stable for
-Gatekeeper and future updates.
+## Build and Run Locally
 
-## Build
-
-Use the main Xcode scheme:
+Clone the repo, then use the Make targets:
 
 ```sh
-xcodebuild -project DictaFlow.xcodeproj -scheme "DictaFlow Dev" -configuration Debug -derivedDataPath .build/DerivedData build
-```
-
-For local-only builds on a Mac that does not have the project owner's Apple
-Development signing identity, use ad-hoc signing:
-
-```sh
-xcodebuild -project DictaFlow.xcodeproj -scheme "DictaFlow Dev" -configuration Debug -derivedDataPath .build/DerivedData build DEVELOPMENT_TEAM= CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=-
-```
-
-The `Ensure Whisper XCFramework` Xcode build phase builds
-`Vendor/whisper.cpp/build-apple/whisper.xcframework` via
-`Vendor/whisper.cpp/build-xcframework.sh` when needed.
-
-The public `DictaFlow` target also bundles a pinned `llama-server` runtime for
-local refinement through `script/ensure_llama_server.sh`. The script downloads
-the pinned macOS llama.cpp release asset, verifies its SHA-256 checksum, copies
-`llama-server` into the app bundle, and signs it with the same build identity.
-
-To test the public target locally without Apple Developer Program membership,
-use ad-hoc signing:
-
-```sh
-xcodebuild -project DictaFlow.xcodeproj -scheme DictaFlow -configuration Release -derivedDataPath .build/ReleaseDerivedData build DEVELOPMENT_TEAM= CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- SWIFT_OPTIMIZATION_LEVEL=-Onone
-```
-
-Then create a local test DMG:
-
-```sh
-./script/package_dmg.sh .build/ReleaseDerivedData/Build/Products/Release/DictaFlow.app .build/DictaFlow-local.dmg
-./script/verify_release_artifact.sh .build/DictaFlow-local.dmg
-```
-
-This local DMG is not notarized and is only for packaging tests. Use
-`make install-release` to install the release build locally, or `make package`
-to create the local DMG.
-
-## Run Locally
-
-For behavior involving permissions, hotkeys, text insertion, model storage, or
-app launch, use an installed app from `/Applications` instead of relying only
-on a DerivedData run.
-
-The repo includes convenience Make targets:
-
-```sh
-make run        # build, install to /Applications, and launch DictaFlow Dev
-make build      # build and install without launching
-make verify     # build, install, verify signing, and launch
-make logs       # build, install, launch, and stream process logs
-make telemetry  # build, install, launch, and stream subsystem logs
-make debug      # build, install, then start lldb
+make run            # build, install to /Applications, and launch DictaFlow Dev
 make install-release # build and install the bundled DictaFlow app
-make package    # build the bundled DictaFlow app and create a local DMG
-make uninstall  # remove DictaFlow and DictaFlow Dev from /Applications
+make package        # build the bundled DictaFlow app and create .build/DictaFlow-local.dmg
 ```
 
-`make uninstall` removes only the installed app bundles. It does not delete
-your models in `~/Library/Application Support/DictaFlow/Models`.
-
-`make package` writes `.build/DictaFlow-local.dmg`.
-
-## First Run
-
-1. Launch `DictaFlow Dev`.
-2. Allow microphone access when prompted.
-3. Let DictaFlow prepare or download the selected Whisper model.
-4. Focus the app where you want dictated text inserted.
-5. Press `Command + Shift + Backslash` or use the menu bar control to start recording.
-6. Press the shortcut again to stop, transcribe, and insert.
-7. Grant Accessibility permission if you want automatic insertion beyond manual
-   copy/paste.
-
-## Project Layout
-
-```text
-App/                 App entry point and DictaFlowAppState coordination
-Core/Windowing/      AppKit window and fallback panel coordinators
-Features/MenuBar/    Menu bar UI
-Features/Settings/   Model, task, language, refinement, and storage settings
-Models/              Codable and value types
-Services/            Audio, permissions, hotkeys, models, Whisper, settings,
-                     refinement, and text insertion boundaries
-Vendor/whisper.cpp/  Vendored Whisper source and XCFramework build script
-```
-
-`DictaFlowAppState` is the main coordinator. System APIs are kept behind
-protocol-backed services so behavior remains testable and replaceable.
-
-## Model Storage
-
-Whisper and refinement models are downloaded into:
-
-```text
-~/Library/Application Support/DictaFlow/Models
-```
-
-Downloads are written to a temporary `.download` file, verified against the
-expected checksum, then moved into place. The settings UI can delete recognized
-unused model files while keeping active models.
+`make run` is the fastest loop for day-to-day work.
 
 ## Testing
 
 There is currently no dedicated test target.
 
-For now, verify manually with an installed app from `/Applications`, especially
-for changes touching:
-
-- microphone permissions
-- Accessibility permissions
-- global hotkeys
-- text insertion
-- clipboard restoration
-- model downloads and storage
-- app launch behavior
+For changes that touch permissions, hotkeys, text insertion, clipboard
+restoration, model downloads, or app launch, verify manually with an installed
+app from `/Applications`.
 
 ## Contributing
 
