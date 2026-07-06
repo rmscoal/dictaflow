@@ -15,18 +15,20 @@ struct ContentView: View {
     }
 
     var body: some View {
-        ZStack {
-            AppTheme.background.ignoresSafeArea()
+        HStack(spacing: 0) {
+            sidebar
 
-            VStack(spacing: 0) {
-                topBar
+            Rectangle()
+                .fill(AppTheme.border)
+                .frame(width: 1)
 
-                content
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
+            selectedPage
         }
         .frame(minWidth: AppLayout.windowMinWidth, minHeight: AppLayout.windowMinHeight)
+        .background(AppTheme.background)
         .foregroundStyle(AppTheme.primaryText)
+        .tint(AppTheme.accent)
+        .preferredColorScheme(.dark)
         .alert(
             "Prepare \(selectedModel.displayName) Model?",
             isPresented: $isShowingModelPreparationConfirmation
@@ -52,279 +54,187 @@ struct ContentView: View {
         }
     }
 
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 6) {
+                    ForEach(MainWindowPage.allCases) { page in
+                        Button {
+                            appState.mainWindowPage = page
+                        } label: {
+                            HStack(spacing: 9) {
+                                Image(systemName: page.systemImage)
+                                    .font(.system(size: 13, weight: .medium))
+                                    .frame(width: 16)
+
+                                Text(page.title)
+                                    .font(.system(size: 13, weight: .medium))
+
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .foregroundStyle(page == appState.mainWindowPage ? AppTheme.primaryText : AppTheme.secondaryText)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(page == appState.mainWindowPage ? AppTheme.controlFill : Color.clear)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(page == appState.mainWindowPage ? AppTheme.border : Color.clear, lineWidth: 0.75)
+                            )
+                            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
+            }
+            .scrollContentBackground(.hidden)
+
+            Divider()
+                .overlay(AppTheme.border)
+
+            HStack(spacing: 8) {
+                Link(destination: URL(string: "https://github.com/rmscoal/dictaflow")!) {
+                    Image("GitHubMark")
+                        .resizable()
+                        .renderingMode(.template)
+                        .frame(width: 14, height: 14)
+                }
+                .buttonStyle(.plain)
+                .help("View DictaFlow on GitHub")
+
+                Text("v\(appVersion)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(AppTheme.tertiaryText)
+
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 42)
+        }
+        .background(AppTheme.sidebar)
+        .frame(width: AppLayout.sidebarWidth)
+    }
+
     @ViewBuilder
-    private var content: some View {
+    private var selectedPage: some View {
         switch appState.mainWindowPage {
-        case .dashboard:
-            dashboardPage
+        case .dictation:
+            dictationPage
         case .models:
             modelsPage
-        case .settings:
-            settingsPage
-        case .history:
-            historyPage
+        case .refinement:
+            refinementPage
+        case .latestResult:
+            latestResultPage
+        case .privacyAccess:
+            privacyPage
         }
     }
 
-    private var topBar: some View {
-        HStack(spacing: 12) {
-            Image(systemName: appState.menuBarIconName)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(statusColor)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("DictaFlow")
-                    .font(.system(size: 18, weight: .semibold))
-            }
-
-            Spacer()
-
-            Button {
-                appState.mainWindowPage = .settings
-            } label: {
-                Label(appState.hotkeyDisplayText, systemImage: "keyboard")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-
-            Button {
-                appState.closeMainWindow()
-            } label: {
-                Image(systemName: "rectangle.compress.vertical")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-            .help("Hide Window")
-        }
-        .padding(.horizontal, 28)
-        .padding(.top, 20)
-        .padding(.bottom, 14)
-        .background(AppTheme.barFill)
-    }
-
-    private var dashboardPage: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: AppLayout.dashboardSpacing) {
-                recordingTile
-                refinementTile
-
-                LazyVGrid(columns: compactNavigationColumns, spacing: AppLayout.dashboardSpacing) {
-                    NavigationTile(title: "Model", value: appState.whisperConfiguration.model.displayName, systemImage: "cpu") {
-                        appState.mainWindowPage = .models
+    private var dictationPage: some View {
+        SettingsPage(title: "Dictation") {
+            SettingsSection(title: "Transcription") {
+                SettingsRow(title: "Task") {
+                    Picker("Task", selection: taskModeBinding) {
+                        ForEach(WhisperTaskMode.allCases, id: \.self) { taskMode in
+                            Text(taskMode.title).tag(taskMode)
+                        }
                     }
-
-                    NavigationTile(title: "Settings", value: "Preferences", systemImage: "slider.horizontal.3") {
-                        appState.mainWindowPage = .settings
-                    }
-
-                    NavigationTile(title: "History", value: historySummaryText, systemImage: "clock") {
-                        appState.mainWindowPage = .history
-                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: AppLayout.controlWidth)
+                    .disabled(appState.whisperSettingsLocked)
                 }
 
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 8) {
-                        StatusLine(
-                            title: "Microphone",
-                            value: appState.microphonePermissionState.title,
-                            systemImage: "mic.fill",
-                            color: appState.microphonePermissionState == .granted ? AppTheme.primaryText : AppTheme.secondaryText
-                        )
+                SettingsRow(
+                    title: "Input language"
+                ) {
+                    Picker("Input Language", selection: inputLanguageBinding) {
+                        Text(WhisperInputLanguage.automatic.displayName)
+                            .tag(WhisperInputLanguage.automatic)
 
-                        StatusLine(
-                            title: "Accessibility",
-                            value: appState.accessibilityPermissionState.title,
-                            systemImage: "figure.wave.circle",
-                            color: appState.accessibilityPermissionState == .granted ? AppTheme.primaryText : AppTheme.secondaryText
-                        )
-
-                        if hasMissingRequiredSettings {
-                            Button("Refresh") {
-                                appState.refreshMicrophonePermissionStatus()
-                                appState.refreshAccessibilityPermissionStatus()
+                        if !appState.commonWhisperLanguages.isEmpty {
+                            Divider()
+                            Section("Common") {
+                                ForEach(appState.commonWhisperLanguages) { language in
+                                    Text(language.displayName)
+                                        .tag(language.inputLanguage)
+                                }
                             }
-                            .controlSize(.regular)
+                        }
+
+                        Section("All") {
+                            ForEach(appState.additionalWhisperLanguages) { language in
+                                Text(language.displayName)
+                                    .tag(language.inputLanguage)
+                            }
                         }
                     }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: AppLayout.controlWidth, alignment: .trailing)
+                    .disabled(appState.whisperSettingsLocked)
                 }
             }
-            .padding(AppLayout.dashboardPadding)
-            .frame(maxWidth: AppLayout.dashboardMaxWidth, alignment: .top)
-            .frame(maxWidth: .infinity, alignment: .top)
-        }
-    }
 
-    private var refinementTile: some View {
-        GlassTile {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 10) {
-                    Image(systemName: "wand.and.sparkles")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(AppTheme.accent)
-                        .frame(width: 22)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Refined Text with LLM")
-                            .font(.system(size: 15, weight: .semibold))
-
-                        Text(appState.refinementConfiguration.isEnabled ? "On" : "Off")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .lineLimit(1)
-                    }
-
-                    Spacer(minLength: 10)
-
-                    Toggle("", isOn: refinementEnabledBinding)
-                        .labelsHidden()
-                        .toggleStyle(AppSwitchStyle())
-                        .disabled(appState.whisperSettingsLocked)
-                }
-
-                HStack(spacing: 8) {
-                    if appState.isRefinementServerPreparing {
-                        ProgressView()
-                            .controlSize(.small)
-                            .scaleEffect(0.65)
-                    }
-
-                    Text(shortRefinementStatusText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(AppTheme.secondaryText)
-                        .lineLimit(2)
-                }
-
-                if appState.refinementConfiguration.isEnabled {
-                    HStack(spacing: 10) {
-                        Button {
-                            appState.prepareRefinementModel()
-                        } label: {
-                            Label("Prepare", systemImage: "arrow.down.circle")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.regular)
-                        .disabled(appState.whisperSettingsLocked || !appState.isRefinementRuntimeAvailable || !appState.isSelectedRefinementModelSupported)
-
-                        Button {
-                            appState.mainWindowPage = .settings
-                        } label: {
-                            Label("Settings", systemImage: "slider.horizontal.3")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.regular)
-                    }
-                } else if !appState.hasPreparedRefinementModel {
-                    HStack(spacing: 10) {
-                        Button {
-                            appState.mainWindowPage = .settings
-                        } label: {
-                            Label("Choose Model", systemImage: "list.bullet")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.regular)
-                        .tint(AppTheme.accent)
-
-                        Text(appState.refinementModelMenuTitle(for: appState.refinementRecommendation.recommendedModel))
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(AppTheme.tertiaryText)
-                            .lineLimit(1)
-                    }
+            SettingsSection(title: "Trigger") {
+                SettingsRow(
+                    title: "Recording shortcut",
+                    detail: "Global shortcut"
+                ) {
+                    Text(appState.hotkeyDisplayText)
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6))
                 }
             }
-        }
-    }
 
-    private var recordingTile: some View {
-        GlassTile {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.white.opacity(0.045))
-                            .overlay(Circle().stroke(AppTheme.border, lineWidth: 0.75))
-
-                        Image(systemName: appState.recordingState.isRecording ? "stop.fill" : "mic.fill")
-                            .font(.system(size: 21, weight: .medium))
-                            .foregroundStyle(AppTheme.primaryText)
+            SettingsSection(title: "Defaults") {
+                SettingsRow(
+                    title: "Restore defaults"
+                ) {
+                    Button("Restore Defaults") {
+                        appState.resetWhisperSettingsToDefaults()
+                        selectedModel = WhisperConfiguration.default.model
+                        selectedRefinementModel = RefinementConfiguration.default.model
                     }
-                    .frame(width: 42, height: 42)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(appState.recordingState.isRecording ? "Recording" : "Ready")
-                            .font(.system(size: 17, weight: .semibold))
-
-                        Text(appState.dictationSummaryText)
-                            .font(.system(size: 13))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    Spacer(minLength: 10)
-
-                    WaveformBadge()
-                        .frame(width: 38, height: 26)
-                        .foregroundStyle(AppTheme.tertiaryText)
-                }
-
-                HStack {
-                    Spacer(minLength: 0)
-
-                    Button {
-                        appState.toggleDictation()
-                    } label: {
-                        Label(appState.dictationActionTitle, systemImage: appState.recordingState.isRecording ? "stop.fill" : "mic.fill")
-                            .font(.system(size: 14, weight: .semibold))
-                            .frame(minWidth: 260, maxWidth: AppLayout.recordingButtonMaxWidth, minHeight: 36)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                    .tint(AppTheme.accent)
-                    .disabled(appState.transcriptionState.isBusy || appState.textInsertionState.isBusy)
-
-                    Spacer(minLength: 0)
+                    .buttonStyle(.bordered)
+                    .disabled(appState.whisperSettingsLocked)
                 }
             }
         }
     }
 
     private var modelsPage: some View {
-        DetailPage(title: "Models", systemImage: "cpu", back: goBackToDashboard) {
-            VStack(alignment: .leading, spacing: AppLayout.sectionSpacing) {
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 12) {
-                        TileHeader(title: "Active Model", systemImage: "cpu")
-
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(appState.whisperConfiguration.model.displayName)
-                                .font(.system(size: 17, weight: .semibold))
-
-                            Spacer()
-
-                            Text(appState.whisperConfiguration.model.approximateDiskSizeDescription)
-                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(AppTheme.accent)
-                        }
-
-                        Text(shortModelStatusText)
-                            .font(.system(size: 13))
-                            .foregroundStyle(AppTheme.secondaryText)
-                    }
-                }
-
-                LazyVGrid(columns: dashboardColumns, spacing: AppLayout.sectionSpacing) {
-                    ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
-                        ModelChoiceCard(
-                            model: model,
-                            isActive: model == appState.whisperConfiguration.model,
-                            isSelected: model == selectedModel
-                        ) {
-                            selectedModel = model
+        SettingsPage(title: "Models") {
+            SettingsSection(title: "Whisper") {
+                SettingsRow(title: "Transcription model") {
+                    Picker("Model", selection: $selectedModel) {
+                        ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
+                            Text("\(model.displayName) (\(model.approximateDiskSizeDescription))")
+                                .tag(model)
                         }
                     }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: AppLayout.controlWidth, alignment: .trailing)
+                    .disabled(appState.whisperSettingsLocked)
                 }
 
-                HStack(spacing: 10) {
+                SettingsRow(
+                    title: "Prepare model",
+                    detail: selectedModel == appState.whisperConfiguration.model
+                        ? "Active and ready for local transcription"
+                        : "Download and make this the active model"
+                ) {
                     Button {
                         if selectedModel == appState.whisperConfiguration.model {
                             appState.retryModelPreparation()
@@ -332,405 +242,318 @@ struct ContentView: View {
                             isShowingModelPreparationConfirmation = true
                         }
                     } label: {
-                        Label(selectedModel == appState.whisperConfiguration.model ? "Prepare" : "Use Model", systemImage: "arrow.down.circle")
+                        Label(
+                            selectedModel == appState.whisperConfiguration.model ? "Prepare Again" : "Use Model",
+                            systemImage: "arrow.down.circle"
+                        )
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(AppTheme.accent)
                     .disabled(appState.whisperSettingsLocked)
                 }
-
-                modelStorageTile
             }
-        }
-    }
 
-    private var modelStorageTile: some View {
-        GlassTile {
-            VStack(alignment: .leading, spacing: 12) {
-                TileHeader(title: "Storage", systemImage: "externaldrive")
+            SettingsSection(title: "Local Storage") {
+                SettingsRow(title: "Models folder", detail: appState.modelStorageStatusText) {
+                    Button("Open Folder") {
+                        appState.openModelsFolder()
+                    }
+                    .buttonStyle(.bordered)
+                }
 
-                Text(appState.modelStorageStatusText)
-                    .font(.system(size: 13))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                let installedModelFiles = appState.installedLocalModelFiles
-
-                if !installedModelFiles.isEmpty {
-                    VStack(spacing: 8) {
-                        ForEach(installedModelFiles) { file in
-                            ModelStorageRow(
-                                file: file,
-                                sizeText: appState.formattedLocalModelSize(file.byteCount),
-                                isActive: appState.isActiveLocalModelFile(file)
-                            )
-                        }
+                if appState.installedLocalModelFiles.isEmpty {
+                    Text("No local model files are stored yet.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(AppTheme.secondaryText)
+                } else {
+                    ForEach(appState.installedLocalModelFiles) { file in
+                        ModelFileRow(
+                            file: file,
+                            size: appState.formattedLocalModelSize(file.byteCount),
+                            isActive: appState.isActiveLocalModelFile(file)
+                        )
                     }
                 }
 
-                HStack(spacing: 10) {
-                    Button {
+                SettingsRow(title: "Cleanup", detail: "Remove downloaded models that are not in use") {
+                    Button("Delete Unused…") {
                         prepareUnusedModelDeletionConfirmation()
-                    } label: {
-                        Label("Delete Unused Models...", systemImage: "trash")
                     }
                     .buttonStyle(.bordered)
                     .disabled(!appState.canReviewUnusedModelDeletion)
-
-                    Button {
-                        appState.openModelsFolder()
-                    } label: {
-                        Label("Open Folder", systemImage: "folder")
-                    }
-                    .buttonStyle(.bordered)
                 }
             }
         }
     }
 
-    private var settingsPage: some View {
-        DetailPage(title: "Settings", systemImage: "slider.horizontal.3", back: goBackToDashboard) {
-            VStack(alignment: .leading, spacing: AppLayout.sectionSpacing) {
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SettingLabel(title: "Task", value: appState.whisperConfiguration.taskMode.title, systemImage: "text.bubble")
-
-                        Picker("Task", selection: taskModeBinding) {
-                            ForEach(WhisperTaskMode.allCases, id: \.self) { taskMode in
-                                Text(taskMode.title).tag(taskMode)
-                            }
-                        }
+    private var refinementPage: some View {
+        SettingsPage(title: "Refinement") {
+            SettingsSection(title: "Local Cleanup") {
+                SettingsRow(
+                    title: "Refine transcript",
+                    detail: "Clean transcripts locally before insertion"
+                ) {
+                    Toggle("", isOn: refinementEnabledBinding)
                         .labelsHidden()
-                        .pickerStyle(.segmented)
+                        .toggleStyle(.switch)
                         .disabled(appState.whisperSettingsLocked)
-                    }
                 }
 
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SettingLabel(title: "Language", value: appState.whisperConfiguration.inputLanguage.displayName, systemImage: "globe")
-
-                        Picker("Language", selection: inputLanguageBinding) {
-                            Text(WhisperInputLanguage.automatic.displayName)
-                                .tag(WhisperInputLanguage.automatic)
-
-                            if !appState.commonWhisperLanguages.isEmpty {
-                                Divider()
-
-                                Section("Common") {
-                                    ForEach(appState.commonWhisperLanguages) { language in
-                                        Text(language.displayName)
-                                            .tag(language.inputLanguage)
-                                    }
-                                }
-                            }
-
-                            Section("All") {
-                                ForEach(appState.additionalWhisperLanguages) { language in
-                                    Text(language.displayName)
-                                        .tag(language.inputLanguage)
-                                }
-                            }
+                SettingsRow(
+                    title: "Refinement model",
+                    detail: "Runs privately on this Mac"
+                ) {
+                    Picker("Model", selection: refinementModelBinding) {
+                        ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
+                            Text(appState.refinementModelMenuTitle(for: model))
+                                .tag(model)
+                                .disabled(!appState.isRefinementModelSupported(model))
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .disabled(appState.whisperSettingsLocked)
                     }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: AppLayout.controlWidth, alignment: .trailing)
+                    .disabled(appState.whisperSettingsLocked)
                 }
 
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SettingLabel(
-                            title: "Refinement",
-                            value: appState.refinementConfiguration.isEnabled ? "On" : "Off",
-                            systemImage: "wand.and.sparkles"
+                SettingsRow(title: "Prepare model", detail: "Download and make this the active model") {
+                    Button {
+                        appState.prepareAndUseRefinementModel(selectedRefinementModel)
+                    } label: {
+                        Label("Use & Prepare", systemImage: "arrow.down.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        appState.whisperSettingsLocked ||
+                        !appState.isRefinementRuntimeAvailable ||
+                        !appState.isRefinementModelSupported(selectedRefinementModel)
+                    )
+                }
+
+                SettingsRow(
+                    title: "Status",
+                    detail: appState.refinementConfiguration.isEnabled
+                        ? "Runs locally before insertion"
+                        : "Off; raw Whisper text is inserted"
+                ) {
+                    if appState.isRefinementServerPreparing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        StatusValue(
+                            text: appState.refinementConfiguration.isEnabled ? "On" : "Off",
+                            isPositive: appState.refinementConfiguration.isEnabled
+                        )
+                    }
+                }
+            }
+
+            SettingsSection(title: "System Prompt") {
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Instructions")
+                            .font(.system(size: 13, weight: .medium))
+
+                        Text("Use \(RefinementPromptTemplate.languageInstructionPlaceholder) where the transcription instruction should appear")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(AppTheme.secondaryText)
+                    }
+
+                    TextEditor(text: refinementPromptTextBinding)
+                        .font(.system(size: 12, design: .monospaced))
+                        .scrollContentBackground(.hidden)
+                        .padding(7)
+                        .frame(height: 150)
+                        .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(AppTheme.border, lineWidth: 1)
+                        }
+                        .disabled(appState.whisperSettingsLocked)
+                }
+
+                SettingsRow(title: "Prompt file", detail: appState.refinementPromptStorageText) {
+                    HStack(spacing: 8) {
+                        Button("Save") {
+                            appState.saveRefinementPromptText()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(
+                            appState.whisperSettingsLocked ||
+                            !appState.isRefinementPromptDirty ||
+                            appState.refinementPromptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         )
 
-                        Toggle("Clean transcripts locally before insertion", isOn: refinementEnabledBinding)
-                            .toggleStyle(.switch)
-                            .disabled(appState.whisperSettingsLocked)
-
-                        Picker("Model", selection: refinementModelBinding) {
-                            ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
-                                Text(appState.refinementModelPickerTitle(for: model))
-                                    .tag(model)
-                                    .disabled(!appState.isRefinementModelSupported(model))
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .disabled(appState.whisperSettingsLocked)
-
-                        Text(appState.refinementModelDetailText(for: selectedRefinementModel))
-                            .font(.system(size: 13))
-                            .foregroundStyle(appState.isRefinementModelSupported(selectedRefinementModel) ? AppTheme.secondaryText : Color.orange.opacity(0.86))
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Divider()
-                            .overlay(AppTheme.border)
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            SettingLabel(
-                                title: "System Prompt",
-                                value: appState.hasCustomRefinementPrompt ? "Custom" : "Default",
-                                systemImage: "text.alignleft"
-                            )
-
-                            Text("These instructions are sent as the system message. Each transcript is sent separately as the user message and is not stored in this editor.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-
-                            TextEditor(text: refinementPromptTextBinding)
-                                .font(.system(size: 12, design: .monospaced))
-                                .scrollContentBackground(.hidden)
-                                .frame(minHeight: 170)
-                                .padding(8)
-                                .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(AppTheme.border, lineWidth: 0.75)
-                                )
-                                .disabled(appState.whisperSettingsLocked)
-
-                            Text("Use \(RefinementPromptTemplate.languageInstructionPlaceholder) where the transcribe or translate instruction should appear in the system message.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(AppTheme.tertiaryText)
-
-                            HStack(spacing: 10) {
-                                Button {
-                                    appState.saveRefinementPromptText()
-                                } label: {
-                                    Label("Save System Prompt", systemImage: "square.and.arrow.down")
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(AppTheme.accent)
-                                .disabled(
-                                    appState.whisperSettingsLocked ||
-                                    !appState.isRefinementPromptDirty ||
-                                    appState.refinementPromptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                )
-
-                                Button {
-                                    appState.resetActiveRefinementPrompt()
-                                } label: {
-                                    Label("Reset", systemImage: "arrow.counterclockwise")
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(appState.whisperSettingsLocked)
-
-                                Button {
-                                    appState.openRefinementPromptsFolder()
-                                } label: {
-                                    Label("Folder", systemImage: "folder")
-                                }
-                                .buttonStyle(.bordered)
-                            }
-
-                            Text(appState.refinementPromptStorageText)
-                                .font(.system(size: 12))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        HStack(spacing: 8) {
-                            if appState.isRefinementServerPreparing {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .scaleEffect(0.65)
-                            }
-
-                            Text(shortRefinementStatusText)
-                                .font(.system(size: 13))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        HStack(spacing: 10) {
-                            Button {
-                                appState.prepareAndUseRefinementModel(selectedRefinementModel)
-                            } label: {
-                                Label("Use & Prepare", systemImage: "arrow.down.circle")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(AppTheme.accent)
-                            .disabled(appState.whisperSettingsLocked || !appState.isRefinementRuntimeAvailable || !appState.isRefinementModelSupported(selectedRefinementModel))
-
-                            Text("Local")
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(AppTheme.tertiaryText)
-                        }
-                    }
-                }
-
-                GlassTile {
-                    HStack(spacing: 10) {
-                        Button {
-                            appState.resetWhisperSettingsToDefaults()
-                            selectedModel = WhisperConfiguration.default.model
-                            selectedRefinementModel = RefinementConfiguration.default.model
-                        } label: {
-                            Label("Restore Defaults", systemImage: "arrow.counterclockwise")
+                        Button("Reset") {
+                            appState.resetActiveRefinementPrompt()
                         }
                         .buttonStyle(.bordered)
                         .disabled(appState.whisperSettingsLocked)
 
                         Button {
-                            appState.mainWindowPage = .models
+                            appState.openRefinementPromptsFolder()
                         } label: {
-                            Label("Models", systemImage: "cpu")
+                            Image(systemName: "folder")
+                        }
+                        .buttonStyle(.bordered)
+                        .help("Open Prompts Folder")
+                    }
+                }
+            }
+        }
+    }
+
+    private var latestResultPage: some View {
+        SettingsPage(title: "Latest Result") {
+            SettingsSection(title: "Transcription") {
+                if let transcription = appState.lastTranscription {
+                    SettingsRow(title: "Task", detail: "Completed \(transcription.completedAt.formatted(date: .abbreviated, time: .shortened))") {
+                        Text(transcription.taskMode.title)
+                            .foregroundStyle(AppTheme.secondaryText)
+                    }
+
+                    SettingsRow(title: "Detected language") {
+                        Text(transcription.detectedLanguageDisplayName)
+                            .foregroundStyle(AppTheme.secondaryText)
+                    }
+
+                    TranscriptBlock(
+                        title: "Whisper original",
+                        text: transcription.text.isEmpty ? "Empty transcript" : transcription.text
+                    )
+
+                    TranscriptBlock(
+                        title: "Insertion text",
+                        text: refinementOutputText(for: transcription)
+                    )
+
+                    SettingsRow(
+                        title: refinementStatusTitle(for: transcription),
+                        detail: refinementStatusDetail(for: transcription)
+                    ) {
+                        StatusValue(
+                            text: transcription.refinement == nil ? "Raw" : "Refined",
+                            isPositive: transcription.refinement != nil
+                        )
+                    }
+
+                    SettingsRow(title: "Actions") {
+                        HStack(spacing: 8) {
+                            Button("Insert Again") {
+                                appState.insertLastTranscription()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!appState.canInsertLastTranscription)
+
+                            Button("Copy") {
+                                appState.copyLastTranscription()
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!appState.canCopyLastTranscription)
+                        }
+                    }
+                } else {
+                    SettingsRow(
+                        title: "No result yet",
+                        detail: "Your latest local transcription will appear here"
+                    ) {
+                        Button("Start Recording") {
+                            appState.toggleDictation()
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(AppTheme.accent)
+                    }
+                }
+            }
+
+            if let capture = appState.lastCapture {
+                SettingsSection(title: "Capture") {
+                    SettingsRow(title: "Recording duration") {
+                        Text(capture.durationText)
+                            .foregroundStyle(AppTheme.secondaryText)
                     }
                 }
             }
         }
     }
 
-    private var historyPage: some View {
-        DetailPage(title: "History", systemImage: "clock", back: goBackToDashboard) {
-            VStack(alignment: .leading, spacing: AppLayout.sectionSpacing) {
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 12) {
-                        TileHeader(title: "Last Transcript", systemImage: "text.bubble")
-
-                        if let lastTranscription = appState.lastTranscription {
-                            HStack {
-                                Text(lastTranscription.taskMode.title)
-                                    .font(.system(size: 15, weight: .semibold))
-
-                                Spacer()
-
-                                Text(lastTranscription.completedAt.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(AppTheme.secondaryText)
-                            }
-
-                            RefinementStatusBadge(
-                                title: refinementStatusTitle(for: lastTranscription),
-                                detail: refinementStatusDetail(for: lastTranscription),
-                                color: refinementStatusColor(for: lastTranscription)
-                            )
-
-                            TranscriptTextBlock(
-                                title: "Whisper Original",
-                                text: lastTranscription.text.isEmpty ? "Empty transcript" : lastTranscription.text,
-                                prominence: .primary
-                            )
-
-                            TranscriptTextBlock(
-                                title: "LLM Refinement Result",
-                                text: refinementOutputText(for: lastTranscription),
-                                prominence: lastTranscription.refinement == nil ? .secondary : .primary
-                            )
-
-                            HStack(spacing: 10) {
-                                Button {
-                                    appState.insertLastTranscription()
-                                } label: {
-                                    Label("Insert Again", systemImage: "arrow.uturn.forward")
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(AppTheme.accent)
-                                .disabled(!appState.canInsertLastTranscription)
-
-                                Button {
-                                    appState.copyLastTranscription()
-                                } label: {
-                                    Label("Copy", systemImage: "doc.on.doc")
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(!appState.canCopyLastTranscription)
-                            }
-                        } else {
-                            Text("No transcript yet.")
-                                .font(.system(size: 15))
-                                .foregroundStyle(AppTheme.secondaryText)
-                        }
-                    }
+    private var privacyPage: some View {
+        SettingsPage(title: "Privacy & Access") {
+            SettingsSection(title: "Permissions") {
+                permissionRow(
+                    title: "Microphone",
+                    detail: appState.microphonePermissionState.detailText,
+                    value: appState.microphonePermissionState.title,
+                    isGranted: appState.microphonePermissionState == .granted
+                ) {
+                    appState.refreshMicrophonePermissionStatus()
                 }
 
-                if let lastCapture = appState.lastCapture {
-                    GlassTile {
-                        VStack(alignment: .leading, spacing: 8) {
-                            TileHeader(title: "Last Capture", systemImage: "waveform")
+                SettingsRow(
+                    title: "Accessibility",
+                    detail: appState.accessibilityPermissionState.detailText
+                ) {
+                    HStack(spacing: 8) {
+                        StatusValue(
+                            text: appState.accessibilityPermissionState.title,
+                            isPositive: appState.accessibilityPermissionState == .granted
+                        )
 
-                            Text(lastCapture.durationText)
-                                .font(.system(size: 15))
-                                .foregroundStyle(AppTheme.secondaryText)
+                        Button("Open Settings") {
+                            appState.openAccessibilitySettings()
                         }
+                        .buttonStyle(.bordered)
                     }
+                }
+            }
+
+            SettingsSection(title: "Local Data") {
+                SettingsRow(
+                    title: "Recordings",
+                    detail: "Temporary local .m4a files are removed after processing"
+                ) {
+                    Image(systemName: "internaldrive")
+                        .foregroundStyle(AppTheme.secondaryText)
+                }
+
+                SettingsRow(
+                    title: "Models",
+                    detail: "Stored in Application Support and never uploaded"
+                ) {
+                    Button("Open Folder") {
+                        appState.openModelsFolder()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                SettingsRow(
+                    title: "Text insertion",
+                    detail: appState.textInsertionStatusText
+                ) {
+                    Image(systemName: "lock.shield")
+                        .foregroundStyle(AppTheme.secondaryText)
                 }
             }
         }
     }
 
-    private var dashboardColumns: [GridItem] {
-        [
-            GridItem(.flexible(minimum: 285), spacing: AppLayout.sectionSpacing),
-            GridItem(.flexible(minimum: 285), spacing: AppLayout.sectionSpacing)
-        ]
+    private func permissionRow(
+        title: String,
+        detail: String,
+        value: String,
+        isGranted: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        SettingsRow(title: title, detail: detail) {
+            HStack(spacing: 8) {
+                StatusValue(text: value, isPositive: isGranted)
+
+                Button("Refresh", action: action)
+                    .buttonStyle(.bordered)
+            }
+        }
     }
 
-    private var compactNavigationColumns: [GridItem] {
-        [
-            GridItem(.flexible(minimum: 0), spacing: AppLayout.sectionSpacing),
-            GridItem(.flexible(minimum: 0), spacing: AppLayout.sectionSpacing),
-            GridItem(.flexible(minimum: 0), spacing: AppLayout.sectionSpacing)
-        ]
-    }
-
-    private var statusColor: Color {
-        appState.recordingState.isRecording ? AppTheme.primaryText : AppTheme.accent
-    }
-
-    private var hasMissingRequiredSettings: Bool {
-        appState.microphonePermissionState != .granted || appState.accessibilityPermissionState != .granted
-    }
-
-    private var historySummaryText: String {
-        if appState.lastTranscription != nil {
-            return "Last transcript"
-        }
-
-        if appState.lastCapture != nil {
-            return "Last capture"
-        }
-
-        return "Empty"
-    }
-
-    private var recordingStatusText: String {
-        if appState.recordingState.isRecording {
-            return "Recording"
-        }
-
-        if appState.transcriptionState.isTranscribing {
-            return "Transcribing"
-        }
-
-        if appState.transcriptionState.isRefining {
-            return "Refining"
-        }
-
-        if appState.textInsertionState.isBusy {
-            return "Inserting"
-        }
-
-        return "Idle"
-    }
-
-    private var shortModelStatusText: String {
-        if let progress = appState.modelDownloadProgressText {
-            return progress.replacingOccurrences(of: appState.modelsDirectoryPath, with: "local cache")
-        }
-
-        return appState.modelStatusText.replacingOccurrences(of: appState.modelsDirectoryPath, with: "local cache")
-    }
-
-    private var shortRefinementStatusText: String {
-        appState.refinementStatusText.replacingOccurrences(of: appState.modelsDirectoryPath, with: "local cache")
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Development"
     }
 
     private var deleteUnusedModelsButtonTitle: String {
@@ -788,10 +611,6 @@ struct ContentView: View {
         )
     }
 
-    private func goBackToDashboard() {
-        appState.mainWindowPage = .dashboard
-    }
-
     private func prepareUnusedModelDeletionConfirmation() {
         unusedModelDeletionCandidates = appState.unusedLocalModelFiles
         isShowingUnusedModelDeletionConfirmation = true
@@ -800,37 +619,26 @@ struct ContentView: View {
     private func refinementStatusTitle(for transcription: WhisperTranscriptionResult) -> String {
         switch transcription.refinementStatus {
         case .disabled:
-            return "LLM refinement: Off"
+            return "Local refinement off"
         case .skipped:
-            return "LLM refinement: Skipped"
+            return "Local refinement skipped"
         case .succeeded(let model, _, _):
-            return "LLM refinement: Used \(model.displayName)"
+            return "Refined with \(model.displayName)"
         case .failed(let model, _, _):
-            return "LLM refinement: Failed with \(model.displayName)"
+            return "Refinement failed with \(model.displayName)"
         }
     }
 
     private func refinementStatusDetail(for transcription: WhisperTranscriptionResult) -> String {
         switch transcription.refinementStatus {
         case .disabled:
-            return "This transcription used raw Whisper text because refinement was off."
+            return "The raw Whisper transcript was used."
         case .skipped(let reason):
-            return "No LLM output was produced. \(reason)"
+            return reason
         case .succeeded(_, let mode, let completedAt):
-            return "Mode: \(mode.title). Completed at \(completedAt.formatted(date: .omitted, time: .standard))."
-        case .failed(_, let errorMessage, let completedAt):
-            return "No LLM output was produced. Failed at \(completedAt.formatted(date: .omitted, time: .standard)): \(errorMessage)"
-        }
-    }
-
-    private func refinementStatusColor(for transcription: WhisperTranscriptionResult) -> Color {
-        switch transcription.refinementStatus {
-        case .succeeded:
-            return AppTheme.accent
-        case .failed:
-            return Color.orange.opacity(0.9)
-        case .disabled, .skipped:
-            return AppTheme.secondaryText
+            return "\(mode.title) completed locally at \(completedAt.formatted(date: .omitted, time: .shortened))."
+        case .failed(_, let message, _):
+            return "Raw Whisper text was used instead. \(message)"
         }
     }
 
@@ -841,11 +649,11 @@ struct ContentView: View {
 
         switch transcription.refinementStatus {
         case .disabled:
-            return "No LLM output. Refinement was off for this transcription."
+            return transcription.text.isEmpty ? "Empty transcript" : transcription.text
         case .skipped:
-            return "No LLM output. Refinement was skipped."
+            return "No refined output. DictaFlow used the raw Whisper transcript."
         case .failed:
-            return "No LLM output. Refinement failed, so DictaFlow inserted the raw Whisper transcript."
+            return "Refinement failed. DictaFlow used the raw Whisper transcript."
         case .succeeded:
             return "Empty refined transcript"
         }
@@ -853,347 +661,177 @@ struct ContentView: View {
 }
 
 private enum AppTheme {
-    static let background = Color(red: 0.037, green: 0.037, blue: 0.039)
-    static let barFill = Color.black.opacity(0.28)
-    static let tileFill = Color.white.opacity(0.035)
-    static let accent = Color.white.opacity(0.88)
-    static let border = Color.white.opacity(0.08)
+    static let background = Color(red: 0.055, green: 0.055, blue: 0.060)
+    static let sidebar = Color(red: 0.075, green: 0.075, blue: 0.082)
+    static let controlFill = Color.white.opacity(0.055)
+    static let accent = Color.white.opacity(0.92)
+    static let border = Color.white.opacity(0.09)
     static let primaryText = Color.white.opacity(0.92)
-    static let secondaryText = Color.white.opacity(0.60)
-    static let tertiaryText = Color.white.opacity(0.38)
+    static let secondaryText = Color.white.opacity(0.58)
+    static let tertiaryText = Color.white.opacity(0.36)
 }
 
 private enum AppLayout {
-    static let windowMinWidth: CGFloat = 660
-    static let windowMinHeight: CGFloat = 520
-    static let contentMaxWidth: CGFloat = 620
-    static let contentPadding: CGFloat = 18
-    static let sectionSpacing: CGFloat = 12
-    static let dashboardMaxWidth: CGFloat = 580
-    static let dashboardPadding: CGFloat = 16
-    static let dashboardSpacing: CGFloat = 10
-    static let recordingButtonMaxWidth: CGFloat = 340
-    static let tilePadding: CGFloat = 12
-    static let tileCornerRadius: CGFloat = 8
+    static let windowMinWidth: CGFloat = 700
+    static let windowMinHeight: CGFloat = 480
+    static let sidebarWidth: CGFloat = 190
+    static let contentMaxWidth: CGFloat = 760
+    static let contentPadding: CGFloat = 28
+    static let sectionSpacing: CGFloat = 26
+    static let rowSpacing: CGFloat = 18
+    static let labelWidth: CGFloat = 190
+    static let controlWidth: CGFloat = 295
 }
 
-private struct DetailPage<Content: View>: View {
+private struct SettingsPage<Content: View>: View {
     let title: String
-    let systemImage: String
-    let back: () -> Void
     @ViewBuilder var content: Content
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppLayout.sectionSpacing) {
-                HStack(spacing: 10) {
-                    Button(action: back) {
-                        Label("Back", systemImage: "chevron.left")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-
-                    Label(title, systemImage: systemImage)
-                        .font(.system(size: 18, weight: .semibold))
-
-                    Spacer()
-                }
+                Text(title)
+                    .font(.system(size: 23, weight: .semibold))
+                    .padding(.bottom, 2)
 
                 content
             }
             .padding(AppLayout.contentPadding)
-            .frame(maxWidth: AppLayout.contentMaxWidth, alignment: .top)
+            .frame(maxWidth: AppLayout.contentMaxWidth, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
+        .scrollContentBackground(.hidden)
+        .background(AppTheme.background)
     }
 }
 
-private struct GlassTile<Content: View>: View {
+private struct SettingsSection<Content: View>: View {
+    let title: String
     @ViewBuilder var content: Content
 
     var body: some View {
-        content
-            .padding(AppLayout.tilePadding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: AppLayout.tileCornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: AppLayout.tileCornerRadius, style: .continuous)
-                    .stroke(AppTheme.border, lineWidth: 0.75)
-            )
-            .shadow(color: Color.black.opacity(0.07), radius: 5, x: 0, y: 2)
+        VStack(alignment: .leading, spacing: 13) {
+            HStack(spacing: 12) {
+                Text(title.uppercased())
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(1.3)
+                    .foregroundStyle(AppTheme.tertiaryText)
+
+                Rectangle()
+                    .fill(AppTheme.border)
+                    .frame(height: 1)
+            }
+
+            VStack(alignment: .leading, spacing: AppLayout.rowSpacing) {
+                content
+            }
+        }
     }
 }
 
-private struct TileHeader: View {
+private struct SettingsRow<Control: View>: View {
     let title: String
-    let systemImage: String
+    let detail: String?
+    @ViewBuilder let control: Control
+
+    init(
+        title: String,
+        detail: String? = nil,
+        @ViewBuilder control: () -> Control
+    ) {
+        self.title = title
+        self.detail = detail
+        self.control = control()
+    }
 
     var body: some View {
-        Label(title, systemImage: systemImage)
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(AppTheme.secondaryText)
+        HStack(alignment: .top, spacing: 18) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(width: AppLayout.labelWidth, alignment: .leading)
+
+            Spacer(minLength: 0)
+
+            control
+                .controlSize(.regular)
+                .frame(width: AppLayout.controlWidth, alignment: .trailing)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-private enum TranscriptTextProminence {
-    case primary
-    case secondary
+private struct StatusValue: View {
+    let text: String
+    let isPositive: Bool
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(isPositive ? AppTheme.primaryText : AppTheme.tertiaryText)
+                .frame(width: 5, height: 5)
+
+            Text(text)
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(isPositive ? AppTheme.primaryText : AppTheme.secondaryText)
+    }
 }
 
-private struct TranscriptTextBlock: View {
+private struct ModelFileRow: View {
+    let file: LocalModelFile
+    let size: String
+    let isActive: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(file.displayName)
+                    .font(.system(size: 13, weight: .medium))
+
+                Text(file.category.title)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(AppTheme.secondaryText)
+            }
+
+            Spacer()
+
+            if isActive {
+                StatusValue(text: "Active", isPositive: true)
+            }
+
+            Text(size)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(AppTheme.secondaryText)
+                .frame(width: 72, alignment: .trailing)
+        }
+    }
+}
+
+private struct TranscriptBlock: View {
     let title: String
     let text: String
-    let prominence: TranscriptTextProminence
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 7) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(AppTheme.secondaryText)
 
             Text(text)
-                .font(.system(size: prominence == .primary ? 15 : 13))
-                .foregroundStyle(prominence == .primary ? AppTheme.primaryText : AppTheme.secondaryText)
+                .font(.system(size: 13))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
-private struct RefinementStatusBadge: View {
-    let title: String
-    let detail: String
-    let color: Color
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundStyle(color)
-
-            Text(detail)
-                .font(.system(size: 12))
-                .foregroundStyle(AppTheme.secondaryText)
-                .textSelection(.enabled)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(color.opacity(0.22), lineWidth: 0.75)
-        )
-    }
-}
-
-private struct WaveformBadge: View {
-    var body: some View {
-        HStack(alignment: .center, spacing: 4) {
-            ForEach([8, 16, 26, 20, 10], id: \.self) { height in
-                Capsule(style: .continuous)
-                    .frame(width: 3.5, height: CGFloat(height))
-            }
-        }
-    }
-}
-
-private struct AppSwitchStyle: ToggleStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Button {
-            withAnimation(.spring(response: 0.22, dampingFraction: 0.78)) {
-                configuration.isOn.toggle()
-            }
-        } label: {
-            Capsule(style: .continuous)
-                .fill(configuration.isOn ? Color.white.opacity(0.18) : Color.white.opacity(0.10))
-                .frame(width: 42, height: 24)
-                .overlay(alignment: configuration.isOn ? .trailing : .leading) {
-                    Circle()
-                        .fill(configuration.isOn ? Color.white : Color.white.opacity(0.42))
-                        .frame(width: 18, height: 18)
-                        .padding(3)
-                }
-                .overlay(Capsule(style: .continuous).stroke(AppTheme.border, lineWidth: 0.75))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct NavigationTile: View {
-    let title: String
-    let value: String
-    let systemImage: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            GlassTile {
-                HStack(spacing: 10) {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(AppTheme.accent)
-                        .frame(width: 20)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title)
-                            .font(.system(size: 14, weight: .semibold))
-
-                        Text(value)
-                            .font(.system(size: 12))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .lineLimit(1)
-                    }
-
-                    Spacer()
-
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(AppTheme.tertiaryText)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct ModelChoiceCard: View {
-    let model: WhisperModelDescriptor
-    let isActive: Bool
-    let isSelected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(model.displayName)
-                        .font(.system(size: 15, weight: .semibold))
-
-                    Spacer()
-
-                    if isActive {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(AppTheme.accent)
-                    }
-                }
-
-                Text(model.approximateDiskSizeDescription)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(AppTheme.accent)
-
-                Text(model.detailText)
-                    .font(.system(size: 12))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .lineLimit(2)
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, minHeight: 98, alignment: .topLeading)
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(isSelected ? AppTheme.accent.opacity(0.7) : AppTheme.border, lineWidth: 0.75)
-            )
-            .shadow(color: Color.black.opacity(0.08), radius: 6, x: 0, y: 2)
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct ModelStorageRow: View {
-    let file: LocalModelFile
-    let sizeText: String
-    let isActive: Bool
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: file.category == .whisper ? "waveform" : "wand.and.sparkles")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(AppTheme.accent)
-                .frame(width: 20)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(file.displayName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .lineLimit(1)
-
-                Text(file.category.title)
-                    .font(.system(size: 12))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 12)
-
-            if isActive {
-                Label("Active", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(AppTheme.accent)
-                    .labelStyle(.titleAndIcon)
-            } else {
-                Text("Unused")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(AppTheme.tertiaryText)
-            }
-
-            Text(sizeText)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(AppTheme.secondaryText)
-                .frame(minWidth: 74, alignment: .trailing)
-                .lineLimit(1)
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-private struct SettingLabel: View {
-    let title: String
-    let value: String
-    let systemImage: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: systemImage)
-                .foregroundStyle(AppTheme.accent)
-                .frame(width: 20)
-
-            Text(title)
-                .font(.system(size: 15, weight: .semibold))
-
-            Spacer()
-
-            Text(value)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(AppTheme.secondaryText)
-                .lineLimit(1)
-        }
-    }
-}
-
-private struct StatusLine: View {
-    let title: String
-    let value: String
-    let systemImage: String
-    let color: Color
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: systemImage)
-                .foregroundStyle(color)
-                .font(.system(size: 16, weight: .medium))
-                .frame(width: 20)
-
-            Text(title)
-                .font(.system(size: 16, weight: .medium))
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-
-            Spacer()
-
-            Text(value)
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundStyle(color)
-                .lineLimit(1)
-                .frame(minWidth: 74, alignment: .trailing)
+                .padding(10)
+                .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6))
         }
     }
 }

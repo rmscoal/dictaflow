@@ -13,6 +13,7 @@ struct MenuBarView: View {
         .padding(9)
         .frame(width: 318, alignment: .leading)
         .foregroundStyle(MenuTheme.primaryText)
+        .tint(MenuTheme.primaryText)
         .background(panelBackground)
     }
 

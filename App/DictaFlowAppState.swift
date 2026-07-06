@@ -19,18 +19,41 @@ protocol RecordingOverlayRouting: AnyObject {
     func updateOverlay(_ presentation: RecordingOverlayPresentation?)
 }
 
-enum MainWindowPage {
-    case dashboard
+enum MainWindowPage: CaseIterable, Hashable, Identifiable {
+    case dictation
     case models
-    case settings
-    case history
+    case refinement
+    case latestResult
+    case privacyAccess
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .latestResult: "Latest Result"
+        case .dictation: "Dictation"
+        case .models: "Models"
+        case .refinement: "Refinement"
+        case .privacyAccess: "Privacy & Access"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .latestResult: "text.bubble"
+        case .dictation: "slider.horizontal.3"
+        case .models: "cpu"
+        case .refinement: "wand.and.sparkles"
+        case .privacyAccess: "hand.raised"
+        }
+    }
 }
 
 @MainActor
 final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isMainWindowVisible = false
     @Published private(set) var isSettingsWindowVisible = false
-    @Published var mainWindowPage: MainWindowPage = .dashboard
+    @Published var mainWindowPage: MainWindowPage = .dictation
     @Published private(set) var microphonePermissionState: MicrophonePermissionState
     @Published private(set) var accessibilityPermissionState: AccessibilityPermissionState
     @Published private(set) var recordingState: DictationRecordingState {
@@ -607,7 +630,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func showMainWindow() {
-        mainWindowPage = .dashboard
+        mainWindowPage = .dictation
         mainWindowRouter?.showMainWindow()
     }
 
@@ -617,7 +640,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func openSettingsWindow() {
-        showMainWindowPage(.settings)
+        showMainWindowPage(.dictation)
     }
 
     func closeMainWindow() {
@@ -666,20 +689,19 @@ final class DictaFlowAppState: ObservableObject {
 
         guard isSelectedRefinementModelSupported else {
             setPreservedStatusMessage(unsupportedRefinementModelMessage(for: refinementConfiguration.model))
-            showMainWindow()
+            showMainWindowPage(.refinement)
             return
         }
 
         guard isRefinementRuntimeAvailable else {
             setPreservedStatusMessage(missingRefinementRuntimeEnableMessage)
-            showMainWindow()
+            showMainWindowPage(.refinement)
             return
         }
 
         guard isSelectedRefinementModelPrepared else {
-            mainWindowPage = .settings
             setPreservedStatusMessage("Choose and prepare a refinement model before turning on local cleanup.")
-            showMainWindow()
+            showMainWindowPage(.refinement)
             return
         }
 
@@ -716,7 +738,7 @@ final class DictaFlowAppState: ObservableObject {
             updateStatusMessage()
         } catch {
             setPreservedStatusMessage("Could not save the refinement system prompt. \(error.localizedDescription)")
-            showMainWindow()
+            showMainWindowPage(.refinement)
             updateStatusMessage()
         }
     }
@@ -729,7 +751,7 @@ final class DictaFlowAppState: ObservableObject {
             updateStatusMessage()
         } catch {
             setPreservedStatusMessage("Could not reset the refinement system prompt. \(error.localizedDescription)")
-            showMainWindow()
+            showMainWindowPage(.refinement)
             updateStatusMessage()
         }
     }
