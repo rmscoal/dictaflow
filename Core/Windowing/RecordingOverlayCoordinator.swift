@@ -1,34 +1,73 @@
+import Carbon
 import AppKit
 import SwiftUI
 
 @MainActor
 final class RecordingOverlayCoordinator: RecordingOverlayRouting {
     private let panelSize = NSSize(width: 286, height: 52)
-    private var panel: NSPanel?
+    private let cancellablePanelSize = NSSize(width: 296, height: 52)
+    private var panel: RecordingOverlayPanel?
+    private var isInputEnabled = false
+    private var localEscapeMonitor: Any?
+    private var escapeEventTapController: EscapeEventTapController?
 
-    func updateOverlay(_ presentation: RecordingOverlayPresentation?) {
+    func updateOverlay(
+        _ presentation: RecordingOverlayPresentation?,
+        cancelAction: @escaping () -> Void
+    ) {
         guard let presentation else {
             hideOverlay()
             return
         }
 
         let panel = makePanelIfNeeded()
+        let currentPanelSize = presentation.isCancellable ? cancellablePanelSize : panelSize
+        let wasVisible = panel.isVisible
+        let wasInputEnabled = isInputEnabled
+        let shouldEnableInput = presentation.isCancellable
+
+        panel.onCancel = shouldEnableInput ? cancelAction : nil
+        panel.ignoresMouseEvents = !shouldEnableInput
+        isInputEnabled = shouldEnableInput
+
+        if shouldEnableInput, !wasInputEnabled {
+            startEscapeMonitors()
+        } else if !shouldEnableInput, wasInputEnabled {
+            stopEscapeMonitors()
+        }
+
         if let hostingView = panel.contentView as? TransparentHostingView<RecordingOverlayView> {
-            hostingView.rootView = RecordingOverlayView(presentation: presentation)
+            hostingView.rootView = RecordingOverlayView(
+                presentation: presentation,
+                panelWidth: currentPanelSize.width,
+                cancelAction: cancelAction
+            )
         } else {
             panel.contentView = TransparentHostingView(
-                rootView: RecordingOverlayView(presentation: presentation)
+                rootView: RecordingOverlayView(
+                    presentation: presentation,
+                    panelWidth: currentPanelSize.width,
+                    cancelAction: cancelAction
+                )
             )
         }
-        panel.setContentSize(panelSize)
-        position(panel)
+        panel.setContentSize(currentPanelSize)
+        position(panel, size: currentPanelSize)
 
-        guard !panel.isVisible else {
+        guard !wasVisible else {
+            if shouldEnableInput, !wasInputEnabled {
+                panel.makeKey()
+            } else if !shouldEnableInput, wasInputEnabled {
+                panel.resignKey()
+            }
             return
         }
 
         panel.alphaValue = 0
         panel.orderFrontRegardless()
+        if shouldEnableInput {
+            panel.makeKey()
+        }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.14
             panel.animator().alphaValue = 1
@@ -36,7 +75,17 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
     }
 
     private func hideOverlay() {
-        guard let panel, panel.isVisible else {
+        guard let panel else {
+            return
+        }
+
+        panel.onCancel = nil
+        panel.ignoresMouseEvents = true
+        isInputEnabled = false
+        stopEscapeMonitors()
+        panel.resignKey()
+
+        guard panel.isVisible else {
             return
         }
 
@@ -49,12 +98,12 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
         }
     }
 
-    private func makePanelIfNeeded() -> NSPanel {
+    private func makePanelIfNeeded() -> RecordingOverlayPanel {
         if let panel {
             return panel
         }
 
-        let panel = NSPanel(
+        let panel = RecordingOverlayPanel(
             contentRect: NSRect(origin: .zero, size: panelSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -76,7 +125,46 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
         return panel
     }
 
-    private func position(_ panel: NSPanel) {
+    private func startEscapeMonitors() {
+        guard localEscapeMonitor == nil, escapeEventTapController == nil else {
+            return
+        }
+
+        localEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard isBareEscapeKeyEvent(event) else {
+                return event
+            }
+
+            Task { @MainActor [weak self] in
+                self?.panel?.onCancel?()
+            }
+            return nil
+        }
+
+        let eventTapController = EscapeEventTapController()
+        let didStartEventTap = eventTapController.start { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.panel?.onCancel?()
+            }
+        }
+        if didStartEventTap {
+            escapeEventTapController = eventTapController
+        }
+    }
+
+    private func stopEscapeMonitors() {
+        if let localEscapeMonitor {
+            NSEvent.removeMonitor(localEscapeMonitor)
+            self.localEscapeMonitor = nil
+        }
+
+        if let escapeEventTapController {
+            escapeEventTapController.stop()
+            self.escapeEventTapController = nil
+        }
+    }
+
+    private func position(_ panel: NSPanel, size: NSSize) {
         let screen = NSScreen.main ?? NSScreen.screens.first
         guard let visibleFrame = screen?.visibleFrame else {
             panel.center()
@@ -85,15 +173,135 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
 
         let bottomInset: CGFloat = 28
         let origin = NSPoint(
-            x: visibleFrame.midX - panelSize.width / 2,
+            x: visibleFrame.midX - size.width / 2,
             y: visibleFrame.minY + bottomInset
         )
-        panel.setFrame(NSRect(origin: origin, size: panelSize), display: true)
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
     }
+}
+
+private final class RecordingOverlayPanel: NSPanel {
+    var onCancel: (() -> Void)?
+
+    override var canBecomeKey: Bool {
+        true
+    }
+
+    override var canBecomeMain: Bool {
+        false
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        if isBareEscapeKeyEvent(event), let onCancel {
+            onCancel()
+            return
+        }
+
+        super.sendEvent(event)
+    }
+}
+
+private final class EscapeEventTapController: @unchecked Sendable {
+    nonisolated(unsafe) private var eventTap: CFMachPort?
+    nonisolated(unsafe) private var eventTapSource: CFRunLoopSource?
+    nonisolated(unsafe) private var onEscape: (() -> Void)?
+
+    nonisolated func start(onEscape: @escaping () -> Void) -> Bool {
+        guard eventTap == nil else {
+            return true
+        }
+
+        self.onEscape = onEscape
+        let eventMask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        let userInfo = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+
+        guard let eventTap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: eventMask,
+            callback: { _, eventType, event, userInfo in
+                guard let userInfo else {
+                    return Unmanaged.passUnretained(event)
+                }
+
+                let controller = Unmanaged<EscapeEventTapController>
+                    .fromOpaque(userInfo)
+                    .takeUnretainedValue()
+                return controller.handle(eventType: eventType, event: event)
+            },
+            userInfo: userInfo
+        ) else {
+            self.onEscape = nil
+            return false
+        }
+
+        self.eventTap = eventTap
+
+        guard let eventTapSource = CFMachPortCreateRunLoopSource(
+            kCFAllocatorDefault,
+            eventTap,
+            0
+        ) else {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+            self.eventTap = nil
+            self.onEscape = nil
+            return false
+        }
+
+        self.eventTapSource = eventTapSource
+        CFRunLoopAddSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+        return true
+    }
+
+    nonisolated func stop() {
+        if let eventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+        }
+
+        if let eventTapSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
+            self.eventTapSource = nil
+        }
+
+        self.eventTap = nil
+        self.onEscape = nil
+    }
+
+    nonisolated private func handle(
+        eventType: CGEventType,
+        event: CGEvent
+    ) -> Unmanaged<CGEvent>? {
+        if eventType == .tapDisabledByTimeout, let eventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: true)
+        }
+
+        guard eventType == .keyDown, isBareEscapeKeyEvent(event) else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        onEscape?()
+        return nil
+    }
+}
+
+private func isBareEscapeKeyEvent(_ event: NSEvent) -> Bool {
+    event.type == .keyDown
+        && event.keyCode == UInt16(kVK_Escape)
+        && event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+}
+
+private nonisolated func isBareEscapeKeyEvent(_ event: CGEvent) -> Bool {
+    let disallowedFlags: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift]
+    return event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Escape)
+        && event.flags.intersection(disallowedFlags).isEmpty
 }
 
 private struct RecordingOverlayView: View {
     let presentation: RecordingOverlayPresentation
+    let panelWidth: CGFloat
+    let cancelAction: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -102,20 +310,33 @@ private struct RecordingOverlayView: View {
             activityIndicator
             .frame(width: 74, height: 22)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(presentation.title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(OverlayTheme.primaryText)
-
-                Text(presentation.detail)
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundStyle(OverlayTheme.secondaryText)
-                    .lineLimit(1)
+            if presentation.isCancellable {
+                statusText
+                    .fixedSize(horizontal: true, vertical: false)
+            } else {
+                statusText
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if presentation.isCancellable {
+                Button(role: .cancel, action: cancelAction) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(OverlayTheme.primaryText)
+                        .frame(width: 26, height: 26)
+                        .background(OverlayTheme.controlFill, in: Circle())
+                        .overlay {
+                            Circle()
+                                .strokeBorder(OverlayTheme.panelBorder, lineWidth: 0.75)
+                        }
+                }
+                .buttonStyle(.plain)
+                .help("Cancel recording")
+                .accessibilityLabel("Cancel recording")
+            }
         }
         .padding(.horizontal, 13)
-        .frame(width: 286, height: 52)
+        .frame(width: panelWidth, height: 52)
         .background(OverlayTheme.panelFill, in: Capsule(style: .continuous))
         .overlay {
             Capsule(style: .continuous)
@@ -129,6 +350,19 @@ private struct RecordingOverlayView: View {
             OverlayWaveformView(audioLevel: presentation.audioLevel)
         } else {
             OverlayLoadingView()
+        }
+    }
+
+    private var statusText: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(presentation.title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(OverlayTheme.primaryText)
+
+            Text(presentation.detail)
+                .font(.system(size: 10, weight: .regular))
+                .foregroundStyle(OverlayTheme.secondaryText)
+                .lineLimit(1)
         }
     }
 

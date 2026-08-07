@@ -21,4 +21,8 @@ struct RecordingOverlayPresentation: Equatable {
     var showsLiveWaveform: Bool {
         phase == .recording
     }
+
+    var isCancellable: Bool {
+        phase == .recording
+    }
 }

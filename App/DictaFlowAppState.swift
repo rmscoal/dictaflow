@@ -16,7 +16,10 @@ protocol SettingsWindowRouting: AnyObject {
 
 @MainActor
 protocol RecordingOverlayRouting: AnyObject {
-    func updateOverlay(_ presentation: RecordingOverlayPresentation?)
+    func updateOverlay(
+        _ presentation: RecordingOverlayPresentation?,
+        cancelAction: @escaping () -> Void
+    )
 }
 
 enum MainWindowPage {
@@ -888,6 +891,30 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    func cancelRecording() {
+        guard recordingState.isRecording else {
+            return
+        }
+
+        stopRecordingMetering()
+
+        do {
+            try audioRecorderService.discardRecording()
+            recordingState = .idle
+            pendingInsertionTargetApplication = nil
+            setRecordingOverlaySessionActive(false)
+            setPreservedStatusMessage("Recording cancelled.")
+            updateStatusMessage()
+        } catch {
+            recordingState = .idle
+            pendingInsertionTargetApplication = nil
+            setRecordingOverlaySessionActive(false)
+            setPreservedStatusMessage("Could not cancel recording cleanly. \(error.localizedDescription)")
+            showMainWindow()
+            updateStatusMessage()
+        }
+    }
+
     func insertLastTranscription() {
         guard canInsertLastTranscription, let lastTranscription else {
             return
@@ -962,7 +989,7 @@ final class DictaFlowAppState: ObservableObject {
 
     func prepareForTermination() {
         stopRecordingMetering()
-        recordingOverlayRouter?.updateOverlay(nil)
+        recordingOverlayRouter?.updateOverlay(nil, cancelAction: {})
         hotkeyService.unregisterToggleHotkey()
         Task { [transcriptRefinementService] in
             await transcriptRefinementService.stop()
@@ -1362,7 +1389,14 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func updateRecordingOverlay() {
-        recordingOverlayRouter?.updateOverlay(recordingOverlayPresentation)
+        recordingOverlayRouter?.updateOverlay(
+            recordingOverlayPresentation,
+            cancelAction: { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.cancelRecording()
+                }
+            }
+        )
     }
 
     private var recordingOverlayPresentation: RecordingOverlayPresentation? {

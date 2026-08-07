@@ -7,6 +7,7 @@ protocol AudioRecorderServiceProtocol: AnyObject {
     var currentPowerLevel: Double { get }
     func startRecording() async throws -> URL
     func stopRecording() async throws -> DictationCapture
+    func discardRecording() throws
 }
 
 enum AudioRecorderServiceError: LocalizedError {
@@ -16,6 +17,7 @@ enum AudioRecorderServiceError: LocalizedError {
     case failedToStart
     case temporaryDirectoryCreationFailed
     case temporaryFileProtectionFailed
+    case temporaryFileDeletionFailed
 
     var errorDescription: String? {
         switch self {
@@ -31,6 +33,8 @@ enum AudioRecorderServiceError: LocalizedError {
             return "DictaFlow could not create its temporary recording folder."
         case .temporaryFileProtectionFailed:
             return "DictaFlow could not secure its temporary recording file."
+        case .temporaryFileDeletionFailed:
+            return "DictaFlow could not delete the cancelled temporary recording."
         }
     }
 }
@@ -114,6 +118,26 @@ final class SystemAudioRecorderService: NSObject, AudioRecorderServiceProtocol {
         self.recorder = nil
         self.activeRecordingURL = nil
         return capture
+    }
+
+    func discardRecording() throws {
+        guard let recorder, recorder.isRecording, let fileURL else {
+            throw AudioRecorderServiceError.notRecording
+        }
+
+        recorder.stop()
+        self.recorder = nil
+        self.activeRecordingURL = nil
+
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return
+        }
+
+        do {
+            try FileManager.default.removeItem(at: fileURL)
+        } catch {
+            throw AudioRecorderServiceError.temporaryFileDeletionFailed
+        }
     }
 
     private var fileURL: URL? {
