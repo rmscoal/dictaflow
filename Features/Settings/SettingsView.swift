@@ -15,6 +15,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 20) {
                 headerSection
                 currentDefaultsSection
+                globalShortcutSection
                 taskModeSection
                 inputLanguageSection
                 modelSection
@@ -98,6 +99,13 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
+        }
+    }
+
+    private var globalShortcutSection: some View {
+        GroupBox("Global Shortcut") {
+            GlobalShortcutSettingsContent(appState: appState)
+                .padding(.top, 4)
         }
     }
 

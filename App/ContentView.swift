@@ -280,7 +280,11 @@ struct ContentView: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.regular)
                     .tint(AppTheme.accent)
-                    .disabled(appState.transcriptionState.isBusy || appState.textInsertionState.isBusy)
+                    .disabled(
+                        appState.isEditingGlobalShortcut
+                            || appState.transcriptionState.isBusy
+                            || appState.textInsertionState.isBusy
+                    )
 
                     Spacer(minLength: 0)
                 }
@@ -391,6 +395,10 @@ struct ContentView: View {
     private var settingsPage: some View {
         DetailPage(title: "Settings", systemImage: "slider.horizontal.3", back: goBackToDashboard) {
             VStack(alignment: .leading, spacing: AppLayout.sectionSpacing) {
+                GlassTile {
+                    GlobalShortcutSettingsContent(appState: appState)
+                }
+
                 GlassTile {
                     VStack(alignment: .leading, spacing: 12) {
                         SettingLabel(title: "Task", value: appState.whisperConfiguration.taskMode.title, systemImage: "text.bubble")
@@ -789,7 +797,7 @@ struct ContentView: View {
     }
 
     private func goBackToDashboard() {
-        appState.mainWindowPage = .dashboard
+        appState.showMainWindowPage(.dashboard)
     }
 
     private func prepareUnusedModelDeletionConfirmation() {

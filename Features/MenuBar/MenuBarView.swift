@@ -37,11 +37,17 @@ struct MenuBarView: View {
             SectionTitle("Global Shortcut")
 
             HStack(spacing: 6) {
-                ShortcutKeycap(symbol: "command", title: "Command")
-                ShortcutPlus()
-                ShortcutKeycap(symbol: "shift", title: "Shift")
-                ShortcutPlus()
-                ShortcutKeycap(title: "\\", minWidth: 28)
+                ForEach(Array(appState.globalShortcut.displayParts.enumerated()), id: \.element.id) { index, part in
+                    ShortcutKeycap(
+                        symbol: part.symbol,
+                        title: part.title,
+                        minWidth: part.symbol == nil ? 28 : nil
+                    )
+
+                    if index < appState.globalShortcut.displayParts.count - 1 {
+                        ShortcutPlus()
+                    }
+                }
             }
         }
         .padding(.horizontal, 10)
@@ -97,7 +103,11 @@ struct MenuBarView: View {
                         .frame(maxWidth: .infinity, minHeight: 30)
                 }
                 .buttonStyle(PrimaryRecordButtonStyle(isRecording: appState.recordingState.isRecording))
-                .disabled(appState.transcriptionState.isBusy || appState.textInsertionState.isBusy)
+                .disabled(
+                    appState.isEditingGlobalShortcut
+                        || appState.transcriptionState.isBusy
+                        || appState.textInsertionState.isBusy
+                )
             }
         }
     }

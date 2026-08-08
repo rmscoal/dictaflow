@@ -61,6 +61,9 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
     @Published private(set) var isHotkeyRegistered = false
+    @Published private(set) var globalShortcut: GlobalShortcutDescriptor
+    @Published private(set) var isEditingGlobalShortcut = false
+    @Published private(set) var globalShortcutEditingMessage: String?
     @Published private(set) var modelDownloadProgressText: String?
     @Published private(set) var isRefinementRuntimeAvailable = false
     @Published private(set) var isRefinementServerPreparing = false
@@ -157,6 +160,8 @@ final class DictaFlowAppState: ObservableObject {
         self.lastTextInsertion = nil
         self.statusMessage = ""
         self.recordingAudioLevel = 0
+        self.globalShortcut = settingsStore.globalShortcut
+        self.globalShortcutEditingMessage = nil
         self.modelDownloadProgressText = nil
         self.isRefinementRuntimeAvailable = false
         self.isRefinementServerPreparing = false
@@ -302,7 +307,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     var hotkeyDisplayText: String {
-        GlobalShortcutDescriptor.toggleDictation.displayValue
+        globalShortcut.displayValue
     }
 
     var modelsDirectoryPath: String {
@@ -610,11 +615,16 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func showMainWindow() {
+        cancelGlobalShortcutEditing()
         mainWindowPage = .dashboard
         mainWindowRouter?.showMainWindow()
     }
 
     func showMainWindowPage(_ page: MainWindowPage) {
+        if page != .settings {
+            cancelGlobalShortcutEditing()
+        }
+
         mainWindowPage = page
         mainWindowRouter?.showMainWindow()
     }
@@ -624,6 +634,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func closeMainWindow() {
+        cancelGlobalShortcutEditing()
         mainWindowRouter?.closeMainWindow()
     }
 
@@ -885,7 +896,64 @@ final class DictaFlowAppState: ObservableObject {
         prepareRefinementModelIfNeeded(force: true, enableAfterPreparation: true)
     }
 
+    func beginGlobalShortcutEditing() {
+        guard !isEditingGlobalShortcut, !whisperSettingsLocked else {
+            return
+        }
+
+        clearPreservedStatusMessage()
+        globalShortcutEditingMessage = nil
+        isEditingGlobalShortcut = true
+        hotkeyService.unregisterToggleHotkey()
+        isHotkeyRegistered = false
+        updateStatusMessage()
+    }
+
+    func handleGlobalShortcutCandidate(_ shortcut: GlobalShortcutDescriptor?) {
+        guard isEditingGlobalShortcut else {
+            return
+        }
+
+        guard let shortcut else {
+            globalShortcutEditingMessage = "Use at least one modifier with another key."
+            updateStatusMessage()
+            return
+        }
+
+        do {
+            try registerToggleHotkey(shortcut)
+        } catch {
+            isHotkeyRegistered = false
+            globalShortcutEditingMessage = error.localizedDescription
+            updateStatusMessage()
+            return
+        }
+
+        globalShortcut = shortcut
+        settingsStore.saveGlobalShortcut(shortcut)
+        isHotkeyRegistered = true
+        isEditingGlobalShortcut = false
+        globalShortcutEditingMessage = nil
+        setPreservedStatusMessage("Global shortcut changed to \(shortcut.displayValue).")
+        updateStatusMessage()
+    }
+
+    func cancelGlobalShortcutEditing() {
+        guard isEditingGlobalShortcut else {
+            return
+        }
+
+        isEditingGlobalShortcut = false
+        globalShortcutEditingMessage = nil
+        registerGlobalHotkey()
+        updateStatusMessage()
+    }
+
     func toggleDictation() {
+        guard !isEditingGlobalShortcut else {
+            return
+        }
+
         Task { @MainActor [weak self] in
             await self?.performDictationToggle()
         }
@@ -1006,6 +1074,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func mainWindowDidClose() {
+        cancelGlobalShortcutEditing()
         isMainWindowVisible = false
         updateStatusMessage()
     }
@@ -1016,20 +1085,25 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func settingsWindowDidClose() {
+        cancelGlobalShortcutEditing()
         isSettingsWindowVisible = false
         updateStatusMessage()
     }
 
     private func registerGlobalHotkey() {
         do {
-            try hotkeyService.registerToggleHotkey { [weak self] in
-                self?.toggleDictation()
-            }
+            try registerToggleHotkey(globalShortcut)
             isHotkeyRegistered = true
         } catch {
             isHotkeyRegistered = false
             setPreservedStatusMessage(error.localizedDescription)
             showMainWindow()
+        }
+    }
+
+    private func registerToggleHotkey(_ shortcut: GlobalShortcutDescriptor) throws {
+        try hotkeyService.registerToggleHotkey(shortcut) { [weak self] in
+            self?.toggleDictation()
         }
     }
 
@@ -1809,6 +1883,11 @@ final class DictaFlowAppState: ObservableObject {
             return
         case .inserting(let targetApplicationName):
             statusMessage = "Inserting the latest transcript into \(targetApplicationName ?? "the focused app")."
+            return
+        }
+
+        if isEditingGlobalShortcut {
+            statusMessage = globalShortcutEditingMessage ?? "Press a shortcut to change the global recording shortcut. Press Escape to cancel."
             return
         }
 

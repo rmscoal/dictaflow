@@ -3,10 +3,12 @@ import Foundation
 protocol SettingsStoreProtocol: AnyObject {
     var shouldShowMainWindowOnLaunch: Bool { get }
     var hasRequestedAccessibilityPermission: Bool { get }
+    var globalShortcut: GlobalShortcutDescriptor { get }
     var whisperConfiguration: WhisperConfiguration { get }
     var refinementConfiguration: RefinementConfiguration { get }
     func markInitialWindowPresentationComplete()
     func markAccessibilityPermissionRequested()
+    func saveGlobalShortcut(_ shortcut: GlobalShortcutDescriptor)
     func saveWhisperConfiguration(_ configuration: WhisperConfiguration)
     func saveRefinementConfiguration(_ configuration: RefinementConfiguration)
 }
@@ -15,6 +17,7 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
     private enum Keys {
         static let hasPresentedInitialWindow = "app.hasPresentedInitialWindow"
         static let hasRequestedAccessibilityPermission = "permissions.hasRequestedAccessibilityPermission"
+        static let globalShortcut = "hotkey.globalShortcut"
         static let whisperConfiguration = "whisper.configuration"
         static let refinementConfiguration = "refinement.configuration"
     }
@@ -31,6 +34,18 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
 
     var hasRequestedAccessibilityPermission: Bool {
         defaults.bool(forKey: Keys.hasRequestedAccessibilityPermission)
+    }
+
+    var globalShortcut: GlobalShortcutDescriptor {
+        guard
+            let data = defaults.data(forKey: Keys.globalShortcut),
+            let shortcut = try? JSONDecoder().decode(GlobalShortcutDescriptor.self, from: data),
+            shortcut.isValid
+        else {
+            return .toggleDictation
+        }
+
+        return shortcut
     }
 
     var whisperConfiguration: WhisperConfiguration {
@@ -55,6 +70,14 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
 
     func markAccessibilityPermissionRequested() {
         defaults.set(true, forKey: Keys.hasRequestedAccessibilityPermission)
+    }
+
+    func saveGlobalShortcut(_ shortcut: GlobalShortcutDescriptor) {
+        guard let data = try? JSONEncoder().encode(shortcut) else {
+            return
+        }
+
+        defaults.set(data, forKey: Keys.globalShortcut)
     }
 
     func saveWhisperConfiguration(_ configuration: WhisperConfiguration) {
