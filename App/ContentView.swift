@@ -401,6 +401,54 @@ struct ContentView: View {
 
                 GlassTile {
                     VStack(alignment: .leading, spacing: 12) {
+                        SettingLabel(
+                            title: "Playback During Recording",
+                            value: appState.recordingPlaybackBehavior.title,
+                            systemImage: "speaker.wave.2"
+                        )
+
+                        Picker("Playback During Recording", selection: recordingPlaybackBehaviorBinding) {
+                            ForEach(RecordingPlaybackBehavior.allCases, id: \.self) { behavior in
+                                Text(behavior.title)
+                                    .tag(behavior)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .disabled(appState.whisperSettingsLocked)
+
+                        Text(appState.recordingPlaybackBehavior.detailText)
+                            .font(.system(size: 12))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "pause.circle")
+                                .foregroundStyle(AppTheme.tertiaryText)
+                                .frame(width: 20)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Pause Supported Apps")
+                                    .font(.system(size: 13, weight: .semibold))
+
+                                Text("Coming soon. DictaFlow will pause supported audio apps during recording and resume them afterward.")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(AppTheme.secondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Spacer(minLength: 8)
+
+                            Text("Coming Soon")
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(AppTheme.tertiaryText)
+                        }
+                        .opacity(0.72)
+                    }
+                }
+
+                GlassTile {
+                    VStack(alignment: .leading, spacing: 12) {
                         SettingLabel(title: "Task", value: appState.whisperConfiguration.taskMode.title, systemImage: "text.bubble")
 
                         Picker("Task", selection: taskModeBinding) {
@@ -765,6 +813,13 @@ struct ContentView: View {
         Binding(
             get: { appState.whisperConfiguration.taskMode },
             set: { appState.updateTaskMode($0) }
+        )
+    }
+
+    private var recordingPlaybackBehaviorBinding: Binding<RecordingPlaybackBehavior> {
+        Binding(
+            get: { appState.recordingPlaybackBehavior },
+            set: { appState.updateRecordingPlaybackBehavior($0) }
         )
     }
 

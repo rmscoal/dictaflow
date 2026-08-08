@@ -62,6 +62,7 @@ final class DictaFlowAppState: ObservableObject {
     }
     @Published private(set) var isHotkeyRegistered = false
     @Published private(set) var globalShortcut: GlobalShortcutDescriptor
+    @Published private(set) var recordingPlaybackBehavior: RecordingPlaybackBehavior
     @Published private(set) var isEditingGlobalShortcut = false
     @Published private(set) var globalShortcutEditingMessage: String?
     @Published private(set) var modelDownloadProgressText: String?
@@ -78,6 +79,7 @@ final class DictaFlowAppState: ObservableObject {
     private let settingsStore: SettingsStoreProtocol
     private let permissionService: PermissionServiceProtocol
     private let audioRecorderService: AudioRecorderServiceProtocol
+    private let audioOutputVolumeService: AudioOutputVolumeServiceProtocol
     private let hotkeyService: HotkeyServiceProtocol
     private let modelDownloadService: ModelDownloadServiceProtocol
     private let whisperService: WhisperServiceProtocol
@@ -105,6 +107,7 @@ final class DictaFlowAppState: ObservableObject {
             settingsStore: UserDefaultsSettingsStore(),
             permissionService: SystemPermissionService(),
             audioRecorderService: SystemAudioRecorderService(),
+            audioOutputVolumeService: SystemAudioOutputVolumeService(),
             hotkeyService: CarbonHotkeyService(),
             modelDownloadService: WhisperModelDownloadService(),
             whisperService: WhisperCPPService(),
@@ -119,6 +122,7 @@ final class DictaFlowAppState: ObservableObject {
         settingsStore: SettingsStoreProtocol,
         permissionService: PermissionServiceProtocol,
         audioRecorderService: AudioRecorderServiceProtocol,
+        audioOutputVolumeService: AudioOutputVolumeServiceProtocol,
         hotkeyService: HotkeyServiceProtocol,
         modelDownloadService: ModelDownloadServiceProtocol,
         whisperService: WhisperServiceProtocol,
@@ -133,6 +137,7 @@ final class DictaFlowAppState: ObservableObject {
         self.settingsStore = settingsStore
         self.permissionService = permissionService
         self.audioRecorderService = audioRecorderService
+        self.audioOutputVolumeService = audioOutputVolumeService
         self.hotkeyService = hotkeyService
         self.modelDownloadService = modelDownloadService
         self.whisperService = whisperService
@@ -161,6 +166,7 @@ final class DictaFlowAppState: ObservableObject {
         self.statusMessage = ""
         self.recordingAudioLevel = 0
         self.globalShortcut = settingsStore.globalShortcut
+        self.recordingPlaybackBehavior = settingsStore.recordingPlaybackBehavior
         self.globalShortcutEditingMessage = nil
         self.modelDownloadProgressText = nil
         self.isRefinementRuntimeAvailable = false
@@ -652,6 +658,20 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
+    func updateRecordingPlaybackBehavior(_ behavior: RecordingPlaybackBehavior) {
+        guard !whisperSettingsLocked else {
+            return
+        }
+
+        guard recordingPlaybackBehavior != behavior else {
+            return
+        }
+
+        recordingPlaybackBehavior = behavior
+        settingsStore.saveRecordingPlaybackBehavior(behavior)
+        updateStatusMessage()
+    }
+
     func updateInputLanguage(_ inputLanguage: WhisperInputLanguage) {
         guard whisperConfiguration.inputLanguage != inputLanguage else {
             return
@@ -751,6 +771,7 @@ final class DictaFlowAppState: ObservableObject {
     func resetWhisperSettingsToDefaults() {
         whisperConfiguration = .default
         refinementConfiguration = .default
+        recordingPlaybackBehavior = .default
         reloadRefinementPromptText()
         isRefinementServerPreparing = false
         Task { [transcriptRefinementService] in
@@ -758,6 +779,7 @@ final class DictaFlowAppState: ObservableObject {
         }
         persistWhisperConfiguration()
         persistRefinementConfiguration()
+        settingsStore.saveRecordingPlaybackBehavior(recordingPlaybackBehavior)
         updateStatusMessage()
     }
 
@@ -968,12 +990,14 @@ final class DictaFlowAppState: ObservableObject {
 
         do {
             try audioRecorderService.discardRecording()
+            restoreRecordingPlaybackAdjustment()
             recordingState = .idle
             pendingInsertionTargetApplication = nil
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Recording cancelled.")
             updateStatusMessage()
         } catch {
+            restoreRecordingPlaybackAdjustment()
             recordingState = .idle
             pendingInsertionTargetApplication = nil
             setRecordingOverlaySessionActive(false)
@@ -1057,6 +1081,7 @@ final class DictaFlowAppState: ObservableObject {
 
     func prepareForTermination() {
         stopRecordingMetering()
+        restoreRecordingPlaybackAdjustment()
         recordingOverlayRouter?.updateOverlay(nil, cancelAction: {})
         hotkeyService.unregisterToggleHotkey()
         Task { [transcriptRefinementService] in
@@ -1392,11 +1417,13 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         do {
+            beginRecordingPlaybackAdjustment()
             let fileURL = try await audioRecorderService.startRecording()
             recordingState = .recording(startedAt: Date(), fileURL: fileURL)
             startRecordingMetering()
             updateStatusMessage()
         } catch {
+            restoreRecordingPlaybackAdjustment()
             stopRecordingMetering()
             recordingState = .idle
             setRecordingOverlaySessionActive(false)
@@ -1412,17 +1439,41 @@ final class DictaFlowAppState: ObservableObject {
 
         do {
             let capture = try await audioRecorderService.stopRecording()
+            restoreRecordingPlaybackAdjustment()
             lastCapture = capture
             microphonePermissionState = permissionService.currentMicrophonePermissionStatus()
             recordingState = .idle
             updateStatusMessage()
             await transcribe(capture: capture)
         } catch {
+            restoreRecordingPlaybackAdjustment()
             stopRecordingMetering()
             recordingState = .idle
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Could not stop recording cleanly. \(error.localizedDescription)")
             showMainWindow()
+        }
+    }
+
+    private func beginRecordingPlaybackAdjustment() {
+        guard recordingPlaybackBehavior == .lowerSystemVolume else {
+            return
+        }
+
+        do {
+            try audioOutputVolumeService.beginDucking()
+        } catch {
+            logger.error("Could not lower system output volume: \(error.localizedDescription, privacy: .public)")
+            setPreservedStatusMessage("Could not lower system output volume. Recording will continue at its current volume.")
+        }
+    }
+
+    private func restoreRecordingPlaybackAdjustment() {
+        do {
+            try audioOutputVolumeService.restoreDucking()
+        } catch {
+            logger.error("Could not restore system output volume: \(error.localizedDescription, privacy: .public)")
+            setPreservedStatusMessage("Could not restore the system output volume automatically. Check your Mac's sound volume.")
         }
     }
 

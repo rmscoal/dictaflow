@@ -4,11 +4,13 @@ protocol SettingsStoreProtocol: AnyObject {
     var shouldShowMainWindowOnLaunch: Bool { get }
     var hasRequestedAccessibilityPermission: Bool { get }
     var globalShortcut: GlobalShortcutDescriptor { get }
+    var recordingPlaybackBehavior: RecordingPlaybackBehavior { get }
     var whisperConfiguration: WhisperConfiguration { get }
     var refinementConfiguration: RefinementConfiguration { get }
     func markInitialWindowPresentationComplete()
     func markAccessibilityPermissionRequested()
     func saveGlobalShortcut(_ shortcut: GlobalShortcutDescriptor)
+    func saveRecordingPlaybackBehavior(_ behavior: RecordingPlaybackBehavior)
     func saveWhisperConfiguration(_ configuration: WhisperConfiguration)
     func saveRefinementConfiguration(_ configuration: RefinementConfiguration)
 }
@@ -18,6 +20,7 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
         static let hasPresentedInitialWindow = "app.hasPresentedInitialWindow"
         static let hasRequestedAccessibilityPermission = "permissions.hasRequestedAccessibilityPermission"
         static let globalShortcut = "hotkey.globalShortcut"
+        static let recordingPlaybackBehavior = "audio.recordingPlaybackBehavior"
         static let whisperConfiguration = "whisper.configuration"
         static let refinementConfiguration = "refinement.configuration"
     }
@@ -56,6 +59,17 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
         return (try? JSONDecoder().decode(WhisperConfiguration.self, from: data)) ?? .default
     }
 
+    var recordingPlaybackBehavior: RecordingPlaybackBehavior {
+        guard
+            let rawValue = defaults.string(forKey: Keys.recordingPlaybackBehavior),
+            let behavior = RecordingPlaybackBehavior(rawValue: rawValue)
+        else {
+            return .default
+        }
+
+        return behavior
+    }
+
     var refinementConfiguration: RefinementConfiguration {
         guard let data = defaults.data(forKey: Keys.refinementConfiguration) else {
             return .default
@@ -78,6 +92,10 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
         }
 
         defaults.set(data, forKey: Keys.globalShortcut)
+    }
+
+    func saveRecordingPlaybackBehavior(_ behavior: RecordingPlaybackBehavior) {
+        defaults.set(behavior.rawValue, forKey: Keys.recordingPlaybackBehavior)
     }
 
     func saveWhisperConfiguration(_ configuration: WhisperConfiguration) {
