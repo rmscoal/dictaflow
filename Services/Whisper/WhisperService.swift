@@ -30,7 +30,7 @@ actor WhisperCPPService: WhisperServiceProtocol {
         category: "Whisper"
     )
     private let audioDecodingService: AudioDecodingServiceProtocol
-    private var cachedContexts: [URL: WhisperContextBox] = [:]
+    private var cachedContext: (modelURL: URL, context: WhisperContextBox)?
 
     nonisolated init(audioDecodingService: AudioDecodingServiceProtocol = AVAudioDecodingService()) {
         self.audioDecodingService = audioDecodingService
@@ -57,9 +57,11 @@ actor WhisperCPPService: WhisperServiceProtocol {
     }
 
     private func context(for modelURL: URL) throws -> WhisperContextBox {
-        if let existingContext = cachedContexts[modelURL] {
-            return existingContext
+        if let cachedContext, cachedContext.modelURL == modelURL {
+            return cachedContext.context
         }
+
+        cachedContext = nil
 
         var contextParameters = whisper_context_default_params()
         contextParameters.flash_attn = true
@@ -70,7 +72,7 @@ actor WhisperCPPService: WhisperServiceProtocol {
         }
 
         let context = WhisperContextBox(pointer: contextPointer)
-        cachedContexts[modelURL] = context
+        cachedContext = (modelURL, context)
         return context
     }
 

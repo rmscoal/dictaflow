@@ -1,10 +1,10 @@
 import CoreAudio
 import Foundation
 
-@MainActor
-protocol AudioOutputVolumeServiceProtocol: AnyObject {
-    func beginDucking() throws
-    func restoreDucking() throws
+protocol AudioOutputVolumeServiceProtocol: AnyObject, Sendable {
+    func beginDucking() async throws
+    func restoreDucking() async throws
+    func restoreDuckingForTermination() throws
 }
 
 enum AudioOutputVolumeServiceError: LocalizedError {
@@ -27,8 +27,7 @@ enum AudioOutputVolumeServiceError: LocalizedError {
     }
 }
 
-@MainActor
-final class SystemAudioOutputVolumeService: AudioOutputVolumeServiceProtocol {
+final class SystemAudioOutputVolumeService: AudioOutputVolumeServiceProtocol, @unchecked Sendable {
     private struct VolumeControl {
         let deviceID: AudioDeviceID
         let address: AudioObjectPropertyAddress
@@ -41,10 +40,43 @@ final class SystemAudioOutputVolumeService: AudioOutputVolumeServiceProtocol {
     }
 
     private var volumeSnapshot: VolumeSnapshot?
+    private let queue = DispatchQueue(label: "com.dictaflow.audio-output-volume")
     private let duckingMultiplier: Float32 = 0.5
     private let restoreTolerance: Float32 = 0.01
 
-    func beginDucking() throws {
+    func beginDucking() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { [self] in
+                do {
+                    try beginDuckingOnQueue()
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func restoreDucking() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { [self] in
+                do {
+                    try restoreDuckingOnQueue()
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func restoreDuckingForTermination() throws {
+        try queue.sync { [self] in
+            try restoreDuckingOnQueue()
+        }
+    }
+
+    private func beginDuckingOnQueue() throws {
         guard volumeSnapshot == nil else {
             return
         }
@@ -74,7 +106,7 @@ final class SystemAudioOutputVolumeService: AudioOutputVolumeServiceProtocol {
         )
     }
 
-    func restoreDucking() throws {
+    private func restoreDuckingOnQueue() throws {
         guard let volumeSnapshot else {
             return
         }

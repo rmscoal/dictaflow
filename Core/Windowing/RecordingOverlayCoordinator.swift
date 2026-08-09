@@ -1,5 +1,6 @@
 import Carbon
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -7,6 +8,7 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
     private let panelSize = NSSize(width: 286, height: 52)
     private let cancellablePanelSize = NSSize(width: 296, height: 52)
     private var panel: RecordingOverlayPanel?
+    private var viewModel: RecordingOverlayViewModel?
     private var isInputEnabled = false
     private var localEscapeMonitor: Any?
     private var escapeEventTapController: EscapeEventTapController?
@@ -20,7 +22,10 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
             return
         }
 
-        let panel = makePanelIfNeeded()
+        let panel = makePanelIfNeeded(
+            initialPresentation: presentation,
+            cancelAction: cancelAction
+        )
         let currentPanelSize = presentation.isCancellable ? cancellablePanelSize : panelSize
         let wasVisible = panel.isVisible
         let wasInputEnabled = isInputEnabled
@@ -36,23 +41,16 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
             stopEscapeMonitors()
         }
 
-        if let hostingView = panel.contentView as? TransparentHostingView<RecordingOverlayView> {
-            hostingView.rootView = RecordingOverlayView(
-                presentation: presentation,
-                panelWidth: currentPanelSize.width,
-                cancelAction: cancelAction
-            )
-        } else {
-            panel.contentView = TransparentHostingView(
-                rootView: RecordingOverlayView(
-                    presentation: presentation,
-                    panelWidth: currentPanelSize.width,
-                    cancelAction: cancelAction
-                )
-            )
+        viewModel?.update(
+            presentation: presentation,
+            panelWidth: currentPanelSize.width,
+            cancelAction: cancelAction
+        )
+
+        if !wasVisible || shouldEnableInput != wasInputEnabled {
+            panel.setContentSize(currentPanelSize)
+            position(panel, size: currentPanelSize)
         }
-        panel.setContentSize(currentPanelSize)
-        position(panel, size: currentPanelSize)
 
         guard !wasVisible else {
             if shouldEnableInput, !wasInputEnabled {
@@ -84,6 +82,7 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
         isInputEnabled = false
         stopEscapeMonitors()
         panel.resignKey()
+        viewModel?.clearCancelAction()
 
         guard panel.isVisible else {
             return
@@ -98,7 +97,10 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
         }
     }
 
-    private func makePanelIfNeeded() -> RecordingOverlayPanel {
+    private func makePanelIfNeeded(
+        initialPresentation: RecordingOverlayPresentation,
+        cancelAction: @escaping () -> Void
+    ) -> RecordingOverlayPanel {
         if let panel {
             return panel
         }
@@ -121,6 +123,16 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
         panel.isReleasedWhenClosed = false
         panel.tabbingMode = .disallowed
 
+        let viewModel = RecordingOverlayViewModel(
+            presentation: initialPresentation,
+            panelWidth: panelSize.width,
+            cancelAction: cancelAction
+        )
+        panel.contentView = TransparentHostingView(
+            rootView: RecordingOverlayView(viewModel: viewModel)
+        )
+
+        self.viewModel = viewModel
         self.panel = panel
         return panel
     }
@@ -298,10 +310,51 @@ private nonisolated func isBareEscapeKeyEvent(_ event: CGEvent) -> Bool {
         && event.flags.intersection(disallowedFlags).isEmpty
 }
 
+@MainActor
+private final class RecordingOverlayViewModel: ObservableObject {
+    @Published private(set) var presentation: RecordingOverlayPresentation
+    @Published private(set) var panelWidth: CGFloat
+    private var cancelAction: (() -> Void)?
+
+    init(
+        presentation: RecordingOverlayPresentation,
+        panelWidth: CGFloat,
+        cancelAction: @escaping () -> Void
+    ) {
+        self.presentation = presentation
+        self.panelWidth = panelWidth
+        self.cancelAction = cancelAction
+    }
+
+    func update(
+        presentation: RecordingOverlayPresentation,
+        panelWidth: CGFloat,
+        cancelAction: @escaping () -> Void
+    ) {
+        if self.presentation != presentation {
+            self.presentation = presentation
+        }
+        if self.panelWidth != panelWidth {
+            self.panelWidth = panelWidth
+        }
+        self.cancelAction = cancelAction
+    }
+
+    func cancel() {
+        cancelAction?()
+    }
+
+    func clearCancelAction() {
+        cancelAction = nil
+    }
+}
+
 private struct RecordingOverlayView: View {
-    let presentation: RecordingOverlayPresentation
-    let panelWidth: CGFloat
-    let cancelAction: () -> Void
+    @ObservedObject var viewModel: RecordingOverlayViewModel
+
+    private var presentation: RecordingOverlayPresentation {
+        viewModel.presentation
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -319,7 +372,7 @@ private struct RecordingOverlayView: View {
             }
 
             if presentation.isCancellable {
-                Button(role: .cancel, action: cancelAction) {
+                Button(role: .cancel, action: viewModel.cancel) {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(OverlayTheme.primaryText)
@@ -336,7 +389,7 @@ private struct RecordingOverlayView: View {
             }
         }
         .padding(.horizontal, 13)
-        .frame(width: panelWidth, height: 52)
+        .frame(width: viewModel.panelWidth, height: 52)
         .background(OverlayTheme.panelFill, in: Capsule(style: .continuous))
         .overlay {
             Capsule(style: .continuous)

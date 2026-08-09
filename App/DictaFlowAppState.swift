@@ -55,7 +55,7 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var lastTranscription: WhisperTranscriptionResult?
     @Published private(set) var lastTextInsertion: TextInsertionResult?
     @Published private(set) var statusMessage: String
-    @Published private(set) var recordingAudioLevel: Double {
+    private var recordingAudioLevel: Double {
         didSet {
             updateRecordingOverlay()
         }
@@ -981,7 +981,7 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    func cancelRecording() {
+    func cancelRecording() async {
         guard recordingState.isRecording else {
             return
         }
@@ -990,14 +990,14 @@ final class DictaFlowAppState: ObservableObject {
 
         do {
             try audioRecorderService.discardRecording()
-            restoreRecordingPlaybackAdjustment()
+            await restoreRecordingPlaybackAdjustment()
             recordingState = .idle
             pendingInsertionTargetApplication = nil
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Recording cancelled.")
             updateStatusMessage()
         } catch {
-            restoreRecordingPlaybackAdjustment()
+            await restoreRecordingPlaybackAdjustment()
             recordingState = .idle
             pendingInsertionTargetApplication = nil
             setRecordingOverlaySessionActive(false)
@@ -1081,7 +1081,7 @@ final class DictaFlowAppState: ObservableObject {
 
     func prepareForTermination() {
         stopRecordingMetering()
-        restoreRecordingPlaybackAdjustment()
+        restoreRecordingPlaybackAdjustmentForTermination()
         recordingOverlayRouter?.updateOverlay(nil, cancelAction: {})
         hotkeyService.unregisterToggleHotkey()
         Task { [transcriptRefinementService] in
@@ -1417,13 +1417,13 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         do {
-            beginRecordingPlaybackAdjustment()
+            await beginRecordingPlaybackAdjustment()
             let fileURL = try await audioRecorderService.startRecording()
             recordingState = .recording(startedAt: Date(), fileURL: fileURL)
             startRecordingMetering()
             updateStatusMessage()
         } catch {
-            restoreRecordingPlaybackAdjustment()
+            await restoreRecordingPlaybackAdjustment()
             stopRecordingMetering()
             recordingState = .idle
             setRecordingOverlaySessionActive(false)
@@ -1439,14 +1439,14 @@ final class DictaFlowAppState: ObservableObject {
 
         do {
             let capture = try await audioRecorderService.stopRecording()
-            restoreRecordingPlaybackAdjustment()
+            await restoreRecordingPlaybackAdjustment()
             lastCapture = capture
             microphonePermissionState = permissionService.currentMicrophonePermissionStatus()
             recordingState = .idle
             updateStatusMessage()
             await transcribe(capture: capture)
         } catch {
-            restoreRecordingPlaybackAdjustment()
+            await restoreRecordingPlaybackAdjustment()
             stopRecordingMetering()
             recordingState = .idle
             setRecordingOverlaySessionActive(false)
@@ -1455,25 +1455,33 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func beginRecordingPlaybackAdjustment() {
+    private func beginRecordingPlaybackAdjustment() async {
         guard recordingPlaybackBehavior == .lowerSystemVolume else {
             return
         }
 
         do {
-            try audioOutputVolumeService.beginDucking()
+            try await audioOutputVolumeService.beginDucking()
         } catch {
             logger.error("Could not lower system output volume: \(error.localizedDescription, privacy: .public)")
             setPreservedStatusMessage("Could not lower system output volume. Recording will continue at its current volume.")
         }
     }
 
-    private func restoreRecordingPlaybackAdjustment() {
+    private func restoreRecordingPlaybackAdjustment() async {
         do {
-            try audioOutputVolumeService.restoreDucking()
+            try await audioOutputVolumeService.restoreDucking()
         } catch {
             logger.error("Could not restore system output volume: \(error.localizedDescription, privacy: .public)")
             setPreservedStatusMessage("Could not restore the system output volume automatically. Check your Mac's sound volume.")
+        }
+    }
+
+    private func restoreRecordingPlaybackAdjustmentForTermination() {
+        do {
+            try audioOutputVolumeService.restoreDuckingForTermination()
+        } catch {
+            logger.error("Could not restore system output volume during termination: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -1518,7 +1526,7 @@ final class DictaFlowAppState: ObservableObject {
             recordingOverlayPresentation,
             cancelAction: { [weak self] in
                 Task { @MainActor [weak self] in
-                    self?.cancelRecording()
+                    await self?.cancelRecording()
                 }
             }
         )
