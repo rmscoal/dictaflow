@@ -620,6 +620,60 @@ struct ContentView: View {
                 }
 
                 GlassTile {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SettingLabel(
+                            title: "Updates",
+                            value: appState.appVersionText,
+                            systemImage: "arrow.triangle.2.circlepath"
+                        )
+
+                        Toggle(
+                            "Check GitHub for updates automatically",
+                            isOn: automaticUpdateChecksBinding
+                        )
+                        .toggleStyle(.switch)
+
+                        Text("When enabled, DictaFlow contacts GitHub at most once per day. GitHub receives normal connection metadata, such as your IP address. DictaFlow does not include an account or usage data.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        HStack(spacing: 10) {
+                            Button {
+                                appState.checkForUpdates()
+                            } label: {
+                                if appState.isCheckingForUpdates {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Label("Check for Updates", systemImage: "arrow.clockwise")
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(appState.isCheckingForUpdates)
+
+                            if let availableUpdate = appState.availableUpdate {
+                                Button {
+                                    appState.openAvailableUpdate()
+                                } label: {
+                                    Label(
+                                        "View Version \(availableUpdate.version.displayString)",
+                                        systemImage: "arrow.up.right.square"
+                                    )
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(AppTheme.accent)
+                            }
+                        }
+
+                        Text(appState.updateStatusText)
+                            .font(.system(size: 12))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                GlassTile {
                     HStack(spacing: 10) {
                         Button {
                             appState.resetWhisperSettingsToDefaults()
@@ -834,6 +888,13 @@ struct ContentView: View {
         Binding(
             get: { appState.refinementConfiguration.isEnabled },
             set: { appState.updateRefinementEnabled($0) }
+        )
+    }
+
+    private var automaticUpdateChecksBinding: Binding<Bool> {
+        Binding(
+            get: { appState.automaticallyChecksForUpdates },
+            set: { appState.updateAutomaticallyChecksForUpdates($0) }
         )
     }
 

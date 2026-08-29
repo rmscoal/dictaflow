@@ -187,6 +187,18 @@ struct MenuBarView: View {
 
             Spacer(minLength: 10)
 
+            if let availableUpdate = appState.availableUpdate {
+                Button {
+                    appState.openAvailableUpdate()
+                } label: {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 30, height: 30)
+                }
+                .buttonStyle(GhostButtonStyle(radius: 10))
+                .help("Version \(availableUpdate.version.displayString) is available")
+            }
+
             Button {
                 appState.openSettingsWindow()
             } label: {
