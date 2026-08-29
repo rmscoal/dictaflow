@@ -3,12 +3,17 @@ import Foundation
 protocol SettingsStoreProtocol: AnyObject {
     var shouldShowMainWindowOnLaunch: Bool { get }
     var hasRequestedAccessibilityPermission: Bool { get }
+    var automaticallyChecksForUpdates: Bool { get }
+    var lastUpdateCheckDate: Date? { get }
+    var cachedAvailableUpdate: AppRelease? { get }
     var globalShortcut: GlobalShortcutDescriptor { get }
     var recordingPlaybackBehavior: RecordingPlaybackBehavior { get }
     var whisperConfiguration: WhisperConfiguration { get }
     var refinementConfiguration: RefinementConfiguration { get }
     func markInitialWindowPresentationComplete()
     func markAccessibilityPermissionRequested()
+    func saveAutomaticallyChecksForUpdates(_ isEnabled: Bool)
+    func saveUpdateCheck(date: Date, availableUpdate: AppRelease?)
     func saveGlobalShortcut(_ shortcut: GlobalShortcutDescriptor)
     func saveRecordingPlaybackBehavior(_ behavior: RecordingPlaybackBehavior)
     func saveWhisperConfiguration(_ configuration: WhisperConfiguration)
@@ -19,6 +24,9 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
     private enum Keys {
         static let hasPresentedInitialWindow = "app.hasPresentedInitialWindow"
         static let hasRequestedAccessibilityPermission = "permissions.hasRequestedAccessibilityPermission"
+        static let automaticallyChecksForUpdates = "updates.automaticallyChecks"
+        static let lastUpdateCheckDate = "updates.lastCheckDate"
+        static let cachedAvailableUpdate = "updates.cachedAvailableRelease"
         static let globalShortcut = "hotkey.globalShortcut"
         static let recordingPlaybackBehavior = "audio.recordingPlaybackBehavior"
         static let whisperConfiguration = "whisper.configuration"
@@ -37,6 +45,26 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
 
     var hasRequestedAccessibilityPermission: Bool {
         defaults.bool(forKey: Keys.hasRequestedAccessibilityPermission)
+    }
+
+    var automaticallyChecksForUpdates: Bool {
+        if defaults.object(forKey: Keys.automaticallyChecksForUpdates) == nil {
+            return Bundle.main.bundleIdentifier == "com.dictaflow"
+        }
+
+        return defaults.bool(forKey: Keys.automaticallyChecksForUpdates)
+    }
+
+    var lastUpdateCheckDate: Date? {
+        defaults.object(forKey: Keys.lastUpdateCheckDate) as? Date
+    }
+
+    var cachedAvailableUpdate: AppRelease? {
+        guard let data = defaults.data(forKey: Keys.cachedAvailableUpdate) else {
+            return nil
+        }
+
+        return try? JSONDecoder().decode(AppRelease.self, from: data)
     }
 
     var globalShortcut: GlobalShortcutDescriptor {
@@ -84,6 +112,24 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
 
     func markAccessibilityPermissionRequested() {
         defaults.set(true, forKey: Keys.hasRequestedAccessibilityPermission)
+    }
+
+    func saveAutomaticallyChecksForUpdates(_ isEnabled: Bool) {
+        defaults.set(isEnabled, forKey: Keys.automaticallyChecksForUpdates)
+    }
+
+    func saveUpdateCheck(date: Date, availableUpdate: AppRelease?) {
+        defaults.set(date, forKey: Keys.lastUpdateCheckDate)
+
+        guard
+            let availableUpdate,
+            let data = try? JSONEncoder().encode(availableUpdate)
+        else {
+            defaults.removeObject(forKey: Keys.cachedAvailableUpdate)
+            return
+        }
+
+        defaults.set(data, forKey: Keys.cachedAvailableUpdate)
     }
 
     func saveGlobalShortcut(_ shortcut: GlobalShortcutDescriptor) {

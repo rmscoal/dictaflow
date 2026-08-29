@@ -71,6 +71,10 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var refinementPromptText: String
     @Published private(set) var isRefinementPromptDirty = false
     @Published private(set) var hasCustomRefinementPrompt = false
+    @Published private(set) var availableUpdate: AppRelease?
+    @Published private(set) var isCheckingForUpdates = false
+    @Published private(set) var updateCheckMessage: String?
+    @Published private(set) var automaticallyChecksForUpdates: Bool
 
     let launchExperience: AppLaunchExperience
     @Published private(set) var whisperConfiguration: WhisperConfiguration
@@ -87,10 +91,12 @@ final class DictaFlowAppState: ObservableObject {
     private let refinementPromptStore: RefinementPromptStoreProtocol
     private let textInsertionService: TextInsertionServiceProtocol
     private let localNotificationService: LocalNotificationServiceProtocol
+    private let appUpdateService: AppUpdateChecking
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "DictaFlow",
         category: "AppState"
     )
+    private static let automaticUpdateCheckInterval: TimeInterval = 24 * 60 * 60
     private weak var mainWindowRouter: MainWindowRouting?
     private weak var settingsWindowRouter: SettingsWindowRouting?
     private weak var recordingOverlayRouter: RecordingOverlayRouting?
@@ -114,7 +120,8 @@ final class DictaFlowAppState: ObservableObject {
             transcriptRefinementService: LlamaCLITranscriptRefinementService(),
             refinementPromptStore: FileRefinementPromptStore(),
             textInsertionService: SystemTextInsertionService(),
-            localNotificationService: UserLocalNotificationService()
+            localNotificationService: UserLocalNotificationService(),
+            appUpdateService: GitHubReleaseUpdateService()
         )
     }
 
@@ -129,7 +136,8 @@ final class DictaFlowAppState: ObservableObject {
         transcriptRefinementService: TranscriptRefinementServiceProtocol,
         refinementPromptStore: RefinementPromptStoreProtocol,
         textInsertionService: TextInsertionServiceProtocol,
-        localNotificationService: LocalNotificationServiceProtocol
+        localNotificationService: LocalNotificationServiceProtocol,
+        appUpdateService: AppUpdateChecking
     ) {
         let initialRefinementConfiguration = settingsStore.refinementConfiguration
         let initialPromptText = refinementPromptStore.promptTemplate()
@@ -145,6 +153,7 @@ final class DictaFlowAppState: ObservableObject {
         self.refinementPromptStore = refinementPromptStore
         self.textInsertionService = textInsertionService
         self.localNotificationService = localNotificationService
+        self.appUpdateService = appUpdateService
         self.launchExperience = settingsStore.shouldShowMainWindowOnLaunch ? .firstLaunch : .returningUser
         self.whisperConfiguration = settingsStore.whisperConfiguration
         self.refinementConfiguration = initialRefinementConfiguration
@@ -171,6 +180,10 @@ final class DictaFlowAppState: ObservableObject {
         self.modelDownloadProgressText = nil
         self.isRefinementRuntimeAvailable = false
         self.isRefinementServerPreparing = false
+        self.availableUpdate = nil
+        self.isCheckingForUpdates = false
+        self.updateCheckMessage = nil
+        self.automaticallyChecksForUpdates = settingsStore.automaticallyChecksForUpdates
         self.preservedStatusMessage = nil
         self.lastKnownExternalTargetApplication = Self.makeInsertionTargetApplication(from: NSWorkspace.shared.frontmostApplication)
         configureWorkspaceObservers()
@@ -195,6 +208,40 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         return isMainWindowVisible ? "waveform.circle.fill" : "waveform.circle"
+    }
+
+    var appVersionText: String {
+        let marketingVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let buildVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+
+        switch (marketingVersion, buildVersion) {
+        case (.some(let marketingVersion), .some(let buildVersion)):
+            return "\(marketingVersion) (\(buildVersion))"
+        case (.some(let marketingVersion), .none):
+            return marketingVersion
+        default:
+            return "Unknown"
+        }
+    }
+
+    var updateStatusText: String {
+        if isCheckingForUpdates {
+            return "Checking GitHub for updates."
+        }
+
+        if let updateCheckMessage {
+            return updateCheckMessage
+        }
+
+        if let availableUpdate {
+            return "Version \(availableUpdate.version.displayString) is available."
+        }
+
+        if automaticallyChecksForUpdates {
+            return "DictaFlow checks GitHub for a new release at most once per day."
+        }
+
+        return "Automatic update checks are off."
     }
 
     var menuBarStatusText: String {
@@ -611,6 +658,8 @@ final class DictaFlowAppState: ObservableObject {
         registerGlobalHotkey()
         refreshRefinementRuntimeAvailability()
         prepareDefaultModelIfNeeded()
+        restoreCachedAvailableUpdate()
+        checkForUpdatesIfNeeded()
 
         if launchExperience == .firstLaunch {
             showMainWindow()
@@ -637,6 +686,32 @@ final class DictaFlowAppState: ObservableObject {
 
     func openSettingsWindow() {
         showMainWindowPage(.settings)
+    }
+
+    func updateAutomaticallyChecksForUpdates(_ isEnabled: Bool) {
+        guard automaticallyChecksForUpdates != isEnabled else {
+            return
+        }
+
+        automaticallyChecksForUpdates = isEnabled
+        settingsStore.saveAutomaticallyChecksForUpdates(isEnabled)
+        updateCheckMessage = nil
+
+        if isEnabled {
+            checkForUpdatesIfNeeded()
+        }
+    }
+
+    func checkForUpdates() {
+        performUpdateCheck(userInitiated: true)
+    }
+
+    func openAvailableUpdate() {
+        guard let availableUpdate, availableUpdate.hasTrustedReleasePageURL else {
+            return
+        }
+
+        NSWorkspace.shared.open(availableUpdate.releasePageURL)
     }
 
     func closeMainWindow() {
@@ -1852,6 +1927,104 @@ final class DictaFlowAppState: ObservableObject {
 
     private func clearPreservedStatusMessage() {
         preservedStatusMessage = nil
+    }
+
+    private var installedAppVersion: AppVersion? {
+        guard
+            let versionValue = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        else {
+            return nil
+        }
+
+        return AppVersion(versionValue)
+    }
+
+    private func restoreCachedAvailableUpdate() {
+        guard
+            let installedAppVersion,
+            let cachedAvailableUpdate = settingsStore.cachedAvailableUpdate,
+            cachedAvailableUpdate.hasTrustedReleasePageURL,
+            cachedAvailableUpdate.version > installedAppVersion
+        else {
+            availableUpdate = nil
+            return
+        }
+
+        availableUpdate = cachedAvailableUpdate
+    }
+
+    private func checkForUpdatesIfNeeded() {
+        guard automaticallyChecksForUpdates, !isCheckingForUpdates else {
+            return
+        }
+
+        if let lastUpdateCheckDate = settingsStore.lastUpdateCheckDate {
+            let elapsedTime = Date().timeIntervalSince(lastUpdateCheckDate)
+            if elapsedTime >= 0, elapsedTime < Self.automaticUpdateCheckInterval {
+                return
+            }
+        }
+
+        performUpdateCheck(userInitiated: false)
+    }
+
+    private func performUpdateCheck(userInitiated: Bool) {
+        guard !isCheckingForUpdates else {
+            return
+        }
+
+        guard let installedAppVersion else {
+            if userInitiated {
+                updateCheckMessage = "DictaFlow could not read its installed version."
+            }
+            return
+        }
+
+        isCheckingForUpdates = true
+        let checkDate = Date()
+        settingsStore.saveUpdateCheck(date: checkDate, availableUpdate: availableUpdate)
+        if userInitiated {
+            updateCheckMessage = nil
+        }
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            defer {
+                self.isCheckingForUpdates = false
+            }
+
+            do {
+                let latestRelease = try await self.appUpdateService.latestRelease()
+                let newerRelease = latestRelease.version > installedAppVersion ? latestRelease : nil
+
+                self.availableUpdate = newerRelease
+                self.settingsStore.saveUpdateCheck(date: checkDate, availableUpdate: newerRelease)
+
+                if userInitiated {
+                    self.updateCheckMessage = newerRelease == nil
+                        ? "DictaFlow is up to date."
+                        : nil
+                } else {
+                    self.updateCheckMessage = nil
+                }
+            } catch AppUpdateCheckError.noPublishedRelease {
+                self.availableUpdate = nil
+                self.settingsStore.saveUpdateCheck(date: checkDate, availableUpdate: nil)
+
+                if userInitiated {
+                    self.updateCheckMessage = AppUpdateCheckError.noPublishedRelease.localizedDescription
+                } else {
+                    self.updateCheckMessage = nil
+                }
+            } catch {
+                if userInitiated {
+                    self.updateCheckMessage = "Could not check for updates. \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     private func configureWorkspaceObservers() {

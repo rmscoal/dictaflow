@@ -49,6 +49,7 @@ DictaFlow is local-first:
 | Models | Stored under `~/Library/Application Support/DictaFlow/Models`. |
 | Clipboard | May be used briefly for paste-based insertion, with an attempt to restore the previous contents. |
 | Logs | Whisper logs audio stats and transcript length, not transcript contents. |
+| Update checks | The production app checks the public GitHub Releases API at most once per day when automatic checks are enabled. GitHub receives normal connection metadata such as the user’s IP address. DictaFlow sends no account, transcript, model, or usage data. |
 
 ## Requirements
 
@@ -57,7 +58,18 @@ DictaFlow is local-first:
 - Microphone permission for recording.
 - Accessibility permission for automatic insertion into other apps.
 - Network access for first-time model downloads.
+- Network access for optional GitHub release checks.
 - `llama-server` bundled in public builds for local transcript refinement.
+
+## Updates
+
+DictaFlow checks only published, non-prerelease GitHub Releases. Release tags
+must use numeric versions such as `v1.0.1`, and the release must include a
+non-empty `.dmg` asset. When a newer version is available, DictaFlow shows an
+update button that opens the release page in the user’s browser. Downloading
+and installing the signed, notarized DMG remains a manual step. Automatic
+checks are enabled by default in the production app, can be disabled in
+Settings, and are disabled by default in DictaFlow Dev.
 
 ## Build and Run Locally
 
