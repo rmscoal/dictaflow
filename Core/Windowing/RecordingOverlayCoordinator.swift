@@ -540,6 +540,10 @@ private enum OverlayTheme {
 }
 
 private final class TransparentHostingView<Content: View>: NSHostingView<Content> {
+    deinit {
+        // Work around swiftlang/swift#87736 in Swift 6.3.x.
+    }
+
     override var isOpaque: Bool {
         get {
             false
