@@ -9,6 +9,7 @@ protocol PermissionServiceProtocol: AnyObject {
     func requestMicrophonePermissionIfNeeded() async -> MicrophonePermissionState
     func isAccessibilityPermissionGranted() -> Bool
     func requestAccessibilityPermission() -> Bool
+    func openMicrophoneSettings()
     func openAccessibilitySettings()
 }
 
@@ -52,6 +53,14 @@ final class SystemPermissionService: PermissionServiceProtocol {
     func requestAccessibilityPermission() -> Bool {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
+    }
+
+    func openMicrophoneSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") else {
+            return
+        }
+
+        NSWorkspace.shared.open(url)
     }
 
     func openAccessibilitySettings() {

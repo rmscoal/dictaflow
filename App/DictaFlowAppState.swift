@@ -23,17 +23,21 @@ protocol RecordingOverlayRouting: AnyObject {
 }
 
 enum MainWindowPage {
-    case dashboard
-    case models
-    case settings
+    case overview
+    case dictation
+    case refinement
     case history
+    case shortcutAndAudio
+    case models
+    case permissions
+    case updates
 }
 
 @MainActor
 final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isMainWindowVisible = false
     @Published private(set) var isSettingsWindowVisible = false
-    @Published var mainWindowPage: MainWindowPage = .dashboard
+    @Published var mainWindowPage: MainWindowPage = .overview
     @Published private(set) var microphonePermissionState: MicrophonePermissionState
     @Published private(set) var accessibilityPermissionState: AccessibilityPermissionState
     @Published private(set) var recordingState: DictationRecordingState {
@@ -222,6 +226,10 @@ final class DictaFlowAppState: ObservableObject {
         default:
             return "Unknown"
         }
+    }
+
+    var appDisplayNameText: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "DictaFlow"
     }
 
     var updateStatusText: String {
@@ -671,12 +679,12 @@ final class DictaFlowAppState: ObservableObject {
 
     func showMainWindow() {
         cancelGlobalShortcutEditing()
-        mainWindowPage = .dashboard
+        mainWindowPage = .overview
         mainWindowRouter?.showMainWindow()
     }
 
     func showMainWindowPage(_ page: MainWindowPage) {
-        if page != .settings {
+        if page != .shortcutAndAudio {
             cancelGlobalShortcutEditing()
         }
 
@@ -685,7 +693,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func openSettingsWindow() {
-        showMainWindowPage(.settings)
+        showMainWindowPage(.shortcutAndAudio)
     }
 
     func updateAutomaticallyChecksForUpdates(_ isEnabled: Bool) {
@@ -786,9 +794,8 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         guard isSelectedRefinementModelPrepared else {
-            mainWindowPage = .settings
             setPreservedStatusMessage("Choose and prepare a refinement model before turning on local cleanup.")
-            showMainWindow()
+            showMainWindowPage(.refinement)
             return
         }
 
@@ -1105,6 +1112,10 @@ final class DictaFlowAppState: ObservableObject {
 
     func openAccessibilitySettings() {
         permissionService.openAccessibilitySettings()
+    }
+
+    func openMicrophoneSettings() {
+        permissionService.openMicrophoneSettings()
     }
 
     func openModelsFolder() {
@@ -2028,6 +2039,14 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func configureWorkspaceObservers() {
+        NotificationCenter.default
+            .publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in
+                self?.refreshMicrophonePermissionStatus()
+                self?.refreshAccessibilityPermissionStatus()
+            }
+            .store(in: &workspaceObservers)
+
         NSWorkspace.shared.notificationCenter
             .publisher(for: NSWorkspace.didActivateApplicationNotification)
             .compactMap { notification in
