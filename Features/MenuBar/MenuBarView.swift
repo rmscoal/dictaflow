@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MenuBarView: View {
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject var appState: DictaFlowAppState
 
     var body: some View {
@@ -161,10 +162,11 @@ struct MenuBarView: View {
     private var footerActions: some View {
         HStack(spacing: 6) {
             Button {
-                appState.showMainWindow()
+                dismiss()
+                appState.openSettingsWindow()
             } label: {
                 HStack(spacing: 7) {
-                    Text("Open Main App")
+                    Text("Open Settings")
                     Spacer(minLength: 4)
                     Image(systemName: "arrow.up.right")
                         .foregroundStyle(MenuTheme.tertiaryText)
@@ -186,16 +188,6 @@ struct MenuBarView: View {
                 .buttonStyle(GhostButtonStyle())
                 .help("Version \(availableUpdate.version.displayString) is available")
             }
-
-            Button {
-                appState.openSettingsWindow()
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(width: 30, height: 30)
-            }
-            .buttonStyle(GhostButtonStyle())
-            .help("Settings")
 
             Button {
                 appState.quit()
