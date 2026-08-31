@@ -5,8 +5,15 @@ import SwiftUI
 
 @MainActor
 final class RecordingOverlayCoordinator: RecordingOverlayRouting {
-    private let panelSize = NSSize(width: 286, height: 52)
-    private let cancellablePanelSize = NSSize(width: 296, height: 52)
+    private let recordingPanelSize = NSSize(width: 220, height: 44)
+    private let processingPanelHeight: CGFloat = 44
+    private let processingHorizontalPadding: CGFloat = 14
+    private let processingMarkWidth: CGFloat = 22
+    private let processingContentSpacing: CGFloat = 9
+    private let processingTitleWidthAllowance: CGFloat = 8
+    private let minimumProcessingPanelWidth: CGFloat = 104
+    private let maximumProcessingPanelWidth: CGFloat = 360
+    private let sizeAnimationDuration: TimeInterval = 0.22
     private var panel: RecordingOverlayPanel?
     private var viewModel: RecordingOverlayViewModel?
     private var isInputEnabled = false
@@ -26,10 +33,11 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
             initialPresentation: presentation,
             cancelAction: cancelAction
         )
-        let currentPanelSize = presentation.isCancellable ? cancellablePanelSize : panelSize
+        let currentPanelSize = panelSize(for: presentation)
         let wasVisible = panel.isVisible
         let wasInputEnabled = isInputEnabled
         let shouldEnableInput = presentation.isCancellable
+        let shouldResize = panel.frame.size != currentPanelSize
 
         panel.onCancel = shouldEnableInput ? cancelAction : nil
         panel.ignoresMouseEvents = !shouldEnableInput
@@ -43,13 +51,13 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
 
         viewModel?.update(
             presentation: presentation,
-            panelWidth: currentPanelSize.width,
             cancelAction: cancelAction
         )
 
-        if !wasVisible || shouldEnableInput != wasInputEnabled {
-            panel.setContentSize(currentPanelSize)
-            position(panel, size: currentPanelSize)
+        if !wasVisible {
+            setFrame(of: panel, for: currentPanelSize, animated: false)
+        } else if shouldResize {
+            setFrame(of: panel, for: currentPanelSize, animated: true)
         }
 
         guard !wasVisible else {
@@ -105,8 +113,9 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
             return panel
         }
 
+        let initialPanelSize = panelSize(for: initialPresentation)
         let panel = RecordingOverlayPanel(
-            contentRect: NSRect(origin: .zero, size: panelSize),
+            contentRect: NSRect(origin: .zero, size: initialPanelSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -125,7 +134,6 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
 
         let viewModel = RecordingOverlayViewModel(
             presentation: initialPresentation,
-            panelWidth: panelSize.width,
             cancelAction: cancelAction
         )
         panel.contentView = TransparentHostingView(
@@ -176,7 +184,37 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
         }
     }
 
-    private func position(_ panel: NSPanel, size: NSSize) {
+    private func panelSize(for presentation: RecordingOverlayPresentation) -> NSSize {
+        switch presentation.phase {
+        case .recording:
+            return recordingPanelSize
+        case .requestingPermission,
+             .downloadingModel,
+             .transcribing,
+             .refining,
+             .requestingAccessibilityPermission,
+             .inserting:
+            let titleWidth = ceil(
+                (presentation.title as NSString).size(
+                    withAttributes: [
+                        .font: NSFont.systemFont(ofSize: 12, weight: .semibold)
+                    ]
+                ).width
+            )
+            let contentWidth = processingHorizontalPadding * 2
+                + processingMarkWidth
+                + processingContentSpacing
+                + titleWidth
+                + processingTitleWidthAllowance
+            let panelWidth = min(
+                max(contentWidth, minimumProcessingPanelWidth),
+                maximumProcessingPanelWidth
+            )
+            return NSSize(width: panelWidth, height: processingPanelHeight)
+        }
+    }
+
+    private func setFrame(of panel: NSPanel, for size: NSSize, animated: Bool) {
         let screen = NSScreen.main ?? NSScreen.screens.first
         guard let visibleFrame = screen?.visibleFrame else {
             panel.center()
@@ -188,7 +226,17 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
             x: visibleFrame.midX - size.width / 2,
             y: visibleFrame.minY + bottomInset
         )
-        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        let frame = NSRect(origin: origin, size: size)
+
+        guard animated else {
+            panel.setFrame(frame, display: true)
+            return
+        }
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = sizeAnimationDuration
+            panel.animator().setFrame(frame, display: true)
+        }
     }
 }
 
@@ -313,29 +361,22 @@ private nonisolated func isBareEscapeKeyEvent(_ event: CGEvent) -> Bool {
 @MainActor
 private final class RecordingOverlayViewModel: ObservableObject {
     @Published private(set) var presentation: RecordingOverlayPresentation
-    @Published private(set) var panelWidth: CGFloat
     private var cancelAction: (() -> Void)?
 
     init(
         presentation: RecordingOverlayPresentation,
-        panelWidth: CGFloat,
         cancelAction: @escaping () -> Void
     ) {
         self.presentation = presentation
-        self.panelWidth = panelWidth
         self.cancelAction = cancelAction
     }
 
     func update(
         presentation: RecordingOverlayPresentation,
-        panelWidth: CGFloat,
         cancelAction: @escaping () -> Void
     ) {
         if self.presentation != presentation {
             self.presentation = presentation
-        }
-        if self.panelWidth != panelWidth {
-            self.panelWidth = panelWidth
         }
         self.cancelAction = cancelAction
     }
@@ -351,111 +392,103 @@ private final class RecordingOverlayViewModel: ObservableObject {
 
 private struct RecordingOverlayView: View {
     @ObservedObject var viewModel: RecordingOverlayViewModel
+    @State private var isCancelButtonHovered = false
 
     private var presentation: RecordingOverlayPresentation {
         viewModel.presentation
     }
 
     var body: some View {
-        HStack(spacing: 10) {
-            statusIcon
-
-            activityIndicator
-            .frame(width: 74, height: 22)
-
+        Group {
             if presentation.isCancellable {
-                statusText
-                    .fixedSize(horizontal: true, vertical: false)
+                recordingContent
+                    .padding(.leading, 14)
+                    .padding(.trailing, 10)
             } else {
-                statusText
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if presentation.isCancellable {
-                Button(role: .cancel, action: viewModel.cancel) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(OverlayTheme.primaryText)
-                        .frame(width: 26, height: 26)
-                        .background(OverlayTheme.controlFill, in: Circle())
-                        .overlay {
-                            Circle()
-                                .strokeBorder(OverlayTheme.panelBorder, lineWidth: 0.75)
-                        }
-                }
-                .buttonStyle(.plain)
-                .help("Cancel recording")
-                .accessibilityLabel("Cancel recording")
+                processingContent
+                    .padding(.horizontal, 14)
             }
         }
-        .padding(.horizontal, 13)
-        .frame(width: viewModel.panelWidth, height: 52)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(OverlayTheme.panelFill, in: Capsule(style: .continuous))
-        .overlay {
-            Capsule(style: .continuous)
-                .strokeBorder(OverlayTheme.panelBorder, lineWidth: 0.75)
+    }
+
+    private var recordingContent: some View {
+        HStack(spacing: 10) {
+            recordingText
+                .fixedSize(horizontal: true, vertical: false)
+
+            OverlayWaveformView(audioLevel: presentation.audioLevel)
+                .frame(minWidth: 74, maxWidth: .infinity)
+                .frame(height: 22)
+
+            cancelButton
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var recordingText: some View {
+        Text(presentation.title)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(OverlayTheme.primaryText)
+            .lineLimit(1)
+    }
+
+    private var processingContent: some View {
+        HStack(spacing: 9) {
+            processingMark
+                .frame(width: 22, height: 22)
+
+            Text(presentation.title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(OverlayTheme.primaryText)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .offset(y: -1)
         }
     }
 
     @ViewBuilder
-    private var activityIndicator: some View {
-        if presentation.showsLiveWaveform {
-            OverlayWaveformView(audioLevel: presentation.audioLevel)
-        } else {
+    private var processingMark: some View {
+        switch presentation.phase {
+        case .refining:
+            ZStack {
+                Circle()
+                    .fill(OverlayTheme.controlFill)
+
+                Text("✦")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(OverlayTheme.primaryText)
+            }
+        default:
             OverlayLoadingView()
         }
     }
 
-    private var statusText: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(presentation.title)
-                .font(.system(size: 12, weight: .semibold))
+    private var cancelButton: some View {
+        Button(role: .cancel, action: viewModel.cancel) {
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(OverlayTheme.primaryText)
-
-            Text(presentation.detail)
-                .font(.system(size: 10, weight: .regular))
-                .foregroundStyle(OverlayTheme.secondaryText)
-                .lineLimit(1)
+                .frame(width: 26, height: 26)
+                .background(
+                    isCancelButtonHovered
+                        ? OverlayTheme.controlHoverFill
+                        : OverlayTheme.controlFill,
+                    in: Circle()
+                )
+                .overlay {
+                    Circle()
+                        .strokeBorder(OverlayTheme.panelBorder, lineWidth: 0.75)
+                }
         }
-    }
-
-    private var statusIcon: some View {
-        ZStack {
-            Circle()
-                .fill(iconFill)
-
-            Image(systemName: iconName)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(iconForeground)
+        .buttonStyle(.plain)
+        .onHover { isHovering in
+            isCancelButtonHovered = isHovering
         }
-        .frame(width: 28, height: 28)
-    }
-
-    private var iconName: String {
-        switch presentation.phase {
-        case .recording:
-            return "mic.fill"
-        case .requestingPermission:
-            return "lock.shield.fill"
-        case .stopping:
-            return "stop.fill"
-        case .preparingModel, .downloadingModel, .transcribing:
-            return "waveform.badge.magnifyingglass"
-        case .refining:
-            return "sparkles"
-        case .requestingAccessibilityPermission:
-            return "accessibility"
-        case .inserting:
-            return "text.cursor"
-        }
-    }
-
-    private var iconFill: Color {
-        OverlayTheme.controlFill
-    }
-
-    private var iconForeground: Color {
-        OverlayTheme.primaryText
+        .animation(.easeOut(duration: 0.12), value: isCancelButtonHovered)
+        .help("Cancel recording")
+        .accessibilityLabel("Cancel recording")
     }
 }
 
@@ -497,6 +530,8 @@ private struct OverlayWaveformView: View {
 }
 
 private struct OverlayLoadingView: View {
+    private static let dotOpacities = [0.76, 0.66, 0.56, 0.46, 0.36, 0.26]
+
     var body: some View {
         TimelineView(.animation) { timeline in
             Canvas { context, size in
@@ -508,15 +543,16 @@ private struct OverlayLoadingView: View {
     private func drawLoadingMark(in context: GraphicsContext, size: CGSize, time: TimeInterval) {
         let dotCount = 6
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        let radius = min(size.width, size.height) * 0.32
-        let activePhase = time * 3.4
+        let radius: CGFloat = 8
+        let rotation = time * Double.pi * 2 / 1.45
 
         for index in 0..<dotCount {
-            let angle = Double(index) / Double(dotCount) * Double.pi * 2
+            let angle = rotation
+                + Double(index) / Double(dotCount) * Double.pi * 2
+                - Double.pi / 2
             let x = center.x + CGFloat(cos(angle)) * radius
             let y = center.y + CGFloat(sin(angle)) * radius
-            let pulse = (sin(activePhase - Double(index) * 0.72) + 1) / 2
-            let dotRadius = 1.6 + CGFloat(pulse) * 0.85
+            let dotRadius: CGFloat = 2
             let rect = CGRect(
                 x: x - dotRadius,
                 y: y - dotRadius,
@@ -525,7 +561,7 @@ private struct OverlayLoadingView: View {
             )
             context.fill(
                 Path(ellipseIn: rect),
-                with: .color(OverlayTheme.primaryText.opacity(0.24 + pulse * 0.54))
+                with: .color(Color.white.opacity(Self.dotOpacities[index]))
             )
         }
     }
@@ -535,8 +571,8 @@ private enum OverlayTheme {
     static let panelFill = Color(red: 0.039, green: 0.039, blue: 0.039).opacity(0.96)
     static let panelBorder = Color.white.opacity(0.08)
     static let controlFill = Color.white.opacity(0.055)
+    static let controlHoverFill = Color.white.opacity(0.10)
     static let primaryText = Color.white.opacity(0.92)
-    static let secondaryText = Color.white.opacity(0.45)
 }
 
 private final class TransparentHostingView<Content: View>: NSHostingView<Content> {

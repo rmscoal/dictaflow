@@ -1486,10 +1486,13 @@ final class DictaFlowAppState: ObservableObject {
 
     private func beginRecordingFlow() async {
         clearPreservedStatusMessage()
-        setRecordingOverlaySessionActive(true)
         pendingInsertionTargetApplication = captureCurrentInsertionTargetApplication()
-        recordingState = .requestingPermission
-        updateStatusMessage()
+
+        if microphonePermissionState != .granted {
+            setRecordingOverlaySessionActive(true)
+            recordingState = .requestingPermission
+            updateStatusMessage()
+        }
 
         let permissionState = await permissionService.requestMicrophonePermissionIfNeeded()
         microphonePermissionState = permissionState
@@ -1506,6 +1509,7 @@ final class DictaFlowAppState: ObservableObject {
             await beginRecordingPlaybackAdjustment()
             let fileURL = try await audioRecorderService.startRecording()
             recordingState = .recording(startedAt: Date(), fileURL: fileURL)
+            setRecordingOverlaySessionActive(true)
             startRecordingMetering()
             updateStatusMessage()
         } catch {
@@ -1640,9 +1644,9 @@ final class DictaFlowAppState: ObservableObject {
             )
         case .stopping:
             return RecordingOverlayPresentation(
-                phase: .stopping,
-                title: "Finishing",
-                detail: "Saving the local recording",
+                phase: .transcribing,
+                title: "Transcribing",
+                detail: "Preparing local audio",
                 audioLevel: 0
             )
         case .idle:
@@ -1652,19 +1656,19 @@ final class DictaFlowAppState: ObservableObject {
         switch transcriptionState {
         case .idle:
             break
-        case .preparingModel(let model):
+        case .preparingModel:
             return RecordingOverlayPresentation(
-                phase: .preparingModel,
-                title: "Preparing Whisper",
-                detail: model.displayName,
+                phase: .transcribing,
+                title: "Transcribing",
+                detail: "",
                 audioLevel: 0
             )
         case .downloadingModel(let model, let progress):
             let progressText = progress.map { " • \(Int($0 * 100))%" } ?? ""
             return RecordingOverlayPresentation(
                 phase: .downloadingModel,
-                title: "Downloading Model",
-                detail: "\(model.displayName)\(progressText)",
+                title: "Downloading Model\(progressText)",
+                detail: model.displayName,
                 audioLevel: 0
             )
         case .transcribing(let model):
@@ -1674,19 +1678,19 @@ final class DictaFlowAppState: ObservableObject {
                 detail: "\(model.displayName) locally",
                 audioLevel: 0
             )
-        case .preparingRefinementModel(let model):
+        case .preparingRefinementModel:
             return RecordingOverlayPresentation(
-                phase: .preparingModel,
-                title: "Preparing Refinement",
-                detail: model.displayName,
+                phase: .refining,
+                title: "Refining",
+                detail: "",
                 audioLevel: 0
             )
         case .downloadingRefinementModel(let model, let progress):
             let progressText = progress.map { " • \(Int($0 * 100))%" } ?? ""
             return RecordingOverlayPresentation(
                 phase: .downloadingModel,
-                title: "Downloading Refinement",
-                detail: "\(model.displayName)\(progressText)",
+                title: "Downloading Refinement\(progressText)",
+                detail: model.displayName,
                 audioLevel: 0
             )
         case .refining(let model):
@@ -1701,7 +1705,7 @@ final class DictaFlowAppState: ObservableObject {
         switch textInsertionState {
         case .idle:
             return RecordingOverlayPresentation(
-                phase: .stopping,
+                phase: .transcribing,
                 title: "Processing",
                 detail: "Preparing the next step",
                 audioLevel: 0
