@@ -15,6 +15,7 @@ protocol ModelDownloadServiceProtocol: AnyObject {
     ) async throws -> URL
     func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool
     func preparedRefinementModelURL(for model: RefinementModelDescriptor) -> URL?
+    func verifiedRefinementModelURL(for model: RefinementModelDescriptor) async -> URL?
 }
 
 enum ModelDownloadServiceError: LocalizedError {
@@ -138,6 +139,10 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         }
 
         return modelURL
+    }
+
+    func verifiedRefinementModelURL(for model: RefinementModelDescriptor) async -> URL? {
+        preparedRefinementModelURL(for: model)
     }
 
     private func ensureLocalModelAvailable<Model: LocalModelDescriptor>(

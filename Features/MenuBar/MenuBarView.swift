@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct MenuBarView: View {
@@ -233,29 +234,70 @@ struct MenuBarView: View {
 }
 
 struct MenuBarIconView: View {
-    @ObservedObject var appState: DictaFlowAppState
-
     var body: some View {
-        Image(systemName: appState.menuBarIconName)
+        Image(nsImage: Self.templateImage)
+            .renderingMode(.template)
             .accessibilityLabel("DictaFlow")
     }
+
+    private static let templateImage: NSImage = {
+        let imageSize = NSSize(width: 18, height: 18)
+        let barWidth: CGFloat = 2
+        let barSpacing: CGFloat = 1.5
+        let barHeights: [CGFloat] = [6, 10, 15, 10, 6]
+        let markWidth = CGFloat(barHeights.count) * barWidth
+            + CGFloat(barHeights.count - 1) * barSpacing
+        let leadingInset = (imageSize.width - markWidth) / 2
+
+        let image = NSImage(size: imageSize, flipped: false) { _ in
+            NSColor.black.setFill()
+
+            for (index, height) in barHeights.enumerated() {
+                let x = leadingInset + CGFloat(index) * (barWidth + barSpacing)
+                let y = (imageSize.height - height) / 2
+                let barRect = NSRect(x: x, y: y, width: barWidth, height: height)
+                NSBezierPath(
+                    roundedRect: barRect,
+                    xRadius: barWidth / 2,
+                    yRadius: barWidth / 2
+                ).fill()
+            }
+
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
 }
 
 private struct DictaFlowMenuMark: View {
-    private let barHeights: [CGFloat] = [8, 14, 20, 14, 8]
-
     var body: some View {
-        HStack(alignment: .center, spacing: 2) {
-            ForEach(Array(barHeights.enumerated()), id: \.offset) { _, height in
-                Capsule(style: .continuous)
-                    .fill(MenuTheme.logoBar)
-                    .frame(width: 2.3, height: height)
-            }
-        }
+        DictaFlowWaveformMark(
+            barWidth: 2.3,
+            spacing: 2,
+            barHeights: [8, 14, 20, 14, 8]
+        )
+        .foregroundStyle(MenuTheme.logoBar)
         .frame(width: 29, height: 29)
         .background(Color.white, in: Circle())
         .shadow(color: .black.opacity(0.18), radius: 6.5, x: 0, y: 2.5)
         .accessibilityHidden(true)
+    }
+}
+
+private struct DictaFlowWaveformMark: View {
+    let barWidth: CGFloat
+    let spacing: CGFloat
+    let barHeights: [CGFloat]
+
+    var body: some View {
+        HStack(alignment: .center, spacing: spacing) {
+            ForEach(Array(barHeights.enumerated()), id: \.offset) { _, height in
+                Capsule(style: .continuous)
+                    .fill(.foreground)
+                    .frame(width: barWidth, height: height)
+            }
+        }
     }
 }
 

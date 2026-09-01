@@ -8,7 +8,7 @@ struct DictaFlowApp: App {
         MenuBarExtra {
             MenuBarView(appState: appDelegate.appState)
         } label: {
-            MenuBarIconView(appState: appDelegate.appState)
+            MenuBarIconView()
         }
         .menuBarExtraStyle(.window)
     }

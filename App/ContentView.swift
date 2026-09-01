@@ -103,19 +103,19 @@ struct ContentView: View {
             .frame(maxWidth: .infinity)
 
             SidebarSection(title: "DICTAFLOW", isCollapsed: isSidebarCollapsed) {
-                SidebarItem(page: .overview, title: "Overview", systemImage: "square.grid.2x2.fill", isCollapsed: isSidebarCollapsed, selection: $appState.mainWindowPage)
-                SidebarItem(page: .dictation, title: "Dictation", systemImage: "waveform", isCollapsed: isSidebarCollapsed, selection: $appState.mainWindowPage)
-                SidebarItem(page: .refinement, title: "Refinement", systemImage: "wand.and.sparkles", isCollapsed: isSidebarCollapsed, selection: $appState.mainWindowPage)
-                SidebarItem(page: .history, title: "History", systemImage: "clock", isCollapsed: isSidebarCollapsed, selection: $appState.mainWindowPage)
+                SidebarItem(page: .overview, title: "Overview", systemImage: "square.grid.2x2.fill", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .dictation, title: "Dictation", systemImage: "waveform", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .refinement, title: "Refinement", systemImage: "wand.and.sparkles", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .history, title: "History", systemImage: "clock", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
             }
 
             Divider().overlay(AppTheme.sidebarBorder).padding(.vertical, 13)
 
             SidebarSection(title: "CONFIGURATION", isCollapsed: isSidebarCollapsed) {
-                SidebarItem(page: .shortcutAndAudio, title: "Shortcut & Audio", systemImage: "keyboard", isCollapsed: isSidebarCollapsed, selection: $appState.mainWindowPage)
-                SidebarItem(page: .models, title: "Models", systemImage: "cpu", isCollapsed: isSidebarCollapsed, selection: $appState.mainWindowPage)
-                SidebarItem(page: .permissions, title: "Permissions", systemImage: "lock.shield", isCollapsed: isSidebarCollapsed, selection: $appState.mainWindowPage)
-                SidebarItem(page: .updates, title: "Updates", systemImage: "arrow.triangle.2.circlepath", isCollapsed: isSidebarCollapsed, selection: $appState.mainWindowPage)
+                SidebarItem(page: .shortcutAndAudio, title: "Shortcut & Audio", systemImage: "keyboard", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .models, title: "Models", systemImage: "cpu", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .permissions, title: "Permissions", systemImage: "lock.shield", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .updates, title: "Updates", systemImage: "arrow.triangle.2.circlepath", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
             }
 
             Spacer(minLength: 12)
@@ -157,7 +157,7 @@ struct ContentView: View {
             .overlay(Circle().stroke(AppTheme.border, lineWidth: 1))
             .help("Help")
             .popover(isPresented: $isShowingHelp, arrowEdge: .top) {
-                HelpPopover(selection: $appState.mainWindowPage, isPresented: $isShowingHelp)
+                HelpPopover(selection: mainWindowPageBinding, isPresented: $isShowingHelp)
             }
         }
         .padding(.horizontal, AppLayout.contentPadding)
@@ -176,7 +176,7 @@ struct ContentView: View {
                 HStack(spacing: 10) {
                     OverviewFeatureCard(
                         title: "Whisper Model",
-                        badge: "READY",
+                        badge: overviewWhisperModelBadge,
                         systemImage: "cpu",
                         primaryText: Text(appState.whisperConfiguration.model.displayName).fontWeight(.semibold)
                             + Text(" · Multilingual"),
@@ -562,7 +562,7 @@ struct ContentView: View {
                             selectedModel: appState.refinementConfiguration.model,
                             isEnabled: !appState.whisperSettingsLocked && appState.isRefinementRuntimeAvailable,
                             isModelSupported: { appState.isRefinementModelSupported($0) },
-                            selectModel: { appState.prepareAndUseRefinementModel($0) }
+                            selectModel: { appState.updateRefinementModel($0) }
                         )
                     }
                 }
@@ -590,6 +590,15 @@ struct ContentView: View {
                         .lineLimit(1)
 
                     Spacer(minLength: 8)
+
+                    Button("Prepare") { appState.prepareRefinementModel() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(
+                            appState.whisperSettingsLocked
+                                || !appState.isRefinementRuntimeAvailable
+                                || !appState.isSelectedRefinementModelSupported
+                        )
 
                     Button("Folder") { appState.openRefinementPromptsFolder() }
                         .buttonStyle(.bordered)
@@ -830,6 +839,15 @@ struct ContentView: View {
         appState.refinementStatusText.replacingOccurrences(of: appState.modelsDirectoryPath, with: "local cache")
     }
 
+    private var overviewWhisperModelBadge: String {
+        let activeModelIdentifier = appState.whisperConfiguration.model.modelIdentifier
+        let isPrepared = appState.installedLocalModelFiles.contains {
+            $0.category == .whisper && $0.modelIdentifier == activeModelIdentifier
+        }
+
+        return isPrepared ? "READY" : "NOT READY"
+    }
+
     private var deleteUnusedModelsButtonTitle: String {
         let count = unusedModelDeletionCandidates.count
         return "Delete \(count) \(count == 1 ? "Model" : "Models")"
@@ -854,6 +872,13 @@ struct ContentView: View {
         Binding(
             get: { appState.whisperConfiguration.taskMode },
             set: { appState.updateTaskMode($0) }
+        )
+    }
+
+    private var mainWindowPageBinding: Binding<MainWindowPage> {
+        Binding(
+            get: { appState.mainWindowPage },
+            set: { appState.showMainWindowPage($0) }
         )
     }
 

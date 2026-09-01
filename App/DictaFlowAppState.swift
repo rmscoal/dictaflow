@@ -194,26 +194,6 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
-    var menuBarIconName: String {
-        if recordingState.isRecording {
-            return "mic.circle.fill"
-        }
-
-        if transcriptionState.isTranscribing || transcriptionState.isRefining {
-            return "waveform.badge.magnifyingglass"
-        }
-
-        if textInsertionState.isBusy {
-            return "text.cursor"
-        }
-
-        if let lastTextInsertion, lastTextInsertion.method == .copyPanel {
-            return "doc.on.clipboard"
-        }
-
-        return isMainWindowVisible ? "waveform.circle.fill" : "waveform.circle"
-    }
-
     var appVersionText: String {
         let marketingVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         let buildVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
@@ -1706,7 +1686,7 @@ final class DictaFlowAppState: ObservableObject {
         case .idle:
             return RecordingOverlayPresentation(
                 phase: .transcribing,
-                title: "Processing",
+                title: "Transcribing",
                 detail: "Preparing the next step",
                 audioLevel: 0
             )
@@ -1759,8 +1739,6 @@ final class DictaFlowAppState: ObservableObject {
 
             lastTranscription = transcription
             clearPreservedStatusMessage()
-            transcriptionState = .idle
-            updateStatusMessage()
             let insertionTranscription = await refinedTranscriptionIfNeeded(transcription)
             await insert(transcription: insertionTranscription, targetApplication: pendingInsertionTargetApplication)
             shouldSurfaceCleanupFailure = true
@@ -1818,7 +1796,10 @@ final class DictaFlowAppState: ObservableObject {
             return skippedTranscription
         }
 
-        guard let modelURL = modelDownloadService.preparedRefinementModelURL(for: model) else {
+        transcriptionState = .refining(model)
+        updateStatusMessage()
+
+        guard let modelURL = await modelDownloadService.verifiedRefinementModelURL(for: model) else {
             refinementConfiguration.isEnabled = false
             persistRefinementConfiguration()
             var skippedTranscription = transcription
@@ -1831,9 +1812,6 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         do {
-            transcriptionState = .refining(model)
-            updateStatusMessage()
-
             let refinement = try await transcriptRefinementService.refine(
                 transcript: transcription.text,
                 whisperTaskMode: transcription.taskMode,
@@ -1850,12 +1828,10 @@ final class DictaFlowAppState: ObservableObject {
                 completedAt: refinement.completedAt
             )
             lastTranscription = refinedTranscription
-            transcriptionState = .idle
             clearPreservedStatusMessage()
             updateStatusMessage()
             return refinedTranscription
         } catch {
-            transcriptionState = .idle
             let message = "Could not refine the transcript locally, so DictaFlow will use the raw Whisper text. \(error.localizedDescription)"
             var failedTranscription = transcription
             failedTranscription.refinementStatus = .failed(
@@ -1878,6 +1854,7 @@ final class DictaFlowAppState: ObservableObject {
     private func insert(transcription: WhisperTranscriptionResult, targetApplication: InsertionTargetApplication?) async {
         let text = transcription.insertionText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
+            transcriptionState = .idle
             pendingInsertionTargetApplication = nil
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Whisper returned an empty transcript, so there was nothing to insert.")
@@ -1891,7 +1868,10 @@ final class DictaFlowAppState: ObservableObject {
         ensureAccessibilityPermissionForInsertion(targetApplicationName: targetApplicationName)
         let canAttemptAutomaticInsertion = accessibilityPermissionState == .granted
 
+        // Publish insertion before clearing the preceding pipeline phase so the
+        // overlay never renders its transient all-idle fallback between phases.
         textInsertionState = .inserting(targetApplicationName: targetApplicationName)
+        transcriptionState = .idle
         updateStatusMessage()
 
         let insertionResult = await textInsertionService.insertText(
@@ -1901,6 +1881,7 @@ final class DictaFlowAppState: ObservableObject {
         )
 
         lastTextInsertion = insertionResult
+        setRecordingOverlaySessionActive(false)
         textInsertionState = .idle
         pendingInsertionTargetApplication = nil
 
@@ -1911,7 +1892,6 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         updateStatusMessage()
-        setRecordingOverlaySessionActive(false)
     }
 
     private func ensureAccessibilityPermissionForInsertion(targetApplicationName: String?) {

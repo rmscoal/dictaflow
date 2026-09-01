@@ -11,6 +11,7 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
     private let processingMarkWidth: CGFloat = 22
     private let processingContentSpacing: CGFloat = 9
     private let processingTitleWidthAllowance: CGFloat = 8
+    private let transcriptionAndRefinementPanelWidth: CGFloat = 148
     private let minimumProcessingPanelWidth: CGFloat = 104
     private let maximumProcessingPanelWidth: CGFloat = 360
     private let sizeAnimationDuration: TimeInterval = 0.22
@@ -188,14 +189,21 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
         switch presentation.phase {
         case .recording:
             return recordingPanelSize
+        case .transcribing, .refining:
+            return NSSize(width: transcriptionAndRefinementPanelWidth, height: processingPanelHeight)
         case .requestingPermission,
              .downloadingModel,
-             .transcribing,
-             .refining,
              .requestingAccessibilityPermission,
              .inserting:
+            let sizingTitle: String
+            switch presentation.phase {
+            case .downloadingModel:
+                sizingTitle = "Downloading Refinement • 100%"
+            default:
+                sizingTitle = presentation.title
+            }
             let titleWidth = ceil(
-                (presentation.title as NSString).size(
+                (sizingTitle as NSString).size(
                     withAttributes: [
                         .font: NSFont.systemFont(ofSize: 12, weight: .semibold)
                     ]
@@ -439,30 +447,33 @@ private struct RecordingOverlayView: View {
             processingMark
                 .frame(width: 22, height: 22)
 
-            Text(presentation.title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(OverlayTheme.primaryText)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .offset(y: -1)
+            ZStack(alignment: .leading) {
+                Text(presentation.title)
+                    .id(presentation.phase)
+                    .transition(.opacity)
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(OverlayTheme.primaryText)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .offset(y: -1)
+            .animation(.easeInOut(duration: 0.18), value: presentation.phase)
         }
     }
 
-    @ViewBuilder
     private var processingMark: some View {
-        switch presentation.phase {
-        case .refining:
-            ZStack {
-                Circle()
-                    .fill(OverlayTheme.controlFill)
+        let isRefining = presentation.phase == .refining
 
-                Text("✦")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(OverlayTheme.primaryText)
-            }
-        default:
+        return ZStack {
             OverlayLoadingView()
+                .opacity(isRefining ? 0 : 1)
+                .scaleEffect(isRefining ? 0.72 : 1)
+
+            RefinementStarView()
+                .opacity(isRefining ? 1 : 0)
+                .scaleEffect(isRefining ? 1 : 0.72)
         }
+        .animation(.easeInOut(duration: 0.22), value: isRefining)
     }
 
     private var cancelButton: some View {
@@ -489,6 +500,30 @@ private struct RecordingOverlayView: View {
         .animation(.easeOut(duration: 0.12), value: isCancelButtonHovered)
         .help("Cancel recording")
         .accessibilityLabel("Cancel recording")
+    }
+}
+
+private struct RefinementStarView: View {
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            let pulse = (sin(timeline.date.timeIntervalSinceReferenceDate * 2.2) + 1) / 2
+
+            ZStack {
+                Text("✦")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(OverlayTheme.refinementGlow.opacity(0.22 + pulse * 0.12))
+                    .blur(radius: 3.5 + pulse * 1.5)
+
+                Text("✦")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(OverlayTheme.refinementStar)
+                    .shadow(
+                        color: OverlayTheme.refinementGlow.opacity(0.38 + pulse * 0.22),
+                        radius: 3 + pulse * 2
+                    )
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -573,6 +608,8 @@ private enum OverlayTheme {
     static let controlFill = Color.white.opacity(0.055)
     static let controlHoverFill = Color.white.opacity(0.10)
     static let primaryText = Color.white.opacity(0.92)
+    static let refinementStar = Color(red: 0.72, green: 0.82, blue: 1)
+    static let refinementGlow = Color(red: 0.42, green: 0.62, blue: 1)
 }
 
 private final class TransparentHostingView<Content: View>: NSHostingView<Content> {
