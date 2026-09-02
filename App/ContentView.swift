@@ -5,13 +5,19 @@ struct ContentView: View {
     @State private var isShowingHelp = false
     @State private var isSidebarCollapsed = false
     @State private var isShowingModelPreparationConfirmation = false
+    @State private var isShowingRefinementModelPreparationConfirmation = false
+    @State private var isShowingRefinementModelDeletionConfirmation = false
     @State private var isShowingUnusedModelDeletionConfirmation = false
     @State private var selectedModel: WhisperModelDescriptor
+    @State private var selectedRefinementModel: RefinementModelDescriptor
+    @State private var refinementModelPendingDeletion: RefinementModelDescriptor?
     @State private var unusedModelDeletionCandidates: [LocalModelFile] = []
 
     init(appState: DictaFlowAppState) {
         self.appState = appState
         _selectedModel = State(initialValue: appState.whisperConfiguration.model)
+        _selectedRefinementModel = State(initialValue: appState.refinementConfiguration.model)
+        _refinementModelPendingDeletion = State(initialValue: nil)
     }
 
     var body: some View {
@@ -28,15 +34,26 @@ struct ContentView: View {
         .frame(minWidth: AppLayout.windowMinWidth, minHeight: AppLayout.windowMinHeight)
         .foregroundStyle(AppTheme.primaryText)
         .alert(
-            "Prepare \(selectedModel.displayName) Model?",
+            "Download \(selectedModel.displayName) Model?",
             isPresented: $isShowingModelPreparationConfirmation
         ) {
             Button("Cancel", role: .cancel) {}
-            Button("Prepare Model") {
+            Button("Download Model") {
                 appState.prepareAndUseModel(selectedModel)
             }
         } message: {
-            Text("DictaFlow will use \(selectedModel.displayName) for future recordings and download it locally if needed.")
+            Text("DictaFlow will download \(selectedModel.displayName) locally and use it for future recordings.")
+        }
+        .alert(
+            "Download \(selectedRefinementModel.displayName) Model?",
+            isPresented: $isShowingRefinementModelPreparationConfirmation
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Download Model") {
+                appState.prepareAndUseRefinementModel(selectedRefinementModel)
+            }
+        } message: {
+            Text("DictaFlow will download \(selectedRefinementModel.displayName) locally and use it for text refinement.")
         }
         .alert(
             "Delete Unused Models?",
@@ -49,6 +66,22 @@ struct ContentView: View {
             }
         } message: {
             Text(unusedModelDeletionConfirmationText)
+        }
+        .alert(
+            "Delete \(refinementModelPendingDeletion?.displayName ?? "Refinement Model")?",
+            isPresented: $isShowingRefinementModelDeletionConfirmation
+        ) {
+            Button("Cancel", role: .cancel) {
+                refinementModelPendingDeletion = nil
+            }
+            Button("Delete Model", role: .destructive) {
+                if let model = refinementModelPendingDeletion {
+                    appState.deleteRefinementModel(model)
+                }
+                refinementModelPendingDeletion = nil
+            }
+        } message: {
+            Text("This permanently deletes the local model file. If it is active, DictaFlow will use another downloaded refinement model when available. Otherwise, text refinement will turn off.")
         }
     }
 
@@ -290,35 +323,102 @@ struct ContentView: View {
 
     private var modelsPage: some View {
         DetailPage {
-            VStack(alignment: .leading, spacing: AppLayout.sectionSpacing) {
-                let installedModelIdentifiers = Set(appState.installedLocalModelFiles.map(\.modelIdentifier))
+            VStack(alignment: .leading, spacing: 26) {
+                VStack(alignment: .leading, spacing: 12) {
+                    ModelPageSectionHeader(
+                        title: "Whisper models",
+                        subtitle: "Local speech recognition and translation"
+                    )
 
-                LazyVGrid(columns: modelGridColumns, spacing: AppLayout.sectionSpacing) {
-                    ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
-                        let isActive = model == appState.whisperConfiguration.model
-                        let isPrepared = installedModelIdentifiers.contains(model.modelIdentifier)
+                    EqualHeightModelGrid(spacing: AppLayout.sectionSpacing) {
+                        ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
+                            let isPrepared = appState.isWhisperModelPrepared(model)
+                            let isActive = model == appState.whisperConfiguration.model && isPrepared
 
-                        ModelChoiceCard(
-                            model: model,
-                            isActive: isActive,
-                            isSelected: model == selectedModel,
-                            needsPreparation: isActive && !isPrepared,
-                            isDisabled: appState.whisperSettingsLocked
-                        ) {
-                            if isActive {
-                                if !isPrepared {
-                                    appState.retryModelPreparation()
-                                }
-                            } else if selectedModel == model {
-                                isShowingModelPreparationConfirmation = true
-                            } else {
+                            ModelChoiceCard(
+                                name: model.displayName,
+                                sizeText: model.approximateDiskSizeDescription,
+                                detailText: model.detailText,
+                                isActive: isActive,
+                                needsPreparation: !isPrepared,
+                                isUnavailable: false,
+                                isInteractionLocked: appState.whisperSettingsLocked,
+                                deleteAction: nil
+                            ) {
                                 selectedModel = model
+                                if !isPrepared {
+                                    isShowingModelPreparationConfirmation = true
+                                } else if !isActive {
+                                    appState.updateWhisperModel(model)
+                                }
                             }
                         }
                     }
+
+                    if isWhisperModelPreparationActive || appState.whisperModelPreparationFailed {
+                        ModelDownloadStatusPanel(
+                            title: whisperModelDownloadStatusTitle,
+                            statusText: appState.whisperModelPreparationStatusText,
+                            isActive: isWhisperModelPreparationActive,
+                            progress: whisperModelPreparationProgress,
+                            hasFailed: appState.whisperModelPreparationFailed
+                        )
+                    }
                 }
 
-                modelStorageTile
+                VStack(alignment: .leading, spacing: 12) {
+                    ModelPageSectionHeader(
+                        title: "Text refinement models",
+                        subtitle: "Local cleanup for punctuation and wording"
+                    )
+
+                    EqualHeightModelGrid(spacing: AppLayout.sectionSpacing) {
+                        ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
+                            let isPrepared = appState.isRefinementModelPrepared(model)
+                            let isActive = model == appState.refinementConfiguration.model && isPrepared
+
+                            ModelChoiceCard(
+                                name: model.displayName,
+                                sizeText: "\(model.approximateDiskSizeDescription) · \(model.estimatedRuntimeMemoryDescription)",
+                                detailText: appState.refinementModelDetailText(for: model),
+                                isActive: isActive,
+                                needsPreparation: !isPrepared,
+                                isUnavailable: !appState.isRefinementModelSupported(model),
+                                isInteractionLocked: appState.whisperSettingsLocked,
+                                deleteAction: isPrepared ? {
+                                    refinementModelPendingDeletion = model
+                                    isShowingRefinementModelDeletionConfirmation = true
+                                } : nil
+                            ) {
+                                selectedRefinementModel = model
+                                if !isPrepared {
+                                    isShowingRefinementModelPreparationConfirmation = true
+                                } else if !isActive {
+                                    appState.updateRefinementModel(model)
+                                }
+                            }
+                        }
+                    }
+
+                    if isRefinementModelPreparationActive || appState.refinementModelPreparationFailed {
+                        ModelDownloadStatusPanel(
+                            title: refinementModelDownloadStatusTitle,
+                            statusText: appState.refinementModelPreparationStatusText,
+                            isActive: isRefinementModelPreparationActive,
+                            progress: refinementModelPreparationProgress,
+                            hasFailed: appState.refinementModelPreparationFailed
+                        )
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    ModelPageSectionHeader(
+                        title: "Storage",
+                        subtitle: "Installed model files and disk usage"
+                    )
+
+                    modelStorageTile
+                }
             }
         }
     }
@@ -326,8 +426,6 @@ struct ContentView: View {
     private var modelStorageTile: some View {
         GlassTile {
             VStack(alignment: .leading, spacing: 12) {
-                TileHeader(title: "Storage", systemImage: "externaldrive")
-
                 Text(appState.modelStorageStatusText)
                     .font(.system(size: 13))
                     .foregroundStyle(AppTheme.secondaryText)
@@ -348,13 +446,7 @@ struct ContentView: View {
                 }
 
                 HStack(spacing: 10) {
-                    Button {
-                        prepareUnusedModelDeletionConfirmation()
-                    } label: {
-                        Label("Delete Unused Models...", systemImage: "trash")
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(!appState.canReviewUnusedModelDeletion)
+                    Spacer(minLength: 0)
 
                     Button {
                         appState.openModelsFolder()
@@ -362,6 +454,15 @@ struct ContentView: View {
                         Label("Open Folder", systemImage: "folder")
                     }
                     .buttonStyle(.bordered)
+
+                    Button {
+                        prepareUnusedModelDeletionConfirmation()
+                    } label: {
+                        Label("Delete Unused Models", systemImage: "trash")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(AppTheme.destructive)
+                    .disabled(!appState.canReviewUnusedModelDeletion)
                 }
             }
         }
@@ -518,18 +619,14 @@ struct ContentView: View {
 
                     SettingsFormRow(
                         title: "Whisper model",
-                        detail: "Prepared locally before the next recording"
+                        detail: "Only prepared local models can be selected"
                     ) {
-                        Picker("Whisper model", selection: dictationModelBinding) {
-                            ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
-                                Text("\(model.displayName) · \(model.approximateDiskSizeDescription)")
-                                    .tag(model)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: 142)
-                        .disabled(appState.whisperSettingsLocked)
+                        WhisperModelPickerControl(
+                            selectedModel: appState.whisperConfiguration.model,
+                            isEnabled: !appState.whisperSettingsLocked,
+                            isModelSelectable: { appState.isWhisperModelPrepared($0) },
+                            selectModel: { appState.updateWhisperModel($0) }
+                        )
                     }
                 }
             }
@@ -556,12 +653,19 @@ struct ContentView: View {
 
                     SettingsFormRow(
                         title: "Refinement model",
-                        detail: "Runs only on this Mac"
+                        detail: "Only prepared local models can be selected"
                     ) {
                         RefinementModelPickerControl(
-                            selectedModel: appState.refinementConfiguration.model,
+                            selectedModel: appState.isSelectedRefinementModelPrepared
+                                ? appState.refinementConfiguration.model
+                                : nil,
+                            emptySelectionTitle: RefinementModelDescriptor.allCases.contains {
+                                appState.isRefinementModelSupported($0) && appState.isRefinementModelPrepared($0)
+                            } ? "Select a model" : "No model available",
                             isEnabled: !appState.whisperSettingsLocked && appState.isRefinementRuntimeAvailable,
-                            isModelSupported: { appState.isRefinementModelSupported($0) },
+                            isModelSelectable: {
+                                appState.isRefinementModelSupported($0) && appState.isRefinementModelPrepared($0)
+                            },
                             selectModel: { appState.updateRefinementModel($0) }
                         )
                     }
@@ -590,15 +694,6 @@ struct ContentView: View {
                         .lineLimit(1)
 
                     Spacer(minLength: 8)
-
-                    Button("Prepare") { appState.prepareRefinementModel() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(
-                            appState.whisperSettingsLocked
-                                || !appState.isRefinementRuntimeAvailable
-                                || !appState.isSelectedRefinementModelSupported
-                        )
 
                     Button("Folder") { appState.openRefinementPromptsFolder() }
                         .buttonStyle(.bordered)
@@ -809,12 +904,6 @@ struct ContentView: View {
         }
     }
 
-    private var modelGridColumns: [GridItem] {
-        [
-            GridItem(.adaptive(minimum: 220), spacing: AppLayout.sectionSpacing)
-        ]
-    }
-
     private var historySummaryText: String {
         if appState.lastTranscription != nil {
             return "Last transcript"
@@ -882,18 +971,58 @@ struct ContentView: View {
         )
     }
 
-    private var dictationModelBinding: Binding<WhisperModelDescriptor> {
-        Binding(
-            get: { appState.whisperConfiguration.model },
-            set: { model in
-                guard model != appState.whisperConfiguration.model else {
-                    return
-                }
+    private var isWhisperModelPreparationActive: Bool {
+        switch appState.transcriptionState {
+        case .preparingModel, .downloadingModel:
+            return true
+        case .idle, .transcribing, .preparingRefinementModel, .downloadingRefinementModel, .refining:
+            return false
+        }
+    }
 
-                selectedModel = model
-                isShowingModelPreparationConfirmation = true
-            }
-        )
+    private var whisperModelPreparationProgress: Double? {
+        switch appState.transcriptionState {
+        case .downloadingModel(_, let progress):
+            return progress
+        case .idle, .preparingModel, .transcribing, .preparingRefinementModel, .downloadingRefinementModel, .refining:
+            return nil
+        }
+    }
+
+    private var whisperModelDownloadStatusTitle: String {
+        switch appState.transcriptionState {
+        case .preparingModel(let model), .downloadingModel(let model, _):
+            return "Downloading \(model.displayName)"
+        case .idle, .transcribing, .preparingRefinementModel, .downloadingRefinementModel, .refining:
+            return "Download failed"
+        }
+    }
+
+    private var isRefinementModelPreparationActive: Bool {
+        switch appState.transcriptionState {
+        case .preparingRefinementModel, .downloadingRefinementModel:
+            return true
+        case .idle, .preparingModel, .downloadingModel, .transcribing, .refining:
+            return false
+        }
+    }
+
+    private var refinementModelPreparationProgress: Double? {
+        switch appState.transcriptionState {
+        case .downloadingRefinementModel(_, let progress):
+            return progress
+        case .idle, .preparingModel, .downloadingModel, .transcribing, .preparingRefinementModel, .refining:
+            return nil
+        }
+    }
+
+    private var refinementModelDownloadStatusTitle: String {
+        switch appState.transcriptionState {
+        case .preparingRefinementModel(let model), .downloadingRefinementModel(let model, _):
+            return "Downloading \(model.displayName)"
+        case .idle, .preparingModel, .downloadingModel, .transcribing, .refining:
+            return "Download failed"
+        }
     }
 
     private var recordingPlaybackBehaviorBinding: Binding<RecordingPlaybackBehavior> {
@@ -1000,6 +1129,8 @@ private enum AppTheme {
     static let controlFill = Color.white.opacity(0.055)
     static let editorFill = Color.black.opacity(0.12)
     static let accent = Color(red: 0.302, green: 0.471, blue: 0.984)
+    static let modelActive = Color(red: 0.275, green: 0.706, blue: 0.443)
+    static let destructive = Color(red: 0.835, green: 0.235, blue: 0.286)
     static let border = Color.white.opacity(0.085)
     static let primaryText = Color(red: 0.961, green: 0.965, blue: 0.973)
     static let secondaryText = Color(red: 0.58, green: 0.60, blue: 0.64)
@@ -1352,9 +1483,10 @@ private struct SettingsFormRow<Control: View>: View {
 }
 
 private struct RefinementModelPickerControl: View {
-    let selectedModel: RefinementModelDescriptor
+    let selectedModel: RefinementModelDescriptor?
+    let emptySelectionTitle: String
     let isEnabled: Bool
-    let isModelSupported: (RefinementModelDescriptor) -> Bool
+    let isModelSelectable: (RefinementModelDescriptor) -> Bool
     let selectModel: (RefinementModelDescriptor) -> Void
 
     @State private var isShowingOptions = false
@@ -1364,7 +1496,7 @@ private struct RefinementModelPickerControl: View {
             isShowingOptions.toggle()
         } label: {
             HStack(spacing: 8) {
-                Text(selectedModel.displayName)
+                Text(selectedModel?.displayName ?? emptySelectionTitle)
                     .font(.system(size: 11.5, weight: .semibold))
                     .lineLimit(1)
 
@@ -1387,7 +1519,7 @@ private struct RefinementModelPickerControl: View {
         .popover(isPresented: $isShowingOptions, arrowEdge: .top) {
             VStack(spacing: 2) {
                 ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
-                    let isSupported = isModelSupported(model)
+                    let isSelectable = isModelSelectable(model)
 
                     Button {
                         isShowingOptions = false
@@ -1422,12 +1554,95 @@ private struct RefinementModelPickerControl: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(!isSupported)
-                    .opacity(isSupported ? 1 : 0.45)
+                    .disabled(!isSelectable)
+                    .opacity(isSelectable ? 1 : 0.45)
                 }
             }
             .padding(7)
             .frame(width: 250)
+            .background(AppTheme.tileFill)
+            .foregroundStyle(AppTheme.primaryText)
+        }
+    }
+}
+
+private struct WhisperModelPickerControl: View {
+    let selectedModel: WhisperModelDescriptor
+    let isEnabled: Bool
+    let isModelSelectable: (WhisperModelDescriptor) -> Bool
+    let selectModel: (WhisperModelDescriptor) -> Void
+
+    @State private var isShowingOptions = false
+
+    var body: some View {
+        Button {
+            isShowingOptions.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Text(selectedModel.displayName)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(AppTheme.secondaryText)
+            }
+            .padding(.horizontal, 10)
+            .frame(width: 160, height: 28)
+            .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(AppTheme.border, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .popover(isPresented: $isShowingOptions, arrowEdge: .top) {
+            VStack(spacing: 2) {
+                ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
+                    let isSelectable = isModelSelectable(model)
+
+                    Button {
+                        isShowingOptions = false
+                        selectModel(model)
+                    } label: {
+                        HStack(alignment: .top, spacing: 9) {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(AppTheme.primaryText)
+                                .frame(width: 13, height: 16)
+                                .opacity(model == selectedModel ? 1 : 0)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(model.displayName)
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(AppTheme.primaryText)
+
+                                Text(model.approximateDiskSizeDescription)
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(AppTheme.secondaryText)
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            model == selectedModel ? AppTheme.controlFill : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isSelectable)
+                    .opacity(isSelectable ? 1 : 0.45)
+                }
+            }
+            .padding(7)
+            .frame(width: 220)
             .background(AppTheme.tileFill)
             .foregroundStyle(AppTheme.primaryText)
         }
@@ -1548,72 +1763,328 @@ private struct OverviewFeatureCard: View {
     }
 }
 
-private struct ModelChoiceCard: View {
-    let model: WhisperModelDescriptor
-    let isActive: Bool
-    let isSelected: Bool
-    let needsPreparation: Bool
-    let isDisabled: Bool
-    let action: () -> Void
+private struct ModelPageSectionHeader: View {
+    let title: String
+    let subtitle: String
 
-    private var actionTitle: String {
-        if needsPreparation {
-            return "PREPARE"
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(AppTheme.primaryText)
+
+                Text(subtitle)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(AppTheme.secondaryText)
+            }
+
+            Divider()
+                .overlay(AppTheme.border)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
 
-        if isActive {
-            return "ACTIVE"
-        }
+private struct EqualHeightModelGrid: Layout {
+    let spacing: CGFloat
 
-        return isSelected ? "USE MODEL" : "SELECT"
+    private func columnCount(for subviews: Subviews) -> Int {
+        min(2, max(1, subviews.count))
     }
 
-    private var emphasizesAction: Bool {
-        needsPreparation || (isSelected && !isActive)
+    private func itemWidth(totalWidth: CGFloat, columns: Int) -> CGFloat {
+        max(0, (totalWidth - CGFloat(columns - 1) * spacing) / CGFloat(columns))
+    }
+
+    private func maximumItemHeight(subviews: Subviews, itemWidth: CGFloat) -> CGFloat {
+        subviews.reduce(0) { height, subview in
+            max(height, subview.sizeThatFits(ProposedViewSize(width: itemWidth, height: nil)).height)
+        }
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard !subviews.isEmpty else {
+            return .zero
+        }
+
+        let columns = columnCount(for: subviews)
+        let naturalItemWidth = subviews.reduce(0) { width, subview in
+            max(width, subview.sizeThatFits(.unspecified).width)
+        }
+        let totalWidth = proposal.width ?? (naturalItemWidth * CGFloat(columns) + spacing * CGFloat(columns - 1))
+        let width = itemWidth(totalWidth: totalWidth, columns: columns)
+        let height = maximumItemHeight(subviews: subviews, itemWidth: width)
+        let rows = Int(ceil(Double(subviews.count) / Double(columns)))
+
+        return CGSize(
+            width: totalWidth,
+            height: height * CGFloat(rows) + spacing * CGFloat(rows - 1)
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard !subviews.isEmpty else {
+            return
+        }
+
+        let columns = columnCount(for: subviews)
+        let width = itemWidth(totalWidth: bounds.width, columns: columns)
+        let height = maximumItemHeight(subviews: subviews, itemWidth: width)
+
+        for (index, subview) in subviews.enumerated() {
+            let row = index / columns
+            let column = index % columns
+            let origin = CGPoint(
+                x: bounds.minX + CGFloat(column) * (width + spacing),
+                y: bounds.minY + CGFloat(row) * (height + spacing)
+            )
+            subview.place(
+                at: origin,
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: width, height: height)
+            )
+        }
+    }
+}
+
+private struct ModelDownloadStatusPanel: View {
+    let title: String
+    let statusText: String
+    let isActive: Bool
+    let progress: Double?
+    let hasFailed: Bool
+
+    private var statusColor: Color {
+        hasFailed ? Color.orange : (isActive ? AppTheme.accent : AppTheme.secondaryText)
     }
 
     var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(model.displayName)
-                        .font(.system(size: 15, weight: .semibold))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: hasFailed ? "exclamationmark.triangle.fill" : "arrow.down.circle")
+                    .foregroundStyle(statusColor)
 
-                    Spacer()
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.primaryText)
+            }
 
-                    Text(actionTitle)
-                        .font(.system(size: 9.5, weight: .bold))
-                        .foregroundStyle(emphasizesAction ? Color.white : (isActive ? AppTheme.accent : AppTheme.tertiaryText))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 5)
-                        .background(
-                            emphasizesAction ? AppTheme.accent : AppTheme.controlFill,
-                            in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        )
+            if isActive {
+                if let progress {
+                    ProgressView(value: progress)
+                        .tint(AppTheme.accent)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            if !statusText.isEmpty {
+                Text(statusText)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(statusColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: hasFailed ? .leading : .trailing)
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.editorFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(statusColor.opacity(hasFailed || isActive ? 0.35 : 0.14), lineWidth: 0.75)
+        )
+    }
+}
+
+private struct ModelChoiceCard: View {
+    let name: String
+    let sizeText: String
+    let detailText: String
+    let isActive: Bool
+    let needsPreparation: Bool
+    let isUnavailable: Bool
+    let isInteractionLocked: Bool
+    let deleteAction: (() -> Void)?
+    let action: () -> Void
+
+    private var stateColor: Color {
+        if isActive {
+            return AppTheme.modelActive
+        }
+
+        if isUnavailable {
+            return AppTheme.tertiaryText
+        }
+
+        if needsPreparation {
+            return Color.orange
+        }
+
+        return AppTheme.accent
+    }
+
+    private var cardTint: Color {
+        if isUnavailable {
+            return AppTheme.controlFill
+        }
+
+        let opacity: Double
+        if isInteractionLocked {
+            opacity = 0.045
+        } else if isActive {
+            opacity = 0.12
+        } else {
+            opacity = 0.06
+        }
+        return stateColor.opacity(opacity)
+    }
+
+    private var borderColor: Color {
+        if isUnavailable {
+            return AppTheme.tertiaryText.opacity(0.28)
+        }
+
+        if isInteractionLocked {
+            return stateColor.opacity(0.25)
+        }
+
+        return stateColor.opacity(isActive ? 0.85 : 0.42)
+    }
+
+    private var accessibilityHint: String {
+        if isActive {
+            return "Current active model"
+        }
+
+        if isUnavailable {
+            return "This model is unavailable on this Mac"
+        }
+
+        if needsPreparation {
+            return "Downloads this model"
+        }
+
+        return "Uses this prepared model"
+    }
+
+    @ViewBuilder
+    private var modelAction: some View {
+        if isActive {
+            Label("ACTIVE", systemImage: "checkmark")
+                .font(.system(size: 9.5, weight: .bold))
+                .foregroundStyle(Color.white.opacity(isInteractionLocked ? 0.65 : 1))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background(
+                    stateColor.opacity(isInteractionLocked ? 0.38 : 1),
+                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                )
+        } else if isUnavailable {
+            Text("UNAVAILABLE")
+                .font(.system(size: 9.5, weight: .bold))
+                .foregroundStyle(AppTheme.tertiaryText)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+        } else if needsPreparation {
+            Button(action: action) {
+                Label("DOWNLOAD", systemImage: "arrow.down")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(isInteractionLocked ? 0.58 : 1))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        stateColor.opacity(isInteractionLocked ? 0.34 : 0.92),
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(isInteractionLocked)
+            .accessibilityHint(accessibilityHint)
+        } else {
+            Button(action: action) {
+                Label("USE", systemImage: "checkmark")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(isInteractionLocked ? 0.58 : 1))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        stateColor.opacity(isInteractionLocked ? 0.34 : 0.92),
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(isInteractionLocked)
+            .accessibilityHint(accessibilityHint)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(name)
+                    .font(.system(size: 15, weight: .semibold))
+
+                Spacer()
+
+                if let deleteAction {
+                    Button(action: deleteAction) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Color.white.opacity(isInteractionLocked ? 0.58 : 1))
+                            .frame(width: 24, height: 23)
+                            .background(
+                                AppTheme.destructive.opacity(isInteractionLocked ? 0.34 : 0.9),
+                                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isInteractionLocked)
+                    .help("Delete downloaded model")
                 }
 
-                Text(model.approximateDiskSizeDescription)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(AppTheme.accent)
-
-                Text(model.detailText)
-                    .font(.system(size: 12))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .lineLimit(2)
+                modelAction
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, minHeight: 98, alignment: .topLeading)
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(isSelected && !isActive ? AppTheme.accent.opacity(0.8) : AppTheme.border, lineWidth: 0.75)
-            )
-            .shadow(color: Color.black.opacity(0.08), radius: 6, x: 0, y: 2)
+
+            Text(sizeText)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(stateColor.opacity(isInteractionLocked ? 0.58 : 1))
+
+            Text(detailText)
+                .font(.system(size: 12))
+                .foregroundStyle(AppTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .buttonStyle(.plain)
-        .disabled(isDisabled || (isActive && !needsPreparation))
-        .opacity(isDisabled ? 0.6 : 1)
-        .accessibilityHint(needsPreparation ? "Prepares this model" : (isActive ? "Current active model" : (isSelected ? "Uses and prepares this model" : "Selects this model")))
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(AppTheme.tileFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(cardTint)
+                )
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(
+                    borderColor,
+                    lineWidth: isActive ? 1.25 : 0.75
+                )
+        )
+        .shadow(color: Color.black.opacity(0.08), radius: 6, x: 0, y: 2)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }
 

@@ -13,6 +13,8 @@ protocol ModelDownloadServiceProtocol: AnyObject {
         _ model: RefinementModelDescriptor,
         progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
     ) async throws -> URL
+    func isWhisperModelPrepared(_ model: WhisperModelDescriptor) -> Bool
+    func verifiedWhisperModelURL(for model: WhisperModelDescriptor) async -> URL?
     func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool
     func preparedRefinementModelURL(for model: RefinementModelDescriptor) -> URL?
     func verifiedRefinementModelURL(for model: RefinementModelDescriptor) async -> URL?
@@ -129,6 +131,21 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
     nonisolated func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool {
         let modelURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
         return Self.isRegularModelFile(at: modelURL)
+    }
+
+    nonisolated func isWhisperModelPrepared(_ model: WhisperModelDescriptor) -> Bool {
+        let modelURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
+        return Self.isRegularModelFile(at: modelURL)
+    }
+
+    func verifiedWhisperModelURL(for model: WhisperModelDescriptor) async -> URL? {
+        let modelURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
+        guard Self.isRegularModelFile(at: modelURL),
+              (try? Self.modelFileMatchesChecksum(at: modelURL, expectedChecksum: model.checksum)) == true else {
+            return nil
+        }
+
+        return modelURL
     }
 
     nonisolated func preparedRefinementModelURL(for model: RefinementModelDescriptor) -> URL? {

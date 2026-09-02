@@ -110,9 +110,16 @@ struct MenuBarView: View {
                 trailing: {
                     Menu {
                         ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
-                            Button(model.displayName) {
-                                appState.prepareAndUseModel(model)
+                            Button {
+                                appState.updateWhisperModel(model)
+                            } label: {
+                                if model == appState.whisperConfiguration.model {
+                                    Label(model.displayName, systemImage: "checkmark")
+                                } else {
+                                    Text(model.displayName)
+                                }
                             }
+                            .disabled(!appState.isWhisperModelPrepared(model))
                         }
                     } label: {
                         ChevronButtonLabel()
@@ -138,10 +145,19 @@ struct MenuBarView: View {
 
                         Menu {
                             ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
-                                Button(appState.refinementModelMenuTitle(for: model)) {
+                                Button {
                                     appState.updateRefinementModel(model)
+                                } label: {
+                                    if model == appState.refinementConfiguration.model {
+                                        Label(appState.refinementModelMenuTitle(for: model), systemImage: "checkmark")
+                                    } else {
+                                        Text(appState.refinementModelMenuTitle(for: model))
+                                    }
                                 }
-                                .disabled(!appState.isRefinementModelSupported(model))
+                                .disabled(
+                                    !appState.isRefinementModelSupported(model)
+                                        || !appState.isRefinementModelPrepared(model)
+                                )
                             }
                         } label: {
                             ChevronButtonLabel()

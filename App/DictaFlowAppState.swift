@@ -70,6 +70,11 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isEditingGlobalShortcut = false
     @Published private(set) var globalShortcutEditingMessage: String?
     @Published private(set) var modelDownloadProgressText: String?
+    @Published private(set) var isDeletingModel = false
+    @Published private(set) var whisperModelPreparationStatusText = ""
+    @Published private(set) var refinementModelPreparationStatusText = ""
+    @Published private(set) var whisperModelPreparationFailed = false
+    @Published private(set) var refinementModelPreparationFailed = false
     @Published private(set) var isRefinementRuntimeAvailable = false
     @Published private(set) var isRefinementServerPreparing = false
     @Published private(set) var refinementPromptText: String
@@ -368,7 +373,10 @@ final class DictaFlowAppState: ObservableObject {
     var modelStatusText: String {
         switch transcriptionState {
         case .idle:
-            return "\(whisperConfiguration.model.displayName) model stored in \(modelsDirectoryPath)"
+            if isWhisperModelPrepared(whisperConfiguration.model) {
+                return "\(whisperConfiguration.model.displayName) model stored in \(modelsDirectoryPath)"
+            }
+            return "\(whisperConfiguration.model.displayName) is not prepared. Prepare it from the Models page."
         case .preparingModel(let model):
             return "Preparing \(model.displayName) in \(modelsDirectoryPath)"
         case .downloadingModel(let model, _):
@@ -520,7 +528,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     var whisperSettingsLocked: Bool {
-        if isRefinementServerPreparing {
+        if isRefinementServerPreparing || isDeletingModel {
             return true
         }
 
@@ -548,6 +556,14 @@ final class DictaFlowAppState: ObservableObject {
 
     var installedLocalModelFiles: [LocalModelFile] {
         modelDownloadService.installedModelFiles()
+    }
+
+    func isWhisperModelPrepared(_ model: WhisperModelDescriptor) -> Bool {
+        modelDownloadService.isWhisperModelPrepared(model)
+    }
+
+    func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool {
+        modelDownloadService.isRefinementModelPrepared(model)
     }
 
     var unusedLocalModelFiles: [LocalModelFile] {
@@ -645,12 +661,15 @@ final class DictaFlowAppState: ObservableObject {
         refreshAccessibilityPermissionStatus()
         registerGlobalHotkey()
         refreshRefinementRuntimeAvailability()
-        prepareDefaultModelIfNeeded()
         restoreCachedAvailableUpdate()
         checkForUpdatesIfNeeded()
 
         if launchExperience == .firstLaunch {
-            showMainWindow()
+            if isWhisperModelPrepared(whisperConfiguration.model) {
+                showMainWindow()
+            } else {
+                showMainWindowPage(.models)
+            }
             settingsStore.markInitialWindowPresentationComplete()
         }
 
@@ -774,8 +793,8 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         guard isSelectedRefinementModelPrepared else {
-            setPreservedStatusMessage("Choose and prepare a refinement model before turning on local cleanup.")
-            showMainWindowPage(.refinement)
+            setPreservedStatusMessage("Download and select a refinement model from Models before turning on local cleanup.")
+            showMainWindowPage(.models)
             return
         }
 
@@ -789,6 +808,11 @@ final class DictaFlowAppState: ObservableObject {
 
         guard isRefinementModelSupported(model) else {
             setPreservedStatusMessage(unsupportedRefinementModelMessage(for: model))
+            return
+        }
+
+        guard isRefinementModelPrepared(model) else {
+            setPreservedStatusMessage("Prepare \(model.displayName) from the Models page before selecting it.")
             return
         }
 
@@ -828,21 +852,6 @@ final class DictaFlowAppState: ObservableObject {
             showMainWindow()
             updateStatusMessage()
         }
-    }
-
-    func resetWhisperSettingsToDefaults() {
-        whisperConfiguration = .default
-        refinementConfiguration = .default
-        recordingPlaybackBehavior = .default
-        reloadRefinementPromptText()
-        isRefinementServerPreparing = false
-        Task { [transcriptRefinementService] in
-            await transcriptRefinementService.stop()
-        }
-        persistWhisperConfiguration()
-        persistRefinementConfiguration()
-        settingsStore.saveRecordingPlaybackBehavior(recordingPlaybackBehavior)
-        updateStatusMessage()
     }
 
     func refreshMicrophonePermissionStatus() {
@@ -932,10 +941,6 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    func retryModelPreparation() {
-        prepareDefaultModelIfNeeded()
-    }
-
     func prepareAndUseModel(_ model: WhisperModelDescriptor) {
         if whisperConfiguration.model != model {
             whisperConfiguration.model = model
@@ -946,14 +951,19 @@ final class DictaFlowAppState: ObservableObject {
         prepareDefaultModelIfNeeded()
     }
 
-    func prepareRefinementModel() {
-        guard isRefinementRuntimeAvailable else {
-            setPreservedStatusMessage(missingRefinementRuntimeActionMessage)
-            showMainWindow()
+    func updateWhisperModel(_ model: WhisperModelDescriptor) {
+        guard whisperConfiguration.model != model else {
             return
         }
 
-        prepareRefinementModelIfNeeded(force: true)
+        guard isWhisperModelPrepared(model) else {
+            setPreservedStatusMessage("Prepare \(model.displayName) from the Models page before selecting it.")
+            return
+        }
+
+        whisperConfiguration.model = model
+        persistWhisperConfiguration()
+        updateStatusMessage()
     }
 
     func prepareAndUseRefinementModel(_ model: RefinementModelDescriptor) {
@@ -964,20 +974,22 @@ final class DictaFlowAppState: ObservableObject {
 
         guard isRefinementRuntimeAvailable else {
             setPreservedStatusMessage(missingRefinementRuntimeActionMessage)
-            showMainWindow()
+            showMainWindowPage(.models)
             return
         }
+
+        let shouldEnableAfterPreparation = refinementConfiguration.isEnabled
 
         if refinementConfiguration.model != model {
             refinementConfiguration.model = model
             persistRefinementConfiguration()
-            if refinementConfiguration.isEnabled {
-                startPreparedRefinementServer(enableAfterStart: false)
-            }
             updateStatusMessage()
         }
 
-        prepareRefinementModelIfNeeded(force: true, enableAfterPreparation: true)
+        prepareRefinementModelIfNeeded(
+            force: true,
+            enableAfterPreparation: shouldEnableAfterPreparation
+        )
     }
 
     func beginGlobalShortcutEditing() {
@@ -1145,6 +1157,84 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    func deleteRefinementModel(_ model: RefinementModelDescriptor) {
+        guard !whisperSettingsLocked else {
+            setPreservedStatusMessage("Wait until the current recording, transcription, or model operation finishes before deleting a model.")
+            return
+        }
+
+        guard let file = installedLocalModelFiles.first(where: {
+            $0.category == .refinement && $0.modelIdentifier == model.modelIdentifier
+        }) else {
+            setPreservedStatusMessage("The \(model.displayName) model is not downloaded.")
+            return
+        }
+
+        let isActiveModel = refinementConfiguration.model == model
+        let wasRefinementEnabled = isActiveModel && refinementConfiguration.isEnabled
+        let fallbackModel = RefinementModelDescriptor.allCases
+            .filter {
+                $0 != model
+                    && modelDownloadService.isRefinementModelPrepared($0)
+                    && isRefinementModelSupported($0)
+            }
+            .max { $0.qualityRank < $1.qualityRank }
+
+        isDeletingModel = true
+        clearPreservedStatusMessage()
+        updateStatusMessage()
+
+        Task { [weak self, transcriptRefinementService] in
+            guard let self else {
+                return
+            }
+
+            if wasRefinementEnabled {
+                await transcriptRefinementService.stop()
+            }
+
+            do {
+                let deletedByteCount = try await self.modelDownloadService.deleteModelFiles([file])
+
+                await MainActor.run {
+                    self.isDeletingModel = false
+
+                    if isActiveModel {
+                        if let fallbackModel {
+                            self.refinementConfiguration.model = fallbackModel
+                        } else {
+                            self.refinementConfiguration.isEnabled = false
+                        }
+                        self.persistRefinementConfiguration()
+                    }
+
+                    let freedSpace = self.formattedLocalModelSize(deletedByteCount)
+                    if isActiveModel, let fallbackModel {
+                        self.setPreservedStatusMessage("Deleted \(model.displayName), freed \(freedSpace), and selected \(fallbackModel.displayName).")
+                        if wasRefinementEnabled {
+                            self.startPreparedRefinementServer(enableAfterStart: false)
+                        }
+                    } else if isActiveModel {
+                        self.setPreservedStatusMessage("Deleted \(model.displayName), freed \(freedSpace), and turned off text refinement because no downloaded refinement model remains.")
+                    } else {
+                        self.setPreservedStatusMessage("Deleted \(model.displayName) and freed \(freedSpace).")
+                    }
+                    self.updateStatusMessage()
+                }
+            } catch {
+                await MainActor.run {
+                    self.isDeletingModel = false
+                    if wasRefinementEnabled {
+                        self.startPreparedRefinementServer(enableAfterStart: false)
+                    }
+                    self.setPreservedStatusMessage("Could not delete \(model.displayName). \(error.localizedDescription)")
+                    self.showMainWindowPage(.models)
+                    self.updateStatusMessage()
+                }
+            }
+        }
+    }
+
     func prepareForTermination() {
         stopRecordingMetering()
         restoreRecordingPlaybackAdjustmentForTermination()
@@ -1206,6 +1296,8 @@ final class DictaFlowAppState: ObservableObject {
         let model = whisperConfiguration.model
         transcriptionState = .preparingModel(model)
         modelDownloadProgressText = nil
+        whisperModelPreparationStatusText = ""
+        whisperModelPreparationFailed = false
         updateStatusMessage()
 
         Task { [weak self] in
@@ -1227,14 +1319,18 @@ final class DictaFlowAppState: ObservableObject {
 
                     self.transcriptionState = .idle
                     self.modelDownloadProgressText = "Ready at \(self.modelsDirectoryPath)"
+                    self.whisperModelPreparationStatusText = ""
                     self.updateStatusMessage()
                 }
             } catch {
                 await MainActor.run {
                     self.transcriptionState = .idle
                     self.modelDownloadProgressText = nil
-                    self.setPreservedStatusMessage("Could not prepare the Whisper model. \(error.localizedDescription)")
-                    self.showMainWindow()
+                    let message = "Could not prepare the Whisper model. \(error.localizedDescription)"
+                    self.whisperModelPreparationStatusText = message
+                    self.whisperModelPreparationFailed = true
+                    self.setPreservedStatusMessage(message)
+                    self.showMainWindowPage(.models)
                 }
             }
         }
@@ -1253,12 +1349,14 @@ final class DictaFlowAppState: ObservableObject {
 
         guard isRefinementModelSupported(model) else {
             setPreservedStatusMessage(unsupportedRefinementModelMessage(for: model))
-            showMainWindow()
+            showMainWindowPage(.models)
             return
         }
 
         transcriptionState = .preparingRefinementModel(model)
         modelDownloadProgressText = nil
+        refinementModelPreparationStatusText = ""
+        refinementModelPreparationFailed = false
         updateStatusMessage()
 
         Task { [weak self] in
@@ -1280,6 +1378,7 @@ final class DictaFlowAppState: ObservableObject {
 
                     self.transcriptionState = .idle
                     self.modelDownloadProgressText = "Ready at \(self.modelsDirectoryPath)"
+                    self.refinementModelPreparationStatusText = ""
                     if enableAfterPreparation {
                         self.startPreparedRefinementServer(enableAfterStart: true)
                     }
@@ -1289,8 +1388,11 @@ final class DictaFlowAppState: ObservableObject {
                 await MainActor.run {
                     self.transcriptionState = .idle
                     self.modelDownloadProgressText = nil
-                    self.setPreservedStatusMessage("Could not prepare the refinement model. \(error.localizedDescription)")
-                    self.showMainWindow()
+                    let message = "Could not prepare the refinement model. \(error.localizedDescription)"
+                    self.refinementModelPreparationStatusText = message
+                    self.refinementModelPreparationFailed = true
+                    self.setPreservedStatusMessage(message)
+                    self.showMainWindowPage(.models)
                 }
             }
         }
@@ -1305,9 +1407,12 @@ final class DictaFlowAppState: ObservableObject {
                 transcriptionState = .idle
                 modelDownloadProgressText = "Ready at \(url.path)"
             }
+            whisperModelPreparationStatusText = ""
         case .starting(let expectedBytes):
             transcriptionState = .downloadingModel(model, progress: nil)
-            modelDownloadProgressText = formattedModelProgress(bytesWritten: 0, totalBytes: expectedBytes)
+            let progressText = formattedModelProgress(bytesWritten: 0, totalBytes: expectedBytes)
+            modelDownloadProgressText = "Downloading \(model.displayName) model: \(progressText)"
+            whisperModelPreparationStatusText = progressText
         case .downloading(let bytesWritten, let totalBytes):
             let progress: Double?
             if let totalBytes, totalBytes > 0 {
@@ -1316,7 +1421,9 @@ final class DictaFlowAppState: ObservableObject {
                 progress = nil
             }
             transcriptionState = .downloadingModel(model, progress: progress)
-            modelDownloadProgressText = formattedModelProgress(bytesWritten: bytesWritten, totalBytes: totalBytes)
+            let progressText = formattedModelProgress(bytesWritten: bytesWritten, totalBytes: totalBytes)
+            modelDownloadProgressText = "Downloading \(model.displayName) model: \(progressText)"
+            whisperModelPreparationStatusText = progressText
         case .finished(let url):
             modelDownloadProgressText = "Downloaded to \(url.path)"
         }
@@ -1333,13 +1440,12 @@ final class DictaFlowAppState: ObservableObject {
                 transcriptionState = .idle
                 modelDownloadProgressText = "Ready at \(url.path)"
             }
+            refinementModelPreparationStatusText = ""
         case .starting(let expectedBytes):
             transcriptionState = .downloadingRefinementModel(model, progress: nil)
-            modelDownloadProgressText = formattedModelProgress(
-                modelName: model.displayName,
-                bytesWritten: 0,
-                totalBytes: expectedBytes
-            )
+            let progressText = formattedModelProgress(bytesWritten: 0, totalBytes: expectedBytes)
+            modelDownloadProgressText = "Downloading \(model.displayName) model: \(progressText)"
+            refinementModelPreparationStatusText = progressText
         case .downloading(let bytesWritten, let totalBytes):
             let progress: Double?
             if let totalBytes, totalBytes > 0 {
@@ -1348,11 +1454,9 @@ final class DictaFlowAppState: ObservableObject {
                 progress = nil
             }
             transcriptionState = .downloadingRefinementModel(model, progress: progress)
-            modelDownloadProgressText = formattedModelProgress(
-                modelName: model.displayName,
-                bytesWritten: bytesWritten,
-                totalBytes: totalBytes
-            )
+            let progressText = formattedModelProgress(bytesWritten: bytesWritten, totalBytes: totalBytes)
+            modelDownloadProgressText = "Downloading \(model.displayName) model: \(progressText)"
+            refinementModelPreparationStatusText = progressText
         case .finished(let url):
             modelDownloadProgressText = "Downloaded to \(url.path)"
         }
@@ -1361,14 +1465,6 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func formattedModelProgress(bytesWritten: Int64, totalBytes: Int64?) -> String {
-        formattedModelProgress(
-            modelName: whisperConfiguration.model.displayName,
-            bytesWritten: bytesWritten,
-            totalBytes: totalBytes
-        )
-    }
-
-    private func formattedModelProgress(modelName: String, bytesWritten: Int64, totalBytes: Int64?) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useMB, .useGB]
         formatter.countStyle = .file
@@ -1376,10 +1472,10 @@ final class DictaFlowAppState: ObservableObject {
 
         if let totalBytes, totalBytes > 0 {
             let totalText = formatter.string(fromByteCount: totalBytes)
-            return "Downloading \(modelName) model: \(writtenText) of \(totalText)"
+            return "\(writtenText) of \(totalText)"
         }
 
-        return "Downloading \(modelName) model: \(writtenText)"
+        return writtenText
     }
 
     private func totalByteCount(for files: [LocalModelFile]) -> Int64 {
@@ -1466,6 +1562,13 @@ final class DictaFlowAppState: ObservableObject {
 
     private func beginRecordingFlow() async {
         clearPreservedStatusMessage()
+
+        guard isWhisperModelPrepared(whisperConfiguration.model) else {
+            setPreservedStatusMessage("\(whisperConfiguration.model.displayName) is not prepared. Open Models and prepare it before recording.")
+            showMainWindowPage(.models)
+            return
+        }
+
         pendingInsertionTargetApplication = captureCurrentInsertionTargetApplication()
 
         if microphonePermissionState != .granted {
@@ -1715,19 +1818,14 @@ final class DictaFlowAppState: ObservableObject {
 
         let model = whisperConfiguration.model
 
-        if !transcriptionState.isPreparingModel {
-            transcriptionState = .preparingModel(model)
-            modelDownloadProgressText = nil
-            updateStatusMessage()
+        guard let modelURL = await modelDownloadService.verifiedWhisperModelURL(for: model) else {
+            setRecordingOverlaySessionActive(false)
+            setPreservedStatusMessage("\(model.displayName) is not prepared. Open Models and prepare it before recording.")
+            showMainWindowPage(.models)
+            return
         }
 
         do {
-            let modelURL = try await modelDownloadService.ensureModelAvailable(model) { [weak self] event in
-                Task { @MainActor [weak self] in
-                    self?.apply(modelDownloadEvent: event, for: model)
-                }
-            }
-
             transcriptionState = .transcribing(model)
             updateStatusMessage()
 
@@ -2181,7 +2279,7 @@ final class DictaFlowAppState: ObservableObject {
 
         switch launchExperience {
         case .firstLaunch:
-            statusMessage = "First-launch session. DictaFlow is preparing its local Whisper model for offline use."
+            statusMessage = "First-launch session. Open Models to prepare a Whisper model for offline use."
         case .returningUser:
             statusMessage = "DictaFlow is ready in the menu bar. Press \(hotkeyDisplayText) to start recording."
         }
