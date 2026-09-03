@@ -55,10 +55,10 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
         window.minSize = NSSize(width: 660, height: 520)
         window.center()
         window.isOpaque = true
-        window.backgroundColor = .black
+        window.backgroundColor = NSColor(red: 0.090, green: 0.098, blue: 0.114, alpha: 1)
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
-        window.setFrameAutosaveName("DictaFlowMainWindowCompact")
+        window.setFrameAutosaveName("DictaFlowMainWindowSidebar")
         window.tabbingMode = .disallowed
         window.toolbarStyle = .unifiedCompact
         window.delegate = self

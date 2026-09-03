@@ -2,41 +2,58 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var appState: DictaFlowAppState
+    @State private var isShowingHelp = false
+    @State private var isSidebarCollapsed = false
     @State private var isShowingModelPreparationConfirmation = false
+    @State private var isShowingRefinementModelPreparationConfirmation = false
+    @State private var isShowingRefinementModelDeletionConfirmation = false
     @State private var isShowingUnusedModelDeletionConfirmation = false
     @State private var selectedModel: WhisperModelDescriptor
     @State private var selectedRefinementModel: RefinementModelDescriptor
+    @State private var refinementModelPendingDeletion: RefinementModelDescriptor?
     @State private var unusedModelDeletionCandidates: [LocalModelFile] = []
 
     init(appState: DictaFlowAppState) {
         self.appState = appState
         _selectedModel = State(initialValue: appState.whisperConfiguration.model)
         _selectedRefinementModel = State(initialValue: appState.refinementConfiguration.model)
+        _refinementModelPendingDeletion = State(initialValue: nil)
     }
 
     var body: some View {
-        ZStack {
-            AppTheme.background.ignoresSafeArea()
+        HStack(spacing: 0) {
+            sidebar
 
             VStack(spacing: 0) {
-                topBar
-
+                pageHeader
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            .background(AppTheme.background)
         }
         .frame(minWidth: AppLayout.windowMinWidth, minHeight: AppLayout.windowMinHeight)
         .foregroundStyle(AppTheme.primaryText)
         .alert(
-            "Prepare \(selectedModel.displayName) Model?",
+            "Download \(selectedModel.displayName) Model?",
             isPresented: $isShowingModelPreparationConfirmation
         ) {
             Button("Cancel", role: .cancel) {}
-            Button("Prepare Model") {
+            Button("Download Model") {
                 appState.prepareAndUseModel(selectedModel)
             }
         } message: {
-            Text("DictaFlow will use \(selectedModel.displayName) for future recordings and download it locally if needed.")
+            Text("DictaFlow will download \(selectedModel.displayName) locally and use it for future recordings.")
+        }
+        .alert(
+            "Download \(selectedRefinementModel.displayName) Model?",
+            isPresented: $isShowingRefinementModelPreparationConfirmation
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Download Model") {
+                appState.prepareAndUseRefinementModel(selectedRefinementModel)
+            }
+        } message: {
+            Text("DictaFlow will download \(selectedRefinementModel.displayName) locally and use it for text refinement.")
         }
         .alert(
             "Delete Unused Models?",
@@ -50,300 +67,358 @@ struct ContentView: View {
         } message: {
             Text(unusedModelDeletionConfirmationText)
         }
+        .alert(
+            "Delete \(refinementModelPendingDeletion?.displayName ?? "Refinement Model")?",
+            isPresented: $isShowingRefinementModelDeletionConfirmation
+        ) {
+            Button("Cancel", role: .cancel) {
+                refinementModelPendingDeletion = nil
+            }
+            Button("Delete Model", role: .destructive) {
+                if let model = refinementModelPendingDeletion {
+                    appState.deleteRefinementModel(model)
+                }
+                refinementModelPendingDeletion = nil
+            }
+        } message: {
+            Text("This permanently deletes the local model file. If it is active, DictaFlow will use another downloaded refinement model when available. Otherwise, text refinement will turn off.")
+        }
     }
 
     @ViewBuilder
     private var content: some View {
         switch appState.mainWindowPage {
-        case .dashboard:
-            dashboardPage
-        case .models:
-            modelsPage
-        case .settings:
-            settingsPage
+        case .overview:
+            overviewPage
+        case .dictation:
+            dictationPage
+        case .refinement:
+            refinementPage
         case .history:
             historyPage
+        case .shortcutAndAudio:
+            shortcutAndAudioPage
+        case .models:
+            modelsPage
+        case .permissions:
+            permissionsPage
+        case .updates:
+            updatesPage
         }
     }
 
-    private var topBar: some View {
-        HStack(spacing: 12) {
-            Image(systemName: appState.menuBarIconName)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(statusColor)
+    private var sidebar: some View {
+        VStack(alignment: isSidebarCollapsed ? .center : .leading, spacing: 0) {
+            Group {
+                if isSidebarCollapsed {
+                    CollapsedSidebarLogoButton {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            isSidebarCollapsed = false
+                        }
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        DictaFlowLogo()
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text("DictaFlow")
-                    .font(.system(size: 18, weight: .semibold))
+                        Spacer(minLength: 0)
+
+                        SidebarCollapseButton {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                isSidebarCollapsed = true
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                }
+            }
+            .padding(.top, 28)
+            .padding(.bottom, 23)
+            .frame(maxWidth: .infinity)
+
+            SidebarSection(title: "DICTAFLOW", isCollapsed: isSidebarCollapsed) {
+                SidebarItem(page: .overview, title: "Overview", systemImage: "square.grid.2x2.fill", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .dictation, title: "Dictation", systemImage: "waveform", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .refinement, title: "Refinement", systemImage: "wand.and.sparkles", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .history, title: "History", systemImage: "clock", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+            }
+
+            Divider().overlay(AppTheme.sidebarBorder).padding(.vertical, 13)
+
+            SidebarSection(title: "CONFIGURATION", isCollapsed: isSidebarCollapsed) {
+                SidebarItem(page: .shortcutAndAudio, title: "Shortcut & Audio", systemImage: "keyboard", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .models, title: "Models", systemImage: "cpu", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .permissions, title: "Permissions", systemImage: "lock.shield", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .updates, title: "Updates", systemImage: "arrow.triangle.2.circlepath", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+            }
+
+            Spacer(minLength: 12)
+        }
+        .frame(
+            minWidth: isSidebarCollapsed ? AppLayout.collapsedSidebarWidth : AppLayout.sidebarWidth,
+            idealWidth: isSidebarCollapsed ? AppLayout.collapsedSidebarWidth : AppLayout.sidebarWidth,
+            maxWidth: isSidebarCollapsed ? AppLayout.collapsedSidebarWidth : AppLayout.sidebarWidth
+        )
+        .background(AppTheme.sidebar)
+        .overlay(alignment: .trailing) {
+            Rectangle().fill(AppTheme.sidebarBorder).frame(width: 1)
+        }
+    }
+
+    private var pageHeader: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(pageTitle)
+                    .font(.system(size: 23, weight: .semibold))
+
+                Text(pageSubtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .lineLimit(1)
             }
 
             Spacer()
 
             Button {
-                appState.mainWindowPage = .settings
+                isShowingHelp.toggle()
             } label: {
-                Label(appState.hotkeyDisplayText, systemImage: "keyboard")
+                Image(systemName: "questionmark")
+                    .font(.system(size: 13, weight: .bold))
+                    .frame(width: 28, height: 28)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-
-            Button {
-                appState.closeMainWindow()
-            } label: {
-                Image(systemName: "rectangle.compress.vertical")
+            .buttonStyle(.plain)
+            .background(AppTheme.controlFill, in: Circle())
+            .overlay(Circle().stroke(AppTheme.border, lineWidth: 1))
+            .help("Help")
+            .popover(isPresented: $isShowingHelp, arrowEdge: .top) {
+                HelpPopover(selection: mainWindowPageBinding, isPresented: $isShowingHelp)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-            .help("Hide Window")
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 20)
-        .padding(.bottom, 14)
+        .padding(.horizontal, AppLayout.contentPadding)
+        .frame(height: AppLayout.headerHeight)
         .background(AppTheme.barFill)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(AppTheme.border).frame(height: 1)
+        }
     }
 
-    private var dashboardPage: some View {
+    private var overviewPage: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: AppLayout.dashboardSpacing) {
-                recordingTile
-                refinementTile
+            VStack(alignment: .leading, spacing: 10) {
+                overviewRecordingTile
 
-                LazyVGrid(columns: compactNavigationColumns, spacing: AppLayout.dashboardSpacing) {
-                    NavigationTile(title: "Model", value: appState.whisperConfiguration.model.displayName, systemImage: "cpu") {
+                HStack(spacing: 10) {
+                    OverviewFeatureCard(
+                        title: "Whisper Model",
+                        badge: overviewWhisperModelBadge,
+                        systemImage: "cpu",
+                        primaryText: Text(appState.whisperConfiguration.model.displayName).fontWeight(.semibold)
+                            + Text(" · Multilingual"),
+                        secondaryText: "Fast local transcription · \(appState.whisperConfiguration.model.approximateDiskSizeDescription)"
+                    ) {
                         appState.mainWindowPage = .models
                     }
 
-                    NavigationTile(title: "Settings", value: "Preferences", systemImage: "slider.horizontal.3") {
-                        appState.mainWindowPage = .settings
-                    }
-
-                    NavigationTile(title: "History", value: historySummaryText, systemImage: "clock") {
-                        appState.mainWindowPage = .history
+                    OverviewFeatureCard(
+                        title: "Text Refinement",
+                        badge: appState.refinementConfiguration.isEnabled ? "ON" : "OFF",
+                        systemImage: "wand.and.sparkles",
+                        primaryText: Text(appState.refinementConfiguration.model.displayName).fontWeight(.semibold),
+                        secondaryText: "Cleans punctuation and wording locally."
+                    ) {
+                        appState.mainWindowPage = .refinement
                     }
                 }
 
                 GlassTile {
-                    VStack(alignment: .leading, spacing: 8) {
-                        StatusLine(
-                            title: "Microphone",
-                            value: appState.microphonePermissionState.title,
-                            systemImage: "mic.fill",
-                            color: appState.microphonePermissionState == .granted ? AppTheme.primaryText : AppTheme.secondaryText
-                        )
-
-                        StatusLine(
-                            title: "Accessibility",
-                            value: appState.accessibilityPermissionState.title,
-                            systemImage: "figure.wave.circle",
-                            color: appState.accessibilityPermissionState == .granted ? AppTheme.primaryText : AppTheme.secondaryText
-                        )
-
-                        if hasMissingRequiredSettings {
-                            Button("Refresh") {
-                                appState.refreshMicrophonePermissionStatus()
-                                appState.refreshAccessibilityPermissionStatus()
-                            }
-                            .controlSize(.regular)
+                    VStack(alignment: .leading, spacing: 0) {
+                        StatusNavigationLine(title: "Microphone", value: appState.microphonePermissionState.title, systemImage: "mic.fill") {
+                            appState.mainWindowPage = .permissions
+                        }
+                        Divider().overlay(AppTheme.border)
+                        StatusNavigationLine(title: "Accessibility", value: appState.accessibilityPermissionState.title, systemImage: "figure.wave.circle") {
+                            appState.mainWindowPage = .permissions
+                        }
+                        Divider().overlay(AppTheme.border)
+                        StatusNavigationLine(title: "Last transcript", value: historySummaryText, systemImage: "text.bubble") {
+                            appState.mainWindowPage = .history
                         }
                     }
                 }
             }
-            .padding(AppLayout.dashboardPadding)
-            .frame(maxWidth: AppLayout.dashboardMaxWidth, alignment: .top)
-            .frame(maxWidth: .infinity, alignment: .top)
+            .padding(.horizontal, AppLayout.contentPadding)
+            .padding(.top, 20)
+            .padding(.bottom, 22)
         }
     }
 
-    private var refinementTile: some View {
-        GlassTile {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 10) {
-                    Image(systemName: "wand.and.sparkles")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(AppTheme.accent)
-                        .frame(width: 22)
+    private var overviewRecordingTile: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("DICTATION")
+                    .font(.system(size: 9, weight: .bold))
+                    .tracking(0.72)
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .padding(.bottom, 6)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Refined Text with LLM")
-                            .font(.system(size: 15, weight: .semibold))
+                Text(appState.recordingState.isRecording ? "Listening…" : "Speak naturally.")
+                    .font(.system(size: 22, weight: .bold))
+                    .tracking(-0.45)
 
-                        Text(appState.refinementConfiguration.isEnabled ? "On" : "Off")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .lineLimit(1)
-                    }
+                Text(overviewRecordingDetailText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .lineSpacing(2)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 7)
+                    .padding(.bottom, 14)
 
-                    Spacer(minLength: 10)
-
-                    Toggle("", isOn: refinementEnabledBinding)
-                        .labelsHidden()
-                        .toggleStyle(AppSwitchStyle())
-                        .disabled(appState.whisperSettingsLocked)
+                Button {
+                    appState.toggleDictation()
+                } label: {
+                    Text("\(appState.recordingState.isRecording ? "Stop Recording" : "Start Dictation")  ·  \(appState.hotkeyDisplayText)")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .padding(.horizontal, 13)
+                        .frame(minWidth: 142, minHeight: 32)
                 }
-
-                HStack(spacing: 8) {
-                    if appState.isRefinementServerPreparing {
-                        ProgressView()
-                            .controlSize(.small)
-                            .scaleEffect(0.65)
-                    }
-
-                    Text(shortRefinementStatusText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(AppTheme.secondaryText)
-                        .lineLimit(2)
-                }
-
-                if appState.refinementConfiguration.isEnabled {
-                    HStack(spacing: 10) {
-                        Button {
-                            appState.prepareRefinementModel()
-                        } label: {
-                            Label("Prepare", systemImage: "arrow.down.circle")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.regular)
-                        .disabled(appState.whisperSettingsLocked || !appState.isRefinementRuntimeAvailable || !appState.isSelectedRefinementModelSupported)
-
-                        Button {
-                            appState.mainWindowPage = .settings
-                        } label: {
-                            Label("Settings", systemImage: "slider.horizontal.3")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.regular)
-                    }
-                } else if !appState.hasPreparedRefinementModel {
-                    HStack(spacing: 10) {
-                        Button {
-                            appState.mainWindowPage = .settings
-                        } label: {
-                            Label("Choose Model", systemImage: "list.bullet")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.regular)
-                        .tint(AppTheme.accent)
-
-                        Text(appState.refinementModelMenuTitle(for: appState.refinementRecommendation.recommendedModel))
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(AppTheme.tertiaryText)
-                            .lineLimit(1)
-                    }
-                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.white)
+                .background(AppTheme.accent, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .shadow(color: AppTheme.accent.opacity(0.28), radius: 8, x: 0, y: 5)
+                .disabled(appState.isEditingGlobalShortcut || appState.transcriptionState.isBusy || appState.textInsertionState.isBusy)
             }
-        }
-    }
+            .padding(.leading, 19)
+            .padding(.vertical, 17)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-    private var recordingTile: some View {
-        GlassTile {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.white.opacity(0.045))
-                            .overlay(Circle().stroke(AppTheme.border, lineWidth: 0.75))
+            ZStack {
+                Circle()
+                    .fill(AppTheme.accent.opacity(0.07))
+                    .frame(width: 118, height: 118)
+                    .blur(radius: 12)
 
-                        Image(systemName: appState.recordingState.isRecording ? "stop.fill" : "mic.fill")
-                            .font(.system(size: 21, weight: .medium))
-                            .foregroundStyle(AppTheme.primaryText)
-                    }
-                    .frame(width: 42, height: 42)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(appState.recordingState.isRecording ? "Recording" : "Ready")
-                            .font(.system(size: 17, weight: .semibold))
-
-                        Text(appState.dictationSummaryText)
-                            .font(.system(size: 13))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    Spacer(minLength: 10)
-
-                    WaveformBadge()
-                        .frame(width: 38, height: 26)
-                        .foregroundStyle(AppTheme.tertiaryText)
-                }
-
-                HStack {
-                    Spacer(minLength: 0)
-
-                    Button {
-                        appState.toggleDictation()
-                    } label: {
-                        Label(appState.dictationActionTitle, systemImage: appState.recordingState.isRecording ? "stop.fill" : "mic.fill")
-                            .font(.system(size: 14, weight: .semibold))
-                            .frame(minWidth: 260, maxWidth: AppLayout.recordingButtonMaxWidth, minHeight: 36)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                    .tint(AppTheme.accent)
-                    .disabled(
-                        appState.isEditingGlobalShortcut
-                            || appState.transcriptionState.isBusy
-                            || appState.textInsertionState.isBusy
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(AppTheme.accent)
+                    .frame(width: 54, height: 54)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.white.opacity(0.20), lineWidth: 1)
                     )
+                    .shadow(color: AppTheme.accent.opacity(0.18), radius: 12, x: 0, y: 8)
 
-                    Spacer(minLength: 0)
-                }
+                Image(systemName: appState.recordingState.isRecording ? "stop.fill" : "mic.fill")
+                    .font(.system(size: 21, weight: .medium))
+                    .foregroundStyle(Color.white)
             }
+            .frame(width: 122)
         }
+        .frame(maxWidth: .infinity, minHeight: 152)
+        .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: AppLayout.tileCornerRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AppLayout.tileCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppLayout.tileCornerRadius, style: .continuous)
+                .stroke(AppTheme.border, lineWidth: 1)
+        )
     }
 
     private var modelsPage: some View {
-        DetailPage(title: "Models", systemImage: "cpu", back: goBackToDashboard) {
-            VStack(alignment: .leading, spacing: AppLayout.sectionSpacing) {
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 12) {
-                        TileHeader(title: "Active Model", systemImage: "cpu")
+        DetailPage {
+            VStack(alignment: .leading, spacing: 26) {
+                VStack(alignment: .leading, spacing: 12) {
+                    ModelPageSectionHeader(
+                        title: "Whisper models",
+                        subtitle: "Local speech recognition and translation"
+                    )
 
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(appState.whisperConfiguration.model.displayName)
-                                .font(.system(size: 17, weight: .semibold))
+                    EqualHeightModelGrid(spacing: AppLayout.sectionSpacing) {
+                        ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
+                            let isPrepared = appState.isWhisperModelPrepared(model)
+                            let isActive = model == appState.whisperConfiguration.model && isPrepared
 
-                            Spacer()
-
-                            Text(appState.whisperConfiguration.model.approximateDiskSizeDescription)
-                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(AppTheme.accent)
+                            ModelChoiceCard(
+                                name: model.displayName,
+                                sizeText: model.approximateDiskSizeDescription,
+                                detailText: model.detailText,
+                                isActive: isActive,
+                                needsPreparation: !isPrepared,
+                                isUnavailable: false,
+                                isInteractionLocked: appState.whisperSettingsLocked,
+                                deleteAction: nil
+                            ) {
+                                selectedModel = model
+                                if !isPrepared {
+                                    isShowingModelPreparationConfirmation = true
+                                } else if !isActive {
+                                    appState.updateWhisperModel(model)
+                                }
+                            }
                         }
+                    }
 
-                        Text(shortModelStatusText)
-                            .font(.system(size: 13))
-                            .foregroundStyle(AppTheme.secondaryText)
+                    if isWhisperModelPreparationActive || appState.whisperModelPreparationFailed {
+                        ModelDownloadStatusPanel(
+                            title: whisperModelDownloadStatusTitle,
+                            statusText: appState.whisperModelPreparationStatusText,
+                            isActive: isWhisperModelPreparationActive,
+                            progress: whisperModelPreparationProgress,
+                            hasFailed: appState.whisperModelPreparationFailed
+                        )
                     }
                 }
 
-                LazyVGrid(columns: dashboardColumns, spacing: AppLayout.sectionSpacing) {
-                    ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
-                        ModelChoiceCard(
-                            model: model,
-                            isActive: model == appState.whisperConfiguration.model,
-                            isSelected: model == selectedModel
-                        ) {
-                            selectedModel = model
+                VStack(alignment: .leading, spacing: 12) {
+                    ModelPageSectionHeader(
+                        title: "Text refinement models",
+                        subtitle: "Local cleanup for punctuation and wording"
+                    )
+
+                    EqualHeightModelGrid(spacing: AppLayout.sectionSpacing) {
+                        ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
+                            let isPrepared = appState.isRefinementModelPrepared(model)
+                            let isActive = model == appState.refinementConfiguration.model && isPrepared
+
+                            ModelChoiceCard(
+                                name: model.displayName,
+                                sizeText: "\(model.approximateDiskSizeDescription) · \(model.estimatedRuntimeMemoryDescription)",
+                                detailText: appState.refinementModelDetailText(for: model),
+                                isActive: isActive,
+                                needsPreparation: !isPrepared,
+                                isUnavailable: !appState.isRefinementModelSupported(model),
+                                isInteractionLocked: appState.whisperSettingsLocked,
+                                deleteAction: isPrepared ? {
+                                    refinementModelPendingDeletion = model
+                                    isShowingRefinementModelDeletionConfirmation = true
+                                } : nil
+                            ) {
+                                selectedRefinementModel = model
+                                if !isPrepared {
+                                    isShowingRefinementModelPreparationConfirmation = true
+                                } else if !isActive {
+                                    appState.updateRefinementModel(model)
+                                }
+                            }
                         }
+                    }
+
+                    if isRefinementModelPreparationActive || appState.refinementModelPreparationFailed {
+                        ModelDownloadStatusPanel(
+                            title: refinementModelDownloadStatusTitle,
+                            statusText: appState.refinementModelPreparationStatusText,
+                            isActive: isRefinementModelPreparationActive,
+                            progress: refinementModelPreparationProgress,
+                            hasFailed: appState.refinementModelPreparationFailed
+                        )
                     }
                 }
 
-                HStack(spacing: 10) {
-                    Button {
-                        if selectedModel == appState.whisperConfiguration.model {
-                            appState.retryModelPreparation()
-                        } else {
-                            isShowingModelPreparationConfirmation = true
-                        }
-                    } label: {
-                        Label(selectedModel == appState.whisperConfiguration.model ? "Prepare" : "Use Model", systemImage: "arrow.down.circle")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(AppTheme.accent)
-                    .disabled(appState.whisperSettingsLocked)
-                }
+                VStack(alignment: .leading, spacing: 12) {
+                    ModelPageSectionHeader(
+                        title: "Storage",
+                        subtitle: "Installed model files and disk usage"
+                    )
 
-                modelStorageTile
+                    modelStorageTile
+                }
             }
         }
     }
@@ -351,8 +426,6 @@ struct ContentView: View {
     private var modelStorageTile: some View {
         GlassTile {
             VStack(alignment: .leading, spacing: 12) {
-                TileHeader(title: "Storage", systemImage: "externaldrive")
-
                 Text(appState.modelStorageStatusText)
                     .font(.system(size: 13))
                     .foregroundStyle(AppTheme.secondaryText)
@@ -373,13 +446,7 @@ struct ContentView: View {
                 }
 
                 HStack(spacing: 10) {
-                    Button {
-                        prepareUnusedModelDeletionConfirmation()
-                    } label: {
-                        Label("Delete Unused Models...", systemImage: "trash")
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(!appState.canReviewUnusedModelDeletion)
+                    Spacer(minLength: 0)
 
                     Button {
                         appState.openModelsFolder()
@@ -387,319 +454,354 @@ struct ContentView: View {
                         Label("Open Folder", systemImage: "folder")
                     }
                     .buttonStyle(.bordered)
+
+                    Button {
+                        prepareUnusedModelDeletionConfirmation()
+                    } label: {
+                        Label("Delete Unused Models", systemImage: "trash")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(AppTheme.destructive)
+                    .disabled(!appState.canReviewUnusedModelDeletion)
                 }
             }
         }
     }
 
-    private var settingsPage: some View {
-        DetailPage(title: "Settings", systemImage: "slider.horizontal.3", back: goBackToDashboard) {
-            VStack(alignment: .leading, spacing: AppLayout.sectionSpacing) {
-                GlassTile {
-                    GlobalShortcutSettingsContent(appState: appState)
-                }
+    private var shortcutAndAudioPage: some View {
+        DetailPage {
+            VStack(alignment: .leading, spacing: 7) {
+                FormSectionTitle("Global shortcut")
 
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SettingLabel(
-                            title: "Playback During Recording",
-                            value: appState.recordingPlaybackBehavior.title,
-                            systemImage: "speaker.wave.2"
-                        )
-
-                        Picker("Playback During Recording", selection: recordingPlaybackBehaviorBinding) {
-                            ForEach(RecordingPlaybackBehavior.allCases, id: \.self) { behavior in
-                                Text(behavior.title)
-                                    .tag(behavior)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .disabled(appState.whisperSettingsLocked)
-
-                        Text(appState.recordingPlaybackBehavior.detailText)
-                            .font(.system(size: 12))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "pause.circle")
-                                .foregroundStyle(AppTheme.tertiaryText)
-                                .frame(width: 20)
-
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("Pause Supported Apps")
-                                    .font(.system(size: 13, weight: .semibold))
-
-                                Text("Coming soon. DictaFlow will pause supported audio apps during recording and resume them afterward.")
-                                    .font(.system(size: 12))
+                SettingsFormPanel {
+                    SettingsFormRow(
+                        title: "Start or stop dictation",
+                        detail: appState.isEditingGlobalShortcut ? "Press a shortcut with at least one modifier" : "Works from any app"
+                    ) {
+                        if appState.isEditingGlobalShortcut {
+                            ZStack {
+                                Text("Press shortcut…")
+                                    .font(.system(size: 11, weight: .semibold))
                                     .foregroundStyle(AppTheme.secondaryText)
-                                    .fixedSize(horizontal: false, vertical: true)
+
+                                GlobalShortcutCaptureView(
+                                    isCapturing: true,
+                                    onShortcut: { appState.handleGlobalShortcutCandidate($0) },
+                                    onCancel: { appState.cancelGlobalShortcutEditing() }
+                                )
+                                .opacity(0.01)
+                                .accessibilityHidden(true)
                             }
+                            .frame(width: 142, height: 28)
+                            .background(AppTheme.editorFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .stroke(AppTheme.accent.opacity(0.65), lineWidth: 1)
+                            )
+                        } else {
+                            Button(appState.hotkeyDisplayText) {
+                                appState.beginGlobalShortcutEditing()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .frame(width: 142, alignment: .trailing)
+                            .disabled(appState.whisperSettingsLocked)
+                        }
+                    }
+
+                    if appState.isEditingGlobalShortcut {
+                        Divider().overlay(AppTheme.border)
+
+                        HStack(spacing: 10) {
+                            Text(appState.globalShortcutEditingMessage ?? "Escape cancels without changing the shortcut.")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(appState.globalShortcutEditingMessage == nil ? AppTheme.secondaryText : Color.orange.opacity(0.9))
 
                             Spacer(minLength: 8)
 
-                            Text("Coming Soon")
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(AppTheme.tertiaryText)
+                            Button("Cancel", role: .cancel) {
+                                appState.cancelGlobalShortcutEditing()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
-                        .opacity(0.72)
+                        .padding(.horizontal, 13)
+                        .frame(minHeight: 38)
                     }
                 }
 
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SettingLabel(title: "Task", value: appState.whisperConfiguration.taskMode.title, systemImage: "text.bubble")
+                FormSectionTitle("During recording")
+                    .padding(.top, 7)
 
-                        Picker("Task", selection: taskModeBinding) {
-                            ForEach(WhisperTaskMode.allCases, id: \.self) { taskMode in
-                                Text(taskMode.title).tag(taskMode)
-                            }
+                SettingsFormPanel {
+                    SettingsFormRow(
+                        title: "System audio",
+                        detail: "Choose how other audio behaves while recording"
+                    ) {
+                        Picker("System audio", selection: recordingPlaybackBehaviorBinding) {
+                            Text("Unchanged").tag(RecordingPlaybackBehavior.unchanged)
+                            Text("Lower").tag(RecordingPlaybackBehavior.lowerSystemVolume)
                         }
                         .labelsHidden()
                         .pickerStyle(.segmented)
+                        .frame(width: 166)
                         .disabled(appState.whisperSettingsLocked)
                     }
+
+                    Divider().overlay(AppTheme.border)
+
+                    SettingsFormRow(
+                        title: "Pause supported apps",
+                        detail: "Resume playback after recording"
+                    ) {
+                        Text("COMING SOON")
+                            .font(.system(size: 9.5, weight: .bold))
+                            .foregroundStyle(AppTheme.accent.opacity(0.85))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 5)
+                            .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    }
+                    .opacity(0.72)
                 }
+            }
+        }
+    }
 
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SettingLabel(title: "Language", value: appState.whisperConfiguration.inputLanguage.displayName, systemImage: "globe")
+    private var dictationPage: some View {
+        DetailPage {
+            VStack(alignment: .leading, spacing: 7) {
+                FormSectionTitle("Transcription defaults")
 
-                        Picker("Language", selection: inputLanguageBinding) {
-                            Text(WhisperInputLanguage.automatic.displayName)
-                                .tag(WhisperInputLanguage.automatic)
+                SettingsFormPanel {
+                    SettingsFormRow(
+                        title: "Task",
+                        detail: "Transcribe speech or translate it to English"
+                    ) {
+                        Picker("Task", selection: taskModeBinding) {
+                            Text("Transcribe").tag(WhisperTaskMode.transcribe)
+                            Text("Translate").tag(WhisperTaskMode.translateToEnglish)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 166)
+                        .disabled(appState.whisperSettingsLocked)
+                    }
 
+                    Divider().overlay(AppTheme.border)
+
+                    SettingsFormRow(
+                        title: "Input language",
+                        detail: "Automatic works well for mixed-language speech"
+                    ) {
+                        Picker("Input language", selection: inputLanguageBinding) {
+                            Text(WhisperInputLanguage.automatic.displayName).tag(WhisperInputLanguage.automatic)
                             if !appState.commonWhisperLanguages.isEmpty {
                                 Divider()
-
                                 Section("Common") {
                                     ForEach(appState.commonWhisperLanguages) { language in
-                                        Text(language.displayName)
-                                            .tag(language.inputLanguage)
+                                        Text(language.displayName).tag(language.inputLanguage)
                                     }
                                 }
                             }
-
                             Section("All") {
                                 ForEach(appState.additionalWhisperLanguages) { language in
-                                    Text(language.displayName)
-                                        .tag(language.inputLanguage)
+                                    Text(language.displayName).tag(language.inputLanguage)
                                 }
                             }
                         }
                         .labelsHidden()
                         .pickerStyle(.menu)
+                        .frame(width: 142)
                         .disabled(appState.whisperSettingsLocked)
                     }
-                }
 
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SettingLabel(
-                            title: "Refinement",
-                            value: appState.refinementConfiguration.isEnabled ? "On" : "Off",
-                            systemImage: "wand.and.sparkles"
+                    Divider().overlay(AppTheme.border)
+
+                    SettingsFormRow(
+                        title: "Whisper model",
+                        detail: "Only prepared local models can be selected"
+                    ) {
+                        WhisperModelPickerControl(
+                            selectedModel: appState.whisperConfiguration.model,
+                            isEnabled: !appState.whisperSettingsLocked,
+                            isModelSelectable: { appState.isWhisperModelPrepared($0) },
+                            selectModel: { appState.updateWhisperModel($0) }
                         )
+                    }
+                }
+            }
+        }
+    }
 
-                        Toggle("Clean transcripts locally before insertion", isOn: refinementEnabledBinding)
+    private var refinementPage: some View {
+        DetailPage {
+            VStack(alignment: .leading, spacing: 7) {
+                FormSectionTitle("Local text cleanup")
+
+                SettingsFormPanel {
+                    SettingsFormRow(
+                        title: "Refine before insertion",
+                        detail: "Clean punctuation and wording with a local LLM"
+                    ) {
+                        Toggle("Refine before insertion", isOn: refinementEnabledBinding)
+                            .labelsHidden()
                             .toggleStyle(.switch)
                             .disabled(appState.whisperSettingsLocked)
+                    }
 
-                        Picker("Model", selection: refinementModelBinding) {
-                            ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
-                                Text(appState.refinementModelPickerTitle(for: model))
-                                    .tag(model)
-                                    .disabled(!appState.isRefinementModelSupported(model))
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
+                    Divider().overlay(AppTheme.border)
+
+                    SettingsFormRow(
+                        title: "Refinement model",
+                        detail: "Only prepared local models can be selected"
+                    ) {
+                        RefinementModelPickerControl(
+                            selectedModel: appState.isSelectedRefinementModelPrepared
+                                ? appState.refinementConfiguration.model
+                                : nil,
+                            emptySelectionTitle: RefinementModelDescriptor.allCases.contains {
+                                appState.isRefinementModelSupported($0) && appState.isRefinementModelPrepared($0)
+                            } ? "Select a model" : "No model available",
+                            isEnabled: !appState.whisperSettingsLocked && appState.isRefinementRuntimeAvailable,
+                            isModelSelectable: {
+                                appState.isRefinementModelSupported($0) && appState.isRefinementModelPrepared($0)
+                            },
+                            selectModel: { appState.updateRefinementModel($0) }
+                        )
+                    }
+                }
+
+                FormSectionTitle("System prompt")
+                    .padding(.top, 7)
+
+                TextEditor(text: refinementPromptTextBinding)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(AppTheme.primaryText.opacity(0.86))
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 116)
+                    .padding(9)
+                    .background(AppTheme.editorFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(AppTheme.border, lineWidth: 1)
+                    )
+                    .disabled(appState.whisperSettingsLocked)
+
+                HStack(spacing: 8) {
+                    Text(shortRefinementStatusText)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(AppTheme.tertiaryText)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 8)
+
+                    Button("Folder") { appState.openRefinementPromptsFolder() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                    Button("Reset") { appState.resetActiveRefinementPrompt() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                         .disabled(appState.whisperSettingsLocked)
 
-                        Text(appState.refinementModelDetailText(for: selectedRefinementModel))
-                            .font(.system(size: 13))
-                            .foregroundStyle(appState.isRefinementModelSupported(selectedRefinementModel) ? AppTheme.secondaryText : Color.orange.opacity(0.86))
-                            .fixedSize(horizontal: false, vertical: true)
+                    Button("Save") { appState.saveRefinementPromptText() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .tint(AppTheme.accent)
+                        .disabled(appState.whisperSettingsLocked || !appState.isRefinementPromptDirty || appState.refinementPromptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
 
-                        Divider()
-                            .overlay(AppTheme.border)
+    private var permissionsPage: some View {
+        DetailPage {
+            VStack(alignment: .leading, spacing: 7) {
+                FormSectionTitle("Required access")
 
-                        VStack(alignment: .leading, spacing: 8) {
-                            SettingLabel(
-                                title: "System Prompt",
-                                value: appState.hasCustomRefinementPrompt ? "Custom" : "Default",
-                                systemImage: "text.alignleft"
-                            )
+                SettingsFormPanel {
+                    SettingsFormRow(
+                        title: "Microphone",
+                        detail: "Required to record speech"
+                    ) {
+                        PermissionStatusControl(
+                            title: appState.microphonePermissionState.title,
+                            isAllowed: appState.microphonePermissionState == .granted,
+                            showsSettingsButton: appState.microphonePermissionState == .denied,
+                            openSettings: { appState.openMicrophoneSettings() }
+                        )
+                    }
 
-                            Text("These instructions are sent as the system message. Each transcript is sent separately as the user message and is not stored in this editor.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
+                    Divider().overlay(AppTheme.border)
 
-                            TextEditor(text: refinementPromptTextBinding)
-                                .font(.system(size: 12, design: .monospaced))
-                                .scrollContentBackground(.hidden)
-                                .frame(minHeight: 170)
-                                .padding(8)
-                                .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(AppTheme.border, lineWidth: 0.75)
-                                )
-                                .disabled(appState.whisperSettingsLocked)
+                    SettingsFormRow(
+                        title: "Accessibility",
+                        detail: "Used only to insert text into the active app"
+                    ) {
+                        PermissionStatusControl(
+                            title: appState.accessibilityPermissionState.title,
+                            isAllowed: appState.accessibilityPermissionState == .granted,
+                            showsSettingsButton: appState.accessibilityPermissionState == .denied,
+                            openSettings: { appState.openAccessibilitySettings() }
+                        )
+                    }
+                }
+            }
+        }
+    }
 
-                            Text("Use \(RefinementPromptTemplate.languageInstructionPlaceholder) where the transcribe or translate instruction should appear in the system message.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(AppTheme.tertiaryText)
+    private var updatesPage: some View {
+        DetailPage {
+            VStack(alignment: .leading, spacing: 7) {
+                FormSectionTitle(appState.appDisplayNameText)
 
-                            HStack(spacing: 10) {
-                                Button {
-                                    appState.saveRefinementPromptText()
-                                } label: {
-                                    Label("Save System Prompt", systemImage: "square.and.arrow.down")
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(AppTheme.accent)
-                                .disabled(
-                                    appState.whisperSettingsLocked ||
-                                    !appState.isRefinementPromptDirty ||
-                                    appState.refinementPromptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                )
-
-                                Button {
-                                    appState.resetActiveRefinementPrompt()
-                                } label: {
-                                    Label("Reset", systemImage: "arrow.counterclockwise")
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(appState.whisperSettingsLocked)
-
-                                Button {
-                                    appState.openRefinementPromptsFolder()
-                                } label: {
-                                    Label("Folder", systemImage: "folder")
-                                }
-                                .buttonStyle(.bordered)
-                            }
-
-                            Text(appState.refinementPromptStorageText)
-                                .font(.system(size: 12))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        HStack(spacing: 8) {
-                            if appState.isRefinementServerPreparing {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .scaleEffect(0.65)
-                            }
-
-                            Text(shortRefinementStatusText)
-                                .font(.system(size: 13))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        HStack(spacing: 10) {
-                            Button {
-                                appState.prepareAndUseRefinementModel(selectedRefinementModel)
-                            } label: {
-                                Label("Use & Prepare", systemImage: "arrow.down.circle")
+                SettingsFormPanel {
+                    SettingsFormRow(
+                        title: "Version \(appState.appVersionText)",
+                        detail: appState.appDisplayNameText.hasSuffix("Dev")
+                            ? "You are using the development build"
+                            : "You are using the release build"
+                    ) {
+                        if let availableUpdate = appState.availableUpdate {
+                            Button("View \(availableUpdate.version.displayString)") {
+                                appState.openAvailableUpdate()
                             }
                             .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
                             .tint(AppTheme.accent)
-                            .disabled(appState.whisperSettingsLocked || !appState.isRefinementRuntimeAvailable || !appState.isRefinementModelSupported(selectedRefinementModel))
-
-                            Text("Local")
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(AppTheme.tertiaryText)
-                        }
-                    }
-                }
-
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SettingLabel(
-                            title: "Updates",
-                            value: appState.appVersionText,
-                            systemImage: "arrow.triangle.2.circlepath"
-                        )
-
-                        Toggle(
-                            "Check GitHub for updates automatically",
-                            isOn: automaticUpdateChecksBinding
-                        )
-                        .toggleStyle(.switch)
-
-                        Text("When enabled, DictaFlow contacts GitHub at most once per day. GitHub receives normal connection metadata, such as your IP address. DictaFlow does not include an account or usage data.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        HStack(spacing: 10) {
-                            Button {
+                        } else {
+                            Button(appState.isCheckingForUpdates ? "Checking…" : "Check Now") {
                                 appState.checkForUpdates()
-                            } label: {
-                                if appState.isCheckingForUpdates {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                } else {
-                                    Label("Check for Updates", systemImage: "arrow.clockwise")
-                                }
                             }
                             .buttonStyle(.bordered)
+                            .controlSize(.small)
                             .disabled(appState.isCheckingForUpdates)
-
-                            if let availableUpdate = appState.availableUpdate {
-                                Button {
-                                    appState.openAvailableUpdate()
-                                } label: {
-                                    Label(
-                                        "View Version \(availableUpdate.version.displayString)",
-                                        systemImage: "arrow.up.right.square"
-                                    )
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(AppTheme.accent)
-                            }
                         }
+                    }
 
-                        Text(appState.updateStatusText)
-                            .font(.system(size: 12))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
+                    Divider().overlay(AppTheme.border)
+
+                    SettingsFormRow(
+                        title: "Automatic update checks",
+                        detail: "Contacts GitHub at most once per day"
+                    ) {
+                        Toggle("Automatic update checks", isOn: automaticUpdateChecksBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
                     }
                 }
 
-                GlassTile {
-                    HStack(spacing: 10) {
-                        Button {
-                            appState.resetWhisperSettingsToDefaults()
-                            selectedModel = WhisperConfiguration.default.model
-                            selectedRefinementModel = RefinementConfiguration.default.model
-                        } label: {
-                            Label("Restore Defaults", systemImage: "arrow.counterclockwise")
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(appState.whisperSettingsLocked)
-
-                        Button {
-                            appState.mainWindowPage = .models
-                        } label: {
-                            Label("Models", systemImage: "cpu")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(AppTheme.accent)
-                    }
-                }
+                Text(appState.updateStatusText)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .padding(.horizontal, 2)
             }
         }
     }
 
     private var historyPage: some View {
-        DetailPage(title: "History", systemImage: "clock", back: goBackToDashboard) {
+        DetailPage {
             VStack(alignment: .leading, spacing: AppLayout.sectionSpacing) {
                 GlassTile {
                     VStack(alignment: .leading, spacing: 12) {
@@ -776,27 +878,30 @@ struct ContentView: View {
         }
     }
 
-    private var dashboardColumns: [GridItem] {
-        [
-            GridItem(.flexible(minimum: 285), spacing: AppLayout.sectionSpacing),
-            GridItem(.flexible(minimum: 285), spacing: AppLayout.sectionSpacing)
-        ]
+    private var pageTitle: String {
+        switch appState.mainWindowPage {
+        case .overview: "Overview"
+        case .dictation: "Dictation"
+        case .refinement: "Refinement"
+        case .history: "History"
+        case .shortcutAndAudio: "Shortcut & Audio"
+        case .models: "Models"
+        case .permissions: "Permissions"
+        case .updates: "Updates"
+        }
     }
 
-    private var compactNavigationColumns: [GridItem] {
-        [
-            GridItem(.flexible(minimum: 0), spacing: AppLayout.sectionSpacing),
-            GridItem(.flexible(minimum: 0), spacing: AppLayout.sectionSpacing),
-            GridItem(.flexible(minimum: 0), spacing: AppLayout.sectionSpacing)
-        ]
-    }
-
-    private var statusColor: Color {
-        appState.recordingState.isRecording ? AppTheme.primaryText : AppTheme.accent
-    }
-
-    private var hasMissingRequiredSettings: Bool {
-        appState.microphonePermissionState != .granted || appState.accessibilityPermissionState != .granted
+    private var pageSubtitle: String {
+        switch appState.mainWindowPage {
+        case .overview: "Ready for private, local dictation"
+        case .dictation: "Choose how speech becomes text."
+        case .refinement: "Clean transcripts locally before insertion."
+        case .history: "Review and reuse your latest transcript."
+        case .shortcutAndAudio: "Control recording access and audio behavior."
+        case .models: "Manage local Whisper models and storage."
+        case .permissions: "Check the system access DictaFlow needs."
+        case .updates: "Version and update preferences."
+        }
     }
 
     private var historySummaryText: String {
@@ -811,36 +916,25 @@ struct ContentView: View {
         return "Empty"
     }
 
-    private var recordingStatusText: String {
+    private var overviewRecordingDetailText: String {
         if appState.recordingState.isRecording {
-            return "Recording"
+            return "Your audio is being captured locally. Press the shortcut again when you are finished."
         }
 
-        if appState.transcriptionState.isTranscribing {
-            return "Transcribing"
-        }
-
-        if appState.transcriptionState.isRefining {
-            return "Refining"
-        }
-
-        if appState.textInsertionState.isBusy {
-            return "Inserting"
-        }
-
-        return "Idle"
-    }
-
-    private var shortModelStatusText: String {
-        if let progress = appState.modelDownloadProgressText {
-            return progress.replacingOccurrences(of: appState.modelsDirectoryPath, with: "local cache")
-        }
-
-        return appState.modelStatusText.replacingOccurrences(of: appState.modelsDirectoryPath, with: "local cache")
+        return "DictaFlow transcribes on this Mac, refines the text locally, then inserts it into your active app."
     }
 
     private var shortRefinementStatusText: String {
         appState.refinementStatusText.replacingOccurrences(of: appState.modelsDirectoryPath, with: "local cache")
+    }
+
+    private var overviewWhisperModelBadge: String {
+        let activeModelIdentifier = appState.whisperConfiguration.model.modelIdentifier
+        let isPrepared = appState.installedLocalModelFiles.contains {
+            $0.category == .whisper && $0.modelIdentifier == activeModelIdentifier
+        }
+
+        return isPrepared ? "READY" : "NOT READY"
     }
 
     private var deleteUnusedModelsButtonTitle: String {
@@ -868,6 +962,67 @@ struct ContentView: View {
             get: { appState.whisperConfiguration.taskMode },
             set: { appState.updateTaskMode($0) }
         )
+    }
+
+    private var mainWindowPageBinding: Binding<MainWindowPage> {
+        Binding(
+            get: { appState.mainWindowPage },
+            set: { appState.showMainWindowPage($0) }
+        )
+    }
+
+    private var isWhisperModelPreparationActive: Bool {
+        switch appState.transcriptionState {
+        case .preparingModel, .downloadingModel:
+            return true
+        case .idle, .transcribing, .preparingRefinementModel, .downloadingRefinementModel, .refining:
+            return false
+        }
+    }
+
+    private var whisperModelPreparationProgress: Double? {
+        switch appState.transcriptionState {
+        case .downloadingModel(_, let progress):
+            return progress
+        case .idle, .preparingModel, .transcribing, .preparingRefinementModel, .downloadingRefinementModel, .refining:
+            return nil
+        }
+    }
+
+    private var whisperModelDownloadStatusTitle: String {
+        switch appState.transcriptionState {
+        case .preparingModel(let model), .downloadingModel(let model, _):
+            return "Downloading \(model.displayName)"
+        case .idle, .transcribing, .preparingRefinementModel, .downloadingRefinementModel, .refining:
+            return "Download failed"
+        }
+    }
+
+    private var isRefinementModelPreparationActive: Bool {
+        switch appState.transcriptionState {
+        case .preparingRefinementModel, .downloadingRefinementModel:
+            return true
+        case .idle, .preparingModel, .downloadingModel, .transcribing, .refining:
+            return false
+        }
+    }
+
+    private var refinementModelPreparationProgress: Double? {
+        switch appState.transcriptionState {
+        case .downloadingRefinementModel(_, let progress):
+            return progress
+        case .idle, .preparingModel, .downloadingModel, .transcribing, .preparingRefinementModel, .refining:
+            return nil
+        }
+    }
+
+    private var refinementModelDownloadStatusTitle: String {
+        switch appState.transcriptionState {
+        case .preparingRefinementModel(let model), .downloadingRefinementModel(let model, _):
+            return "Downloading \(model.displayName)"
+        case .idle, .preparingModel, .downloadingModel, .transcribing, .refining:
+            return "Download failed"
+        }
     }
 
     private var recordingPlaybackBehaviorBinding: Binding<RecordingPlaybackBehavior> {
@@ -898,22 +1053,11 @@ struct ContentView: View {
         )
     }
 
-    private var refinementModelBinding: Binding<RefinementModelDescriptor> {
-        Binding(
-            get: { selectedRefinementModel },
-            set: { selectedRefinementModel = $0 }
-        )
-    }
-
     private var refinementPromptTextBinding: Binding<String> {
         Binding(
             get: { appState.refinementPromptText },
             set: { appState.updateRefinementPromptText($0) }
         )
-    }
-
-    private func goBackToDashboard() {
-        appState.showMainWindowPage(.dashboard)
     }
 
     private func prepareUnusedModelDeletionConfirmation() {
@@ -977,55 +1121,285 @@ struct ContentView: View {
 }
 
 private enum AppTheme {
-    static let background = Color(red: 0.037, green: 0.037, blue: 0.039)
-    static let barFill = Color.black.opacity(0.28)
-    static let tileFill = Color.white.opacity(0.035)
-    static let accent = Color.white.opacity(0.88)
-    static let border = Color.white.opacity(0.08)
-    static let primaryText = Color.white.opacity(0.92)
-    static let secondaryText = Color.white.opacity(0.60)
-    static let tertiaryText = Color.white.opacity(0.38)
+    static let background = Color(red: 0.090, green: 0.098, blue: 0.114)
+    static let sidebar = Color(red: 0.125, green: 0.165, blue: 0.220)
+    static let sidebarBorder = Color.white.opacity(0.075)
+    static let barFill = Color(red: 0.108, green: 0.116, blue: 0.132)
+    static let tileFill = Color(red: 0.137, green: 0.145, blue: 0.165)
+    static let controlFill = Color.white.opacity(0.055)
+    static let editorFill = Color.black.opacity(0.12)
+    static let accent = Color(red: 0.302, green: 0.471, blue: 0.984)
+    static let modelActive = Color(red: 0.275, green: 0.706, blue: 0.443)
+    static let destructive = Color(red: 0.835, green: 0.235, blue: 0.286)
+    static let border = Color.white.opacity(0.085)
+    static let primaryText = Color(red: 0.961, green: 0.965, blue: 0.973)
+    static let secondaryText = Color(red: 0.58, green: 0.60, blue: 0.64)
+    static let tertiaryText = Color(red: 0.40, green: 0.43, blue: 0.48)
 }
 
 private enum AppLayout {
     static let windowMinWidth: CGFloat = 660
     static let windowMinHeight: CGFloat = 520
-    static let contentMaxWidth: CGFloat = 620
-    static let contentPadding: CGFloat = 18
+    static let sidebarWidth: CGFloat = 204
+    static let collapsedSidebarWidth: CGFloat = 76
+    static let headerHeight: CGFloat = 76
+    static let contentMaxWidth: CGFloat = 640
+    static let contentPadding: CGFloat = 20
     static let sectionSpacing: CGFloat = 12
-    static let dashboardMaxWidth: CGFloat = 580
-    static let dashboardPadding: CGFloat = 16
-    static let dashboardSpacing: CGFloat = 10
-    static let recordingButtonMaxWidth: CGFloat = 340
-    static let tilePadding: CGFloat = 12
-    static let tileCornerRadius: CGFloat = 8
+    static let tilePadding: CGFloat = 14
+    static let tileCornerRadius: CGFloat = 9
+}
+
+private struct DictaFlowLogo: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            DictaFlowMark()
+
+            Text("DictaFlow")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(AppTheme.primaryText)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("DictaFlow")
+    }
+}
+
+private struct DictaFlowMark: View {
+    var body: some View {
+        ZStack {
+            Circle().fill(Color.white)
+            HStack(alignment: .center, spacing: 2) {
+                ForEach([8, 14, 20, 14, 8], id: \.self) { height in
+                    Capsule(style: .continuous)
+                        .fill(AppTheme.sidebar)
+                        .frame(width: 2.5, height: CGFloat(height))
+                }
+            }
+        }
+        .frame(width: 32, height: 32)
+    }
+}
+
+private struct SidebarCollapseButton: View {
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(AppTheme.primaryText.opacity(isHovering ? 0.92 : 0.68))
+        .background(
+            isHovering ? AppTheme.controlFill : Color.clear,
+            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+        )
+        .onHover { isHovering = $0 }
+        .help("Collapse sidebar")
+        .accessibilityLabel("Collapse sidebar")
+    }
+}
+
+private struct CollapsedSidebarLogoButton: View {
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                DictaFlowMark()
+                    .opacity(isHovering ? 0 : 1)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .opacity(isHovering ? 1 : 0)
+            }
+            .frame(width: 32, height: 32)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .background(
+            isHovering ? AppTheme.controlFill : Color.clear,
+            in: Circle()
+        )
+        .onHover { isHovering = $0 }
+        .help("Expand sidebar")
+        .accessibilityLabel("Expand sidebar")
+    }
+}
+
+private struct SidebarSection<Content: View>: View {
+    let title: String
+    let isCollapsed: Bool
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if !isCollapsed {
+                Text(title)
+                    .font(.system(size: 10, weight: .bold))
+                    .tracking(0.7)
+                    .foregroundStyle(AppTheme.tertiaryText)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 3)
+            }
+
+            content
+        }
+    }
+}
+
+private struct SidebarItem: View {
+    let page: MainWindowPage
+    let title: String
+    let systemImage: String
+    let isCollapsed: Bool
+    @Binding var selection: MainWindowPage
+
+    private var isSelected: Bool { page == selection }
+
+    var body: some View {
+        Button {
+            selection = page
+        } label: {
+            HStack(spacing: isCollapsed ? 0 : 11) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 19)
+
+                if !isCollapsed {
+                    Text(title)
+                        .font(.system(size: 13, weight: .medium))
+
+                    Spacer(minLength: 0)
+                }
+            }
+            .foregroundStyle(isSelected ? Color.white : AppTheme.primaryText.opacity(0.78))
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity)
+            .frame(height: 34)
+            .background(isSelected ? AppTheme.accent : Color.clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, isCollapsed ? 8 : 10)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+private struct HelpPopover: View {
+    @Binding var selection: MainWindowPage
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("HELP")
+                .font(.system(size: 10, weight: .bold))
+                .tracking(0.7)
+                .foregroundStyle(AppTheme.tertiaryText)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 3)
+
+            helpButton("Keyboard & recording", systemImage: "keyboard", page: .shortcutAndAudio)
+            helpButton("Permission setup", systemImage: "lock.shield", page: .permissions)
+            helpButton("About DictaFlow", systemImage: "info.circle", page: .updates)
+        }
+        .padding(10)
+        .frame(width: 230)
+        .background(AppTheme.tileFill)
+        .foregroundStyle(AppTheme.primaryText)
+    }
+
+    private func helpButton(_ title: String, systemImage: String, page: MainWindowPage) -> some View {
+        Button {
+            selection = page
+            isPresented = false
+        } label: {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 13, weight: .medium))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 9)
+                .frame(height: 34)
+        }
+        .buttonStyle(.plain)
+        .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
+private struct StatusNavigationLine: View {
+    let title: String
+    let value: String
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 20)
+                Text(title).font(.system(size: 13, weight: .medium))
+                Spacer()
+                Text(value)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .lineLimit(1)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(AppTheme.tertiaryText)
+            }
+            .frame(height: 35)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct PermissionStatusControl: View {
+    let title: String
+    let isAllowed: Bool
+    let showsSettingsButton: Bool
+    let openSettings: () -> Void
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 5) {
+            Text(title.uppercased())
+                .font(.system(size: 9.5, weight: .bold))
+                .foregroundStyle(isAllowed ? Color.green.opacity(0.9) : AppTheme.secondaryText)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background(
+                    (isAllowed ? Color.green : AppTheme.secondaryText).opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                )
+
+            if showsSettingsButton {
+                Button("Open System Settings", action: openSettings)
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+            }
+        }
+    }
 }
 
 private struct DetailPage<Content: View>: View {
-    let title: String
-    let systemImage: String
-    let back: () -> Void
     @ViewBuilder var content: Content
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: AppLayout.sectionSpacing) {
-                HStack(spacing: 10) {
-                    Button(action: back) {
-                        Label("Back", systemImage: "chevron.left")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-
-                    Label(title, systemImage: systemImage)
-                        .font(.system(size: 18, weight: .semibold))
-
-                    Spacer()
-                }
-
-                content
-            }
-            .padding(AppLayout.contentPadding)
+            content
+            .padding(.horizontal, AppLayout.contentPadding)
+            .padding(.top, 20)
+            .padding(.bottom, 22)
             .frame(maxWidth: AppLayout.contentMaxWidth, alignment: .top)
             .frame(maxWidth: .infinity, alignment: .top)
         }
@@ -1044,7 +1418,234 @@ private struct GlassTile<Content: View>: View {
                 RoundedRectangle(cornerRadius: AppLayout.tileCornerRadius, style: .continuous)
                     .stroke(AppTheme.border, lineWidth: 0.75)
             )
-            .shadow(color: Color.black.opacity(0.07), radius: 5, x: 0, y: 2)
+            .shadow(color: Color.black.opacity(0.15), radius: 8, x: 0, y: 3)
+    }
+}
+
+private struct FormSectionTitle: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(.system(size: 10, weight: .bold))
+            .tracking(0.65)
+            .foregroundStyle(AppTheme.secondaryText)
+            .padding(.leading, 2)
+    }
+}
+
+private struct SettingsFormPanel<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(spacing: 0) {
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: AppLayout.tileCornerRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AppLayout.tileCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppLayout.tileCornerRadius, style: .continuous)
+                .stroke(AppTheme.border, lineWidth: 0.75)
+        )
+        .shadow(color: Color.black.opacity(0.15), radius: 8, x: 0, y: 3)
+    }
+}
+
+private struct SettingsFormRow<Control: View>: View {
+    let title: String
+    let detail: String
+    @ViewBuilder var control: Control
+
+    var body: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(AppTheme.primaryText)
+
+                Text(detail)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+            control
+        }
+        .padding(.horizontal, 13)
+        .frame(minHeight: 50)
+    }
+}
+
+private struct RefinementModelPickerControl: View {
+    let selectedModel: RefinementModelDescriptor?
+    let emptySelectionTitle: String
+    let isEnabled: Bool
+    let isModelSelectable: (RefinementModelDescriptor) -> Bool
+    let selectModel: (RefinementModelDescriptor) -> Void
+
+    @State private var isShowingOptions = false
+
+    var body: some View {
+        Button {
+            isShowingOptions.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Text(selectedModel?.displayName ?? emptySelectionTitle)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(AppTheme.secondaryText)
+            }
+            .padding(.horizontal, 10)
+            .frame(width: 160, height: 28)
+            .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(AppTheme.border, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .popover(isPresented: $isShowingOptions, arrowEdge: .top) {
+            VStack(spacing: 2) {
+                ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
+                    let isSelectable = isModelSelectable(model)
+
+                    Button {
+                        isShowingOptions = false
+                        selectModel(model)
+                    } label: {
+                        HStack(alignment: .top, spacing: 9) {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(AppTheme.primaryText)
+                                .frame(width: 13, height: 16)
+                                .opacity(model == selectedModel ? 1 : 0)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(model.displayName)
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(AppTheme.primaryText)
+
+                                Text("\(model.approximateDiskSizeDescription) storage · \(model.estimatedRuntimeMemoryDescription)")
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(AppTheme.secondaryText)
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            model == selectedModel ? AppTheme.controlFill : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isSelectable)
+                    .opacity(isSelectable ? 1 : 0.45)
+                }
+            }
+            .padding(7)
+            .frame(width: 250)
+            .background(AppTheme.tileFill)
+            .foregroundStyle(AppTheme.primaryText)
+        }
+    }
+}
+
+private struct WhisperModelPickerControl: View {
+    let selectedModel: WhisperModelDescriptor
+    let isEnabled: Bool
+    let isModelSelectable: (WhisperModelDescriptor) -> Bool
+    let selectModel: (WhisperModelDescriptor) -> Void
+
+    @State private var isShowingOptions = false
+
+    var body: some View {
+        Button {
+            isShowingOptions.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                Text(selectedModel.displayName)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(AppTheme.secondaryText)
+            }
+            .padding(.horizontal, 10)
+            .frame(width: 160, height: 28)
+            .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(AppTheme.border, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .popover(isPresented: $isShowingOptions, arrowEdge: .top) {
+            VStack(spacing: 2) {
+                ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
+                    let isSelectable = isModelSelectable(model)
+
+                    Button {
+                        isShowingOptions = false
+                        selectModel(model)
+                    } label: {
+                        HStack(alignment: .top, spacing: 9) {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(AppTheme.primaryText)
+                                .frame(width: 13, height: 16)
+                                .opacity(model == selectedModel ? 1 : 0)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(model.displayName)
+                                    .font(.system(size: 12.5, weight: .semibold))
+                                    .foregroundStyle(AppTheme.primaryText)
+
+                                Text(model.approximateDiskSizeDescription)
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(AppTheme.secondaryText)
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            model == selectedModel ? AppTheme.controlFill : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!isSelectable)
+                    .opacity(isSelectable ? 1 : 0.45)
+                }
+            }
+            .padding(7)
+            .frame(width: 220)
+            .background(AppTheme.tileFill)
+            .foregroundStyle(AppTheme.primaryText)
+        }
     }
 }
 
@@ -1110,116 +1711,380 @@ private struct RefinementStatusBadge: View {
     }
 }
 
-private struct WaveformBadge: View {
-    var body: some View {
-        HStack(alignment: .center, spacing: 4) {
-            ForEach([8, 16, 26, 20, 10], id: \.self) { height in
-                Capsule(style: .continuous)
-                    .frame(width: 3.5, height: CGFloat(height))
-            }
-        }
-    }
-}
-
-private struct AppSwitchStyle: ToggleStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Button {
-            withAnimation(.spring(response: 0.22, dampingFraction: 0.78)) {
-                configuration.isOn.toggle()
-            }
-        } label: {
-            Capsule(style: .continuous)
-                .fill(configuration.isOn ? Color.white.opacity(0.18) : Color.white.opacity(0.10))
-                .frame(width: 42, height: 24)
-                .overlay(alignment: configuration.isOn ? .trailing : .leading) {
-                    Circle()
-                        .fill(configuration.isOn ? Color.white : Color.white.opacity(0.42))
-                        .frame(width: 18, height: 18)
-                        .padding(3)
-                }
-                .overlay(Capsule(style: .continuous).stroke(AppTheme.border, lineWidth: 0.75))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct NavigationTile: View {
+private struct OverviewFeatureCard: View {
     let title: String
-    let value: String
+    let badge: String
     let systemImage: String
+    let primaryText: Text
+    let secondaryText: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            GlassTile {
-                HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 5) {
                     Image(systemName: systemImage)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(AppTheme.accent)
-                        .frame(width: 20)
+                        .frame(width: 22)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(title)
-                            .font(.system(size: 14, weight: .semibold))
-
-                        Text(value)
-                            .font(.system(size: 12))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .lineLimit(1)
-                    }
+                    Text(title)
+                        .font(.system(size: 11.5, weight: .semibold))
 
                     Spacer()
 
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
+                    Text(badge)
+                        .font(.system(size: 9.5, weight: .medium))
                         .foregroundStyle(AppTheme.tertiaryText)
                 }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    primaryText
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(AppTheme.primaryText.opacity(0.88))
+
+                    Text(secondaryText)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .lineSpacing(1.5)
+                        .lineLimit(2)
+                }
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 13)
+            .frame(maxWidth: .infinity, minHeight: 95, alignment: .topLeading)
+            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: AppLayout.tileCornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: AppLayout.tileCornerRadius, style: .continuous)
+                    .stroke(AppTheme.border, lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct ModelPageSectionHeader: View {
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(AppTheme.primaryText)
+
+                Text(subtitle)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(AppTheme.secondaryText)
+            }
+
+            Divider()
+                .overlay(AppTheme.border)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct EqualHeightModelGrid: Layout {
+    let spacing: CGFloat
+
+    private func columnCount(for subviews: Subviews) -> Int {
+        min(2, max(1, subviews.count))
+    }
+
+    private func itemWidth(totalWidth: CGFloat, columns: Int) -> CGFloat {
+        max(0, (totalWidth - CGFloat(columns - 1) * spacing) / CGFloat(columns))
+    }
+
+    private func maximumItemHeight(subviews: Subviews, itemWidth: CGFloat) -> CGFloat {
+        subviews.reduce(0) { height, subview in
+            max(height, subview.sizeThatFits(ProposedViewSize(width: itemWidth, height: nil)).height)
+        }
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard !subviews.isEmpty else {
+            return .zero
+        }
+
+        let columns = columnCount(for: subviews)
+        let naturalItemWidth = subviews.reduce(0) { width, subview in
+            max(width, subview.sizeThatFits(.unspecified).width)
+        }
+        let totalWidth = proposal.width ?? (naturalItemWidth * CGFloat(columns) + spacing * CGFloat(columns - 1))
+        let width = itemWidth(totalWidth: totalWidth, columns: columns)
+        let height = maximumItemHeight(subviews: subviews, itemWidth: width)
+        let rows = Int(ceil(Double(subviews.count) / Double(columns)))
+
+        return CGSize(
+            width: totalWidth,
+            height: height * CGFloat(rows) + spacing * CGFloat(rows - 1)
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard !subviews.isEmpty else {
+            return
+        }
+
+        let columns = columnCount(for: subviews)
+        let width = itemWidth(totalWidth: bounds.width, columns: columns)
+        let height = maximumItemHeight(subviews: subviews, itemWidth: width)
+
+        for (index, subview) in subviews.enumerated() {
+            let row = index / columns
+            let column = index % columns
+            let origin = CGPoint(
+                x: bounds.minX + CGFloat(column) * (width + spacing),
+                y: bounds.minY + CGFloat(row) * (height + spacing)
+            )
+            subview.place(
+                at: origin,
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: width, height: height)
+            )
+        }
+    }
+}
+
+private struct ModelDownloadStatusPanel: View {
+    let title: String
+    let statusText: String
+    let isActive: Bool
+    let progress: Double?
+    let hasFailed: Bool
+
+    private var statusColor: Color {
+        hasFailed ? Color.orange : (isActive ? AppTheme.accent : AppTheme.secondaryText)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: hasFailed ? "exclamationmark.triangle.fill" : "arrow.down.circle")
+                    .foregroundStyle(statusColor)
+
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.primaryText)
+            }
+
+            if isActive {
+                if let progress {
+                    ProgressView(value: progress)
+                        .tint(AppTheme.accent)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            if !statusText.isEmpty {
+                Text(statusText)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(statusColor)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: hasFailed ? .leading : .trailing)
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.editorFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(statusColor.opacity(hasFailed || isActive ? 0.35 : 0.14), lineWidth: 0.75)
+        )
     }
 }
 
 private struct ModelChoiceCard: View {
-    let model: WhisperModelDescriptor
+    let name: String
+    let sizeText: String
+    let detailText: String
     let isActive: Bool
-    let isSelected: Bool
+    let needsPreparation: Bool
+    let isUnavailable: Bool
+    let isInteractionLocked: Bool
+    let deleteAction: (() -> Void)?
     let action: () -> Void
 
+    private var stateColor: Color {
+        if isActive {
+            return AppTheme.modelActive
+        }
+
+        if isUnavailable {
+            return AppTheme.tertiaryText
+        }
+
+        if needsPreparation {
+            return Color.orange
+        }
+
+        return AppTheme.accent
+    }
+
+    private var cardTint: Color {
+        if isUnavailable {
+            return AppTheme.controlFill
+        }
+
+        let opacity: Double
+        if isInteractionLocked {
+            opacity = 0.045
+        } else if isActive {
+            opacity = 0.12
+        } else {
+            opacity = 0.06
+        }
+        return stateColor.opacity(opacity)
+    }
+
+    private var borderColor: Color {
+        if isUnavailable {
+            return AppTheme.tertiaryText.opacity(0.28)
+        }
+
+        if isInteractionLocked {
+            return stateColor.opacity(0.25)
+        }
+
+        return stateColor.opacity(isActive ? 0.85 : 0.42)
+    }
+
+    private var accessibilityHint: String {
+        if isActive {
+            return "Current active model"
+        }
+
+        if isUnavailable {
+            return "This model is unavailable on this Mac"
+        }
+
+        if needsPreparation {
+            return "Downloads this model"
+        }
+
+        return "Uses this prepared model"
+    }
+
+    @ViewBuilder
+    private var modelAction: some View {
+        if isActive {
+            Label("ACTIVE", systemImage: "checkmark")
+                .font(.system(size: 9.5, weight: .bold))
+                .foregroundStyle(Color.white.opacity(isInteractionLocked ? 0.65 : 1))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background(
+                    stateColor.opacity(isInteractionLocked ? 0.38 : 1),
+                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                )
+        } else if isUnavailable {
+            Text("UNAVAILABLE")
+                .font(.system(size: 9.5, weight: .bold))
+                .foregroundStyle(AppTheme.tertiaryText)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+        } else if needsPreparation {
+            Button(action: action) {
+                Label("DOWNLOAD", systemImage: "arrow.down")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(isInteractionLocked ? 0.58 : 1))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        stateColor.opacity(isInteractionLocked ? 0.34 : 0.92),
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(isInteractionLocked)
+            .accessibilityHint(accessibilityHint)
+        } else {
+            Button(action: action) {
+                Label("USE", systemImage: "checkmark")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(isInteractionLocked ? 0.58 : 1))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        stateColor.opacity(isInteractionLocked ? 0.34 : 0.92),
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(isInteractionLocked)
+            .accessibilityHint(accessibilityHint)
+        }
+    }
+
     var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(model.displayName)
-                        .font(.system(size: 15, weight: .semibold))
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(name)
+                    .font(.system(size: 15, weight: .semibold))
 
-                    Spacer()
+                Spacer()
 
-                    if isActive {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(AppTheme.accent)
+                if let deleteAction {
+                    Button(action: deleteAction) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Color.white.opacity(isInteractionLocked ? 0.58 : 1))
+                            .frame(width: 24, height: 23)
+                            .background(
+                                AppTheme.destructive.opacity(isInteractionLocked ? 0.34 : 0.9),
+                                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            )
                     }
+                    .buttonStyle(.plain)
+                    .disabled(isInteractionLocked)
+                    .help("Delete downloaded model")
                 }
 
-                Text(model.approximateDiskSizeDescription)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(AppTheme.accent)
-
-                Text(model.detailText)
-                    .font(.system(size: 12))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .lineLimit(2)
+                modelAction
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, minHeight: 98, alignment: .topLeading)
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(isSelected ? AppTheme.accent.opacity(0.7) : AppTheme.border, lineWidth: 0.75)
-            )
-            .shadow(color: Color.black.opacity(0.08), radius: 6, x: 0, y: 2)
+
+            Text(sizeText)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(stateColor.opacity(isInteractionLocked ? 0.58 : 1))
+
+            Text(detailText)
+                .font(.system(size: 12))
+                .foregroundStyle(AppTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .buttonStyle(.plain)
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(AppTheme.tileFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(cardTint)
+                )
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(
+                    borderColor,
+                    lineWidth: isActive ? 1.25 : 0.75
+                )
+        )
+        .shadow(color: Color.black.opacity(0.08), radius: 6, x: 0, y: 2)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }
 
@@ -1289,35 +2154,6 @@ private struct SettingLabel: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(AppTheme.secondaryText)
                 .lineLimit(1)
-        }
-    }
-}
-
-private struct StatusLine: View {
-    let title: String
-    let value: String
-    let systemImage: String
-    let color: Color
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: systemImage)
-                .foregroundStyle(color)
-                .font(.system(size: 16, weight: .medium))
-                .frame(width: 20)
-
-            Text(title)
-                .font(.system(size: 16, weight: .medium))
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-
-            Spacer()
-
-            Text(value)
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundStyle(color)
-                .lineLimit(1)
-                .frame(minWidth: 74, alignment: .trailing)
         }
     }
 }

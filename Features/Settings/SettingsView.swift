@@ -2,13 +2,6 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var appState: DictaFlowAppState
-    @State private var isShowingModelPreparationConfirmation = false
-    @State private var selectedModel: WhisperModelDescriptor
-
-    init(appState: DictaFlowAppState) {
-        self.appState = appState
-        _selectedModel = State(initialValue: appState.whisperConfiguration.model)
-    }
 
     var body: some View {
         ScrollView {
@@ -26,19 +19,6 @@ struct SettingsView: View {
         }
         .frame(minWidth: 720, minHeight: 620)
         .background(Color(nsColor: .windowBackgroundColor))
-        .alert(
-            "Prepare \(selectedModel.displayName) Model?",
-            isPresented: $isShowingModelPreparationConfirmation
-        ) {
-            Button("Cancel", role: .cancel) {}
-            Button("Prepare Model") {
-                appState.prepareAndUseModel(selectedModel)
-            }
-        } message: {
-            Text(
-                "\(selectedModel.displayName) becomes the default model for future recordings and may download up to \(selectedModel.approximateDiskSizeDescription) into Application Support if it is not already cached."
-            )
-        }
     }
 
     private var headerSection: some View {
@@ -62,13 +42,6 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Label(appState.whisperConfigurationSummaryText, systemImage: "slider.horizontal.3")
                     .font(.headline)
-
-                if selectedModel != appState.whisperConfiguration.model {
-                    Text("Pending model selection: \(selectedModel.displayName). Prepare it to make it the active default.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
 
                 Text("Model storage: \(appState.modelsDirectoryPath)")
                     .font(.system(size: 12, design: .monospaced))
@@ -154,18 +127,19 @@ struct SettingsView: View {
                     ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
                         Text("\(model.displayName) (\(model.approximateDiskSizeDescription))")
                             .tag(model)
+                            .disabled(!appState.isWhisperModelPrepared(model))
                     }
                 }
                 .pickerStyle(.menu)
                 .disabled(appState.whisperSettingsLocked)
 
                 Label(
-                    "\(selectedModel.displayName) • \(selectedModel.approximateDiskSizeDescription)",
+                    "\(appState.whisperConfiguration.model.displayName) • \(appState.whisperConfiguration.model.approximateDiskSizeDescription)",
                     systemImage: "cpu"
                 )
                 .font(.headline)
 
-                Text(selectedModel.detailText)
+                Text(appState.whisperConfiguration.model.detailText)
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -184,28 +158,10 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 12) {
-                    Button("Prepare Selected Model") {
-                        if selectedModel == appState.whisperConfiguration.model {
-                            appState.retryModelPreparation()
-                        } else {
-                            isShowingModelPreparationConfirmation = true
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(appState.whisperSettingsLocked)
-
                     Button("Open Models Folder") {
                         appState.openModelsFolder()
                     }
                     .buttonStyle(.bordered)
-
-                    Button("Restore Defaults") {
-                        appState.updateTaskMode(WhisperConfiguration.default.taskMode)
-                        appState.updateInputLanguage(WhisperConfiguration.default.inputLanguage)
-                        selectedModel = WhisperConfiguration.default.model
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(appState.whisperSettingsLocked)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -229,8 +185,8 @@ struct SettingsView: View {
 
     private var modelBinding: Binding<WhisperModelDescriptor> {
         Binding(
-            get: { selectedModel },
-            set: { selectedModel = $0 }
+            get: { appState.whisperConfiguration.model },
+            set: { appState.updateWhisperModel($0) }
         )
     }
 
@@ -239,18 +195,10 @@ struct SettingsView: View {
             return "Settings are temporarily locked while DictaFlow is recording, preparing a model, transcribing, or inserting text."
         }
 
-        if selectedModel != appState.whisperConfiguration.model {
-            return "Task mode and language save immediately. Model changes become active after you confirm and prepare the selected model."
-        }
-
         return "Changes are saved immediately and apply to the next recording."
     }
 
     private var modelPreparationStatusText: String {
-        if selectedModel != appState.whisperConfiguration.model {
-            return "\(selectedModel.displayName) is selected but not active yet. Prepare it to save the new default and download it if needed."
-        }
-
         return appState.modelStatusText
     }
 }
