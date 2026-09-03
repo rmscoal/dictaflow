@@ -1,114 +1,199 @@
 <p align="center">
-  <img src="public/dictaflow-logo.png" alt="DictaFlow" width="720" />
+  <img src="public/dictaflow-logo.png" alt="DictaFlow" width="720">
 </p>
 
-<p align="center">Turn speech into polished text, locally.</p>
 <p align="center">
-  <span style="display:inline-block;padding:0.35rem 0.8rem;border-radius:999px;background:#111827;color:#f8fafc;font-size:0.82rem;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">
-    For Apple Silicon Macs
-  </span>
+  <strong>Private dictation that types where you work.</strong><br>
+  Speak naturally. DictaFlow turns your voice into polished text on your Mac.
 </p>
 
-DictaFlow was built for the moment when typing slows you down. It turns
-speech into text on your Mac, optionally cleans it up with a local LLM, and
-puts the result back where you were already working.
+<p align="center">
+  <a href="https://github.com/rmscoal/dictaflow/releases/latest"><img src="https://img.shields.io/github/v/release/rmscoal/dictaflow?style=flat-square&label=download&color=4f72ff" alt="Download the latest release"></a>
+  <img src="https://img.shields.io/badge/macOS-13%2B-111827?style=flat-square&logo=apple" alt="macOS 13 or newer">
+  <img src="https://img.shields.io/badge/Mac-Apple%20silicon-111827?style=flat-square&logo=apple" alt="Apple silicon Mac">
+  <img src="https://img.shields.io/badge/processing-local-16a34a?style=flat-square" alt="Local processing">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=flat-square" alt="AGPL-3.0 license"></a>
+</p>
 
-It is for people who think better out loud, write faster when they can speak
-naturally, and want to use the CPU and GPU already built into their Mac
-instead of sending audio anywhere else.
+<p align="center">
+  <a href="https://github.com/rmscoal/dictaflow/releases/latest"><strong>Download DictaFlow</strong></a>
+</p>
 
-## Why Local
+## DictaFlow at a glance
 
-DictaFlow runs locally because the hardware is already there. If you have a
-MacBook Pro with Apple silicon, you already have fast CPU and GPU resources
-right next to your keyboard. DictaFlow uses that power for private
-speech-to-text and local refinement instead of turning the workflow into a
-cloud round trip.
+<p align="center">
+  <img src="public/dictaflow-overview.png" alt="DictaFlow Overview showing dictation, local models, permissions, and the latest transcript" width="850"><br>
+  <sub>The main app keeps dictation, local models, and permissions in one place.</sub>
+</p>
 
-## What It Does
+<table align="center">
+  <tr>
+    <td align="center" valign="middle">
+      <img src="public/dictaflow-menu-bar.png" alt="DictaFlow menu bar panel with dictation and model controls" width="320"><br>
+      <sub>Start dictation and change essential options from the menu bar.</sub>
+    </td>
+    <td align="center" valign="middle">
+      <img src="public/dictaflow-recording-pill.png" alt="DictaFlow recording indicator" width="220"><br>
+      <sub>A small recording indicator stays out of your way.</sub>
+    </td>
+  </tr>
+</table>
 
-- Local transcription through `whisper.cpp`.
-- Optional transcript refinement with an editable local prompt.
-- Insertion back into the focused app with Accessibility, clipboard, typing,
-  or a copy panel fallback.
+## Table of contents
 
-## Privacy Model
+- [DictaFlow at a glance](#dictaflow-at-a-glance)
+- [Introduction](#introduction)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Using DictaFlow](#using-dictaflow)
+- [Inside DictaFlow](#inside-dictaflow)
+- [Models and local data](#models-and-local-data)
+- [Updates](#updates)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [License](#license)
 
-DictaFlow is local-first:
+## Introduction
 
-- Microphone audio is recorded locally.
-- Whisper transcription runs locally.
-- Optional refinement runs locally through `llama-server`.
-- There is no cloud transcription path, analytics pipeline, or remote
-  inference service in the app code.
+DictaFlow is a native macOS app for people who think faster than they type. It
+records your voice, transcribes or translates it with `whisper.cpp`, and puts
+the result into the app you were using.
 
-| Data | Behavior |
+Everything runs locally. There is no cloud transcription, account, analytics,
+or API key.
+
+| | |
 | --- | --- |
-| Recordings | Temporary local `.m4a` files under `FileManager.default.temporaryDirectory/DictaFlowRecordings`, deleted after transcription finishes or fails. |
-| Transcripts | Kept in memory as the latest transcript for display, copy, and re-insertion. |
-| Models | Stored under `~/Library/Application Support/DictaFlow/Models`. |
-| Clipboard | May be used briefly for paste-based insertion, with an attempt to restore the previous contents. |
-| Logs | Whisper logs audio stats and transcript length, not transcript contents. |
-| Update checks | The production app checks the public GitHub Releases API at most once per day when automatic checks are enabled. GitHub receives normal connection metadata such as the user’s IP address. DictaFlow sends no account, transcript, model, or usage data. |
+| **Stay private** | Audio, transcription, and optional text refinement remain on your Mac. |
+| **Keep your flow** | Start dictation with a global shortcut and continue in the same app. |
+| **Speak your language** | Transcribe in many languages or translate supported speech into English. |
+| **Clean up locally** | An optional local language model can improve punctuation and wording before insertion. |
+| **Reuse the result** | Review, copy, or insert your latest transcript again. |
 
 ## Requirements
 
-- macOS 13.0 or newer.
-- Xcode with macOS SwiftUI/AppKit tooling.
-- Microphone permission for recording.
-- Accessibility permission for automatic insertion into other apps.
-- Network access for first-time model downloads.
-- Network access for optional GitHub release checks.
-- `llama-server` bundled in public builds for local transcript refinement.
+| | Requirement |
+| --- | --- |
+| **Mac** | Apple silicon |
+| **macOS** | 13.0 or newer |
+| **Internet** | Needed to download the app, models, and updates |
+
+After the models are downloaded, dictation works offline.
+
+## Installation
+
+1. Download the DMG from the [latest release](https://github.com/rmscoal/dictaflow/releases/latest).
+2. Open it and drag **DictaFlow** into **Applications**.
+3. Launch DictaFlow and follow the permission prompts when needed.
+
+Public releases are signed and notarized for macOS.
+
+## Using DictaFlow
+
+1. Choose a Whisper model, language, and task mode.
+2. Press <kbd>Command</kbd> + <kbd>Shift</kbd> + <kbd>\</kbd> to start.
+3. Speak, then press the shortcut again to stop.
+4. DictaFlow processes the recording and inserts the text into your previous app.
+
+The shortcut and insertion behavior can be changed under **Shortcut & Audio**.
+
+## Inside DictaFlow
+
+| Step | What happens |
+| --- | --- |
+| **Record** | DictaFlow creates a temporary local `.m4a` recording. |
+| **Transcribe** | `whisper.cpp` converts speech to text on your Mac. |
+| **Refine** | If enabled, a local language model cleans the text. |
+| **Insert** | DictaFlow returns the text to the previously focused app. |
+
+Insertion uses the best available method: direct Accessibility insertion,
+clipboard paste, simulated typing, then a copy panel as the final fallback.
+
+### Transcribe or translate
+
+- **Transcribe** keeps the spoken language.
+- **Translate** converts supported source languages into English.
+
+### Optional refinement
+
+Local refinement can fix punctuation, repeated wording, and rough sentence
+structure. It is optional. If refinement fails, DictaFlow uses the original
+Whisper transcript.
+
+## Models and local data
+
+Models are downloaded when you prepare them in DictaFlow. Every download is
+checksum-verified before use.
+
+| Model type | Available sizes |
+| --- | --- |
+| Whisper | Tiny 75 MB, Base 142 MB, Small 466 MB, Medium 1.5 GB |
+| Refinement | 469 MB to 2.1 GB |
+
+Models are stored in:
+
+```text
+~/Library/Application Support/DictaFlow/Models
+```
+
+Open **Models** to view, prepare, or remove models.
+
+| Data | Storage behavior |
+| --- | --- |
+| Recordings | Temporary files, deleted after processing |
+| Latest transcript | Kept in memory for review, copy, and re-insertion |
+| Models | Stored locally until you remove them |
+| Clipboard | Used briefly when needed, with restoration attempted |
 
 ## Updates
 
-DictaFlow checks only published, non-prerelease GitHub Releases. Release tags
-must use numeric versions such as `v1.0.1`, and the release must include a
-non-empty `.dmg` asset. When a newer version is available, DictaFlow shows an
-update button that opens the release page in the user’s browser. Downloading
-and installing the signed, notarized DMG remains a manual step. Automatic
-checks are enabled by default in the production app, can be disabled in
-Settings, and are disabled by default in DictaFlow Dev.
+DictaFlow checks GitHub Releases for updates. When a new version is available:
 
-## Build and Run Locally
+1. Open **Updates**.
+2. Open the release page and download the new DMG.
+3. Replace the old DictaFlow app in **Applications**.
 
-Clone the repo, then use the Make targets:
+Automatic checks can be turned off. DictaFlow sends no transcript, model, or
+usage data during an update check.
+
+## Troubleshooting
+
+| Problem | Try this |
+| --- | --- |
+| Dictation does not start | Open **Permissions** and allow microphone access. |
+| Text is not inserted | Allow Accessibility access, then try again. The copy panel remains available as a fallback. |
+| First dictation is slow | Wait for the selected model to finish downloading and preparing. |
+| Accuracy is too low | Select a larger Whisper model or set the input language instead of automatic detection. |
+| Disk use is too high | Open **Models** and remove models you no longer use. |
+| No update appears | Open **Updates** or check the [latest release](https://github.com/rmscoal/dictaflow/releases/latest). |
+
+## Development
+
+You need Xcode with the macOS SwiftUI and AppKit tooling. Clone the repository,
+then run:
 
 ```sh
-make run            # build, install to /Applications, and launch DictaFlow Dev
-make package-dev    # build DictaFlow Dev and create .build/DictaFlow.dmg
+make run
 ```
 
-`make run` is the fastest loop to get started.
+Useful commands:
 
-If you want the explicit install path:
+| Command | Purpose |
+| --- | --- |
+| `make run` | Build, install, and launch DictaFlow Dev |
+| `make build` | Build and install without launching |
+| `make package-dev` | Create a local development DMG |
+| `make verify` | Build, install, verify signing, and launch |
 
-1. Run `make install-dev`.
-2. Open `DictaFlow Dev` from `/Applications`.
-3. Approve Microphone access when prompted.
-4. Approve Accessibility access when DictaFlow needs to insert text into
-   another app.
+The main Xcode scheme is `DictaFlow Dev`. There is currently no test target, so
+changes to permissions, hotkeys, insertion, model storage, or launch behavior
+must also be checked with the installed app in `/Applications`.
 
-## Testing
-
-There is currently no dedicated test target.
-
-For changes that touch permissions, hotkeys, text insertion, clipboard
-restoration, model downloads, or app launch, verify manually with an installed
-app from `/Applications`.
-
-## Contributing
-
-Contributions are welcome. Please keep DictaFlow local-first and avoid adding
-cloud inference, analytics, telemetry, or remote transcription paths.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution licensing terms.
+Contributions are welcome. Please keep DictaFlow local-first and read
+[CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change.
 
 ## License
 
-DictaFlow is licensed under the GNU Affero General Public License, version 3 or
-later. See [LICENSE](LICENSE).
-
-Third-party notices are tracked in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+DictaFlow is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE).
+Third-party notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 and [NOTICE](NOTICE).
