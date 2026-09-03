@@ -41,13 +41,12 @@
 
 ## Table of contents
 
-- [DictaFlow at a glance](#dictaflow-at-a-glance)
+- [DictaFlow Showcase](#dictaflow-showcase)
 - [Introduction](#introduction)
 - [Requirements](#requirements)
 - [Installation](#installation)
-- [Using DictaFlow](#using-dictaflow)
 - [Inside DictaFlow](#inside-dictaflow)
-- [Models and local data](#models-and-local-data)
+- [Models and Local Data](#models-and-local-data)
 - [Updates](#updates)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
@@ -111,7 +110,7 @@ Local refinement can fix punctuation, repeated wording, and rough sentence
 structure. It is optional. If refinement fails, DictaFlow uses the original
 Whisper transcript.
 
-## Models and local data
+## Models and Local Data
 
 Models are downloaded when you prepare them in DictaFlow. Every download is
 checksum-verified before use.
