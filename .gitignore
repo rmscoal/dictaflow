@@ -31,3 +31,6 @@ build/
 *.swp
 *.swo
 *~
+
+# Build
+/DictaFlow.app

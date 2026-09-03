@@ -19,7 +19,7 @@
   <a href="https://github.com/rmscoal/dictaflow/releases/latest"><strong>Download DictaFlow</strong></a>
 </p>
 
-## DictaFlow at a glance
+## DictaFlow Showcase
 
 <p align="center">
   <img src="public/dictaflow-overview.png" alt="DictaFlow Overview showing dictation, local models, permissions, and the latest transcript" width="850"><br>
@@ -88,15 +88,6 @@ After the models are downloaded, dictation works offline.
 
 Public releases are signed and notarized for macOS.
 
-## Using DictaFlow
-
-1. Choose a Whisper model, language, and task mode.
-2. Press <kbd>Command</kbd> + <kbd>Shift</kbd> + <kbd>\</kbd> to start.
-3. Speak, then press the shortcut again to stop.
-4. DictaFlow processes the recording and inserts the text into your previous app.
-
-The shortcut and insertion behavior can be changed under **Shortcut & Audio**.
-
 ## Inside DictaFlow
 
 | Step | What happens |
@@ -128,7 +119,7 @@ checksum-verified before use.
 | Model type | Available sizes |
 | --- | --- |
 | Whisper | Tiny 75 MB, Base 142 MB, Small 466 MB, Medium 1.5 GB |
-| Refinement | 469 MB to 2.1 GB |
+| Refinement | Qwen2.5 0.5B, Qwen2.5 1.5B, Qwen2.5 3B, SmolLM2 1.7B |
 
 Models are stored in:
 
