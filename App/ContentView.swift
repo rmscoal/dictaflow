@@ -21,15 +21,21 @@ struct ContentView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
+        Group {
+            if appState.onboardingPresentation != nil {
+                OnboardingView(appState: appState)
+            } else {
+                HStack(spacing: 0) {
+                    sidebar
 
-            VStack(spacing: 0) {
-                pageHeader
-                content
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    VStack(spacing: 0) {
+                        pageHeader
+                        content
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                    .background(AppTheme.background)
+                }
             }
-            .background(AppTheme.background)
         }
         .frame(minWidth: AppLayout.windowMinWidth, minHeight: AppLayout.windowMinHeight)
         .foregroundStyle(AppTheme.primaryText)

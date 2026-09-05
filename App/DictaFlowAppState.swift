@@ -40,6 +40,9 @@ final class DictaFlowAppState: ObservableObject {
     @Published var mainWindowPage: MainWindowPage = .overview
     @Published private(set) var microphonePermissionState: MicrophonePermissionState
     @Published private(set) var accessibilityPermissionState: AccessibilityPermissionState
+    @Published private(set) var onboardingPresentation: OnboardingPresentation?
+    @Published private(set) var isRequestingMicrophonePermission = false
+    @Published private(set) var onboardingPracticeResult: OnboardingPracticeResult?
     @Published private(set) var recordingState: DictationRecordingState {
         didSet {
             updateRecordingOverlay()
@@ -114,6 +117,7 @@ final class DictaFlowAppState: ObservableObject {
     private var isRecordingOverlaySessionActive = false
     private var lastKnownExternalTargetApplication: InsertionTargetApplication?
     private var pendingInsertionTargetApplication: InsertionTargetApplication?
+    private var isOnboardingPracticeSession = false
     private var preservedStatusMessage: String?
     private var savedRefinementPromptText: String
 
@@ -175,6 +179,8 @@ final class DictaFlowAppState: ObservableObject {
             isGranted: permissionService.isAccessibilityPermissionGranted(),
             hasRequestedBefore: settingsStore.hasRequestedAccessibilityPermission
         )
+        self.onboardingPresentation = nil
+        self.onboardingPracticeResult = nil
         self.recordingState = .idle
         self.transcriptionState = .idle
         self.textInsertionState = .idle
@@ -665,12 +671,11 @@ final class DictaFlowAppState: ObservableObject {
         checkForUpdatesIfNeeded()
 
         if launchExperience == .firstLaunch {
-            if isWhisperModelPrepared(whisperConfiguration.model) {
-                showMainWindow()
-            } else {
-                showMainWindowPage(.models)
-            }
-            settingsStore.markInitialWindowPresentationComplete()
+            onboardingPresentation = .initialSetup
+            showMainWindow()
+        } else if microphonePermissionState != .granted || accessibilityPermissionState != .granted {
+            onboardingPresentation = .permissionRecovery
+            showMainWindow()
         }
 
         updateStatusMessage()
@@ -864,6 +869,110 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
+    func requestMicrophonePermissionForOnboarding() {
+        guard !isRequestingMicrophonePermission else {
+            return
+        }
+
+        isRequestingMicrophonePermission = true
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            let permissionState = await self.permissionService.requestMicrophonePermissionIfNeeded()
+
+            await MainActor.run {
+                self.microphonePermissionState = permissionState
+                self.isRequestingMicrophonePermission = false
+                self.updateStatusMessage()
+            }
+        }
+    }
+
+    func requestAccessibilityPermissionForOnboarding() {
+        settingsStore.markAccessibilityPermissionRequested()
+        _ = permissionService.requestAccessibilityPermission()
+        accessibilityPermissionState = resolvedAccessibilityPermissionState()
+        updateStatusMessage()
+    }
+
+    func advanceOnboarding() {
+        guard var presentation = onboardingPresentation else {
+            return
+        }
+
+        switch presentation.step {
+        case .welcome:
+            presentation.step = .permissions
+        case .permissions:
+            guard microphonePermissionState == .granted, accessibilityPermissionState == .granted else {
+                return
+            }
+
+            if presentation.mode == .permissionRecovery {
+                finishOnboardingPresentation(markInitialSetupComplete: false)
+                return
+            }
+
+            presentation.step = .offlineModel
+        case .offlineModel:
+            guard isWhisperModelPrepared(whisperConfiguration.model) else {
+                return
+            }
+            presentation.step = .shortcut
+        case .shortcut:
+            cancelGlobalShortcutEditing()
+            presentation.step = .ready
+        case .ready:
+            finishOnboardingPresentation(markInitialSetupComplete: true)
+            return
+        }
+
+        onboardingPresentation = presentation
+    }
+
+    func returnToPreviousOnboardingStep() {
+        guard var presentation = onboardingPresentation else {
+            return
+        }
+
+        if presentation.mode == .permissionRecovery {
+            finishOnboardingPresentation(markInitialSetupComplete: false)
+            return
+        }
+
+        guard let previousStep = presentation.step.previous else {
+            return
+        }
+
+        cancelGlobalShortcutEditing()
+        presentation.step = previousStep
+        onboardingPresentation = presentation
+    }
+
+    var onboardingPracticeIsBusy: Bool {
+        guard isOnboardingPracticeSession else {
+            return false
+        }
+
+        return recordingState != .idle || transcriptionState.isBusy
+    }
+
+    private func finishOnboardingPresentation(markInitialSetupComplete: Bool) {
+        if markInitialSetupComplete {
+            settingsStore.markInitialWindowPresentationComplete()
+        }
+
+        onboardingPresentation = nil
+        onboardingPracticeResult = nil
+        isOnboardingPracticeSession = false
+        cancelGlobalShortcutEditing()
+        closeMainWindow()
+        updateStatusMessage()
+    }
+
     func refreshRefinementRuntimeAvailability() {
         Task { [weak self] in
             guard let self else {
@@ -1050,6 +1159,14 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
+        if onboardingPresentation?.step == .shortcut,
+           recordingState == .idle,
+           !transcriptionState.isBusy,
+           !textInsertionState.isBusy {
+            onboardingPracticeResult = nil
+            isOnboardingPracticeSession = true
+        }
+
         Task { @MainActor [weak self] in
             await self?.performDictationToggle()
         }
@@ -1067,6 +1184,7 @@ final class DictaFlowAppState: ObservableObject {
             await restoreRecordingPlaybackAdjustment()
             recordingState = .idle
             pendingInsertionTargetApplication = nil
+            isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Recording cancelled.")
             updateStatusMessage()
@@ -1074,6 +1192,7 @@ final class DictaFlowAppState: ObservableObject {
             await restoreRecordingPlaybackAdjustment()
             recordingState = .idle
             pendingInsertionTargetApplication = nil
+            isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Could not cancel recording cleanly. \(error.localizedDescription)")
             showMainWindow()
@@ -1564,12 +1683,15 @@ final class DictaFlowAppState: ObservableObject {
         clearPreservedStatusMessage()
 
         guard isWhisperModelPrepared(whisperConfiguration.model) else {
+            isOnboardingPracticeSession = false
             setPreservedStatusMessage("\(whisperConfiguration.model.displayName) is not prepared. Open Models and prepare it before recording.")
             showMainWindowPage(.models)
             return
         }
 
-        pendingInsertionTargetApplication = captureCurrentInsertionTargetApplication()
+        pendingInsertionTargetApplication = isOnboardingPracticeSession
+            ? nil
+            : captureCurrentInsertionTargetApplication()
 
         if microphonePermissionState != .granted {
             setRecordingOverlaySessionActive(true)
@@ -1582,6 +1704,7 @@ final class DictaFlowAppState: ObservableObject {
 
         guard permissionState == .granted else {
             recordingState = .idle
+            isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
             updateStatusMessage()
             showMainWindow()
@@ -1599,6 +1722,7 @@ final class DictaFlowAppState: ObservableObject {
             await restoreRecordingPlaybackAdjustment()
             stopRecordingMetering()
             recordingState = .idle
+            isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Could not start recording. \(error.localizedDescription)")
             showMainWindow()
@@ -1622,6 +1746,7 @@ final class DictaFlowAppState: ObservableObject {
             await restoreRecordingPlaybackAdjustment()
             stopRecordingMetering()
             recordingState = .idle
+            isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Could not stop recording cleanly. \(error.localizedDescription)")
             showMainWindow()
@@ -1819,6 +1944,7 @@ final class DictaFlowAppState: ObservableObject {
         let model = whisperConfiguration.model
 
         guard let modelURL = await modelDownloadService.verifiedWhisperModelURL(for: model) else {
+            isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("\(model.displayName) is not prepared. Open Models and prepare it before recording.")
             showMainWindowPage(.models)
@@ -1838,10 +1964,28 @@ final class DictaFlowAppState: ObservableObject {
             lastTranscription = transcription
             clearPreservedStatusMessage()
             let insertionTranscription = await refinedTranscriptionIfNeeded(transcription)
+
+            if isOnboardingPracticeSession {
+                let practiceText = insertionTranscription.insertionText
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                onboardingPracticeResult = practiceText.isEmpty
+                    ? .noSpeech
+                    : .transcription(practiceText)
+                transcriptionState = .idle
+                pendingInsertionTargetApplication = nil
+                isOnboardingPracticeSession = false
+                setRecordingOverlaySessionActive(false)
+                clearPreservedStatusMessage()
+                updateStatusMessage()
+                shouldSurfaceCleanupFailure = true
+                return
+            }
+
             await insert(transcription: insertionTranscription, targetApplication: pendingInsertionTargetApplication)
             shouldSurfaceCleanupFailure = true
         } catch {
             transcriptionState = .idle
+            isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)")
             showMainWindow()
@@ -2278,9 +2422,9 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         switch launchExperience {
-        case .firstLaunch:
+        case .firstLaunch where onboardingPresentation != nil:
             statusMessage = "First-launch session. Open Models to prepare a Whisper model for offline use."
-        case .returningUser:
+        case .firstLaunch, .returningUser:
             statusMessage = "DictaFlow is ready in the menu bar. Press \(hotkeyDisplayText) to start recording."
         }
     }
