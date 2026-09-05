@@ -2,7 +2,7 @@
 
 RUN_SCRIPT := ./script/build_and_run.sh
 
-.PHONY: help run build install install-dev package-dev uninstall verify logs telemetry debug
+.PHONY: help run build install install-dev package-dev uninstall-dev reset-dev verify logs telemetry debug
 
 help:
 	@printf "DictaFlow local commands:\n"
@@ -11,7 +11,8 @@ help:
 	@printf "  make install        Alias for make build\n"
 	@printf "  make install-dev    Build and install DictaFlow Dev\n"
 	@printf "  make package-dev    Build DictaFlow Dev and create a local DMG\n"
-	@printf "  make uninstall      Remove DictaFlow and DictaFlow Dev from /Applications\n"
+	@printf "  make uninstall-dev  Remove only DictaFlow Dev from /Applications\n"
+	@printf "  make reset-dev      Reset Dev onboarding and macOS permissions\n"
 	@printf "  make verify         Build, install, verify signing, and launch\n"
 	@printf "  make logs           Build, install, launch, and stream process logs\n"
 	@printf "  make telemetry      Build, install, launch, and stream subsystem logs\n"
@@ -31,8 +32,11 @@ install-dev:
 package-dev:
 	$(RUN_SCRIPT) --package-dev
 
-uninstall:
-	$(RUN_SCRIPT) --uninstall
+uninstall-dev:
+	$(RUN_SCRIPT) --uninstall-dev
+
+reset-dev:
+	$(RUN_SCRIPT) --reset-dev
 
 verify:
 	$(RUN_SCRIPT) --verify
