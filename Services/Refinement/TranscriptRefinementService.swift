@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -48,6 +49,7 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
     private var serverProcess: Process?
     private var serverModelURL: URL?
     private var serverBaseURL: URL?
+    private var serverAPIKey: String?
 
     init(executableURL: URL? = nil, urlSession: URLSession = .shared) {
         self.executableURL = executableURL
@@ -145,14 +147,15 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         transcript: String,
         maxTokens: Int
     ) async throws -> String {
-        let baseURL = try await ensureServer(for: modelURL)
-        let requestURL = baseURL
+        let server = try await ensureServer(for: modelURL)
+        let requestURL = server.baseURL
             .appendingPathComponent("v1")
             .appendingPathComponent("chat")
             .appendingPathComponent("completions")
         var request = URLRequest(url: requestURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(server.apiKey)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 120
 
         let payload: [String: Any] = [
@@ -170,6 +173,10 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         let (data, response) = try await urlSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw TranscriptRefinementServiceError.failedToRun("The local llama-server returned an invalid response.")
+        }
+
+        if httpResponse.statusCode == 401 {
+            throw TranscriptRefinementServiceError.failedToRun("The local llama-server rejected DictaFlow's credentials (HTTP 401).")
         }
 
         guard httpResponse.statusCode == 200 else {
@@ -190,21 +197,26 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         throw TranscriptRefinementServiceError.emptyOutput
     }
 
-    private func ensureServer(for modelURL: URL) async throws -> URL {
+    private func ensureServer(for modelURL: URL) async throws -> (baseURL: URL, apiKey: String) {
         if let serverProcess,
            serverProcess.isRunning,
            serverModelURL == modelURL,
-           let serverBaseURL {
-            return serverBaseURL
+           let serverBaseURL,
+           let serverAPIKey {
+            return (serverBaseURL, serverAPIKey)
         }
 
         stopServer()
 
         let runtimeURL = try resolveRuntimeURL()
         let port = try Self.availableLocalPort()
+        let apiKey = Self.makeServerAPIKey()
         let baseURL = URL(string: "http://127.0.0.1:\(port)")!
         let process = Process()
         process.executableURL = runtimeURL
+        var environment = ProcessInfo.processInfo.environment
+        environment["LLAMA_API_KEY"] = apiKey
+        process.environment = environment
         process.arguments = [
             "--model", modelURL.path,
             "--host", "127.0.0.1",
@@ -232,12 +244,46 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         serverProcess = process
         serverModelURL = modelURL
         serverBaseURL = baseURL
+        serverAPIKey = apiKey
 
-        try await waitForServerReady(baseURL: baseURL, process: process)
-        return baseURL
+        try await waitForServerReady(baseURL: baseURL, apiKey: apiKey, process: process)
+        try await verifyServerEnforcesAPIKey(baseURL: baseURL, process: process)
+        return (baseURL, apiKey)
     }
 
-    private func waitForServerReady(baseURL: URL, process: Process) async throws {
+    // Proves the server on our port enforces credentials before any transcript
+    // is sent. An impostor accepting everything would answer 200 here.
+    private func verifyServerEnforcesAPIKey(baseURL: URL, process: Process) async throws {
+        guard process.isRunning else {
+            throw TranscriptRefinementServiceError.failedToRun("The local llama-server exited before it was ready.")
+        }
+
+        let requestURL = baseURL
+            .appendingPathComponent("v1")
+            .appendingPathComponent("chat")
+            .appendingPathComponent("completions")
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "messages": [["role": "user", "content": "ping"]],
+            "max_tokens": 1,
+            "stream": false
+        ])
+
+        let (_, response) = try await urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TranscriptRefinementServiceError.failedToRun("The local llama-server returned an invalid response.")
+        }
+
+        guard httpResponse.statusCode == 401 else {
+            stopServer()
+            throw TranscriptRefinementServiceError.failedToRun("The local server did not enforce DictaFlow's credentials (HTTP \(httpResponse.statusCode)).")
+        }
+    }
+
+    private func waitForServerReady(baseURL: URL, apiKey: String, process: Process) async throws {
         let healthURL = baseURL.appendingPathComponent("health")
         let deadline = Date().addingTimeInterval(120)
 
@@ -247,11 +293,22 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
             }
 
             do {
-                let (_, response) = try await urlSession.data(from: healthURL)
-                if let httpResponse = response as? HTTPURLResponse,
-                   (200..<300).contains(httpResponse.statusCode) {
-                    return
+                var request = URLRequest(url: healthURL)
+                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+                let (_, response) = try await urlSession.data(for: request)
+                if let httpResponse = response as? HTTPURLResponse {
+                    // b9627 leaves /health unauthenticated; kept so a future
+                    // version that protects it fails fast instead of timing out.
+                    if httpResponse.statusCode == 401 {
+                        throw TranscriptRefinementServiceError.failedToRun("The local llama-server rejected DictaFlow's credentials (HTTP 401).")
+                    }
+
+                    if (200..<300).contains(httpResponse.statusCode) {
+                        return
+                    }
                 }
+            } catch let error as TranscriptRefinementServiceError {
+                throw error
             } catch {
                 try await Task.sleep(nanoseconds: 250_000_000)
             }
@@ -272,6 +329,7 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         self.serverProcess = nil
         self.serverModelURL = nil
         self.serverBaseURL = nil
+        self.serverAPIKey = nil
     }
 
     private func runLlamaCLI(
@@ -410,6 +468,11 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
 
     nonisolated private static func waitForExit(_ process: Process, timeoutNanoseconds: UInt64) async -> Bool {
         await ProcessExitWaiter().wait(for: process, timeoutNanoseconds: timeoutNanoseconds)
+    }
+
+    nonisolated private static func makeServerAPIKey() -> String {
+        let key = SymmetricKey(size: .bits256)
+        return key.withUnsafeBytes { Data($0).base64EncodedString() }
     }
 
     nonisolated private static func optimalThreadCount() -> Int {
