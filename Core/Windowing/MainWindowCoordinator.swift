@@ -11,6 +11,10 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
     }
 
     func showMainWindow() {
+        // Promote to a regular app so the main window joins the Dock and Cmd-Tab
+        // while it is open. The app otherwise stays an accessory agent.
+        NSApp.setActivationPolicy(.regular)
+
         let window = makeWindowIfNeeded()
 
         window.makeKeyAndOrderFront(nil)
@@ -33,6 +37,10 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
 
     func windowWillClose(_ notification: Notification) {
         appState.mainWindowDidClose()
+
+        // Return to accessory policy so the app leaves the Dock and Cmd-Tab
+        // once the main window is gone.
+        NSApp.setActivationPolicy(.accessory)
     }
 
     private func makeWindowIfNeeded() -> NSWindow {

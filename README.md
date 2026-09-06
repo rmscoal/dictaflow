@@ -173,6 +173,8 @@ Useful commands:
 | `make run` | Build, install, and launch DictaFlow Dev |
 | `make build` | Build and install without launching |
 | `make package-dev` | Create a local development DMG |
+| `make uninstall-dev` | Remove only DictaFlow Dev from `/Applications` |
+| `make reset-dev` | Reset Dev onboarding, Microphone, and Accessibility permissions |
 | `make verify` | Build, install, verify signing, and launch |
 
 The main Xcode scheme is `DictaFlow Dev`. There is currently no test target, so
