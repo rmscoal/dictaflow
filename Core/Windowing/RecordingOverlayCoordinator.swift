@@ -596,20 +596,20 @@ private struct OverlayLoadingView: View {
             )
             context.fill(
                 Path(ellipseIn: rect),
-                with: .color(Color.white.opacity(Self.dotOpacities[index]))
+                with: .color(OverlayTheme.primaryText.opacity(Self.dotOpacities[index]))
             )
         }
     }
 }
 
 private enum OverlayTheme {
-    static let panelFill = Color(red: 0.039, green: 0.039, blue: 0.039).opacity(0.96)
-    static let panelBorder = Color.white.opacity(0.08)
-    static let controlFill = Color.white.opacity(0.055)
-    static let controlHoverFill = Color.white.opacity(0.10)
-    static let primaryText = Color.white.opacity(0.92)
-    static let refinementStar = Color(red: 0.72, green: 0.82, blue: 1)
-    static let refinementGlow = Color(red: 0.42, green: 0.62, blue: 1)
+    static let panelFill = ThemeColor.adaptive(light: 0xFAFAFB, dark: 0x0A0A0A).opacity(0.96)
+    static let panelBorder = ThemeColor.adaptive(light: 0x000000, dark: 0xFFFFFF).opacity(0.08)
+    static let controlFill = ThemeColor.adaptive(light: 0x000000, dark: 0xFFFFFF).opacity(0.055)
+    static let controlHoverFill = ThemeColor.adaptive(light: 0x000000, dark: 0xFFFFFF).opacity(0.10)
+    static let primaryText = ThemeColor.adaptive(light: 0x202124, dark: 0xFFFFFF).opacity(0.92)
+    static let refinementStar = ThemeColor.adaptive(light: 0x345BC9, dark: 0xB8D1FF)
+    static let refinementGlow = ThemeColor.adaptive(light: 0x426AD1, dark: 0x6B9EFF)
 }
 
 private final class TransparentHostingView<Content: View>: NSHostingView<Content> {

@@ -295,7 +295,7 @@ private struct DictaFlowMenuMark: View {
         )
         .foregroundStyle(MenuTheme.logoBar)
         .frame(width: 29, height: 29)
-        .background(Color.white, in: Circle())
+        .background(MenuTheme.primaryText, in: Circle())
         .shadow(color: .black.opacity(0.18), radius: 6.5, x: 0, y: 2.5)
         .accessibilityHidden(true)
     }
@@ -466,14 +466,14 @@ private struct GhostButtonStyle: ButtonStyle {
 
         private var backgroundColor: Color {
             if configuration.isPressed {
-                return Color.white.opacity(0.085)
+                return MenuTheme.hoverFill.opacity(0.085)
             }
 
-            return isHovering ? Color.white.opacity(0.055) : Color.clear
+            return isHovering ? MenuTheme.hoverFill.opacity(0.055) : Color.clear
         }
 
         private var borderColor: Color {
-            isHovering || configuration.isPressed ? Color.white.opacity(0.065) : Color.clear
+            isHovering || configuration.isPressed ? MenuTheme.hoverFill.opacity(0.065) : Color.clear
         }
     }
 }
@@ -497,7 +497,7 @@ private struct AccentSwitchStyle: ToggleStyle {
                 }
                 .overlay {
                     Capsule(style: .continuous)
-                        .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                        .stroke(MenuTheme.controlBorder, lineWidth: 1)
                 }
         }
         .buttonStyle(.plain)
@@ -513,31 +513,32 @@ private enum MenuLayout {
 }
 
 private enum MenuTheme {
-    static let background = Color(red: 23 / 255, green: 25 / 255, blue: 29 / 255)
-    static let headerFill = Color(red: 32 / 255, green: 42 / 255, blue: 56 / 255)
-    static let footerFill = Color(red: 27 / 255, green: 29 / 255, blue: 33 / 255)
-    static let recordingCardTop = Color(red: 35 / 255, green: 37 / 255, blue: 42 / 255)
-    static let recordingCardBottom = Color(red: 31 / 255, green: 33 / 255, blue: 37 / 255)
-    static let modelsFill = Color(red: 28 / 255, green: 30 / 255, blue: 34 / 255)
-    static let accent = Color(red: 77 / 255, green: 120 / 255, blue: 251 / 255)
-    static let recording = Color(red: 224 / 255, green: 82 / 255, blue: 95 / 255)
-    static let cardBorder = Color(red: 48 / 255, green: 50 / 255, blue: 56 / 255)
-    static let modelsBorder = Color(red: 45 / 255, green: 48 / 255, blue: 53 / 255)
-    static let controlFill = Color(red: 41 / 255, green: 43 / 255, blue: 48 / 255)
-    static let controlBorder = Color(red: 58 / 255, green: 61 / 255, blue: 67 / 255)
-    static let divider = Color(red: 42 / 255, green: 45 / 255, blue: 50 / 255)
-    static let strongDivider = Color(red: 9 / 255, green: 10 / 255, blue: 12 / 255)
-    static let primaryText = Color(red: 244 / 255, green: 245 / 255, blue: 247 / 255)
-    static let secondaryText = Color(red: 133 / 255, green: 139 / 255, blue: 148 / 255)
-    static let tertiaryText = Color(red: 133 / 255, green: 139 / 255, blue: 148 / 255)
-    static let keycapText = Color(red: 185 / 255, green: 190 / 255, blue: 198 / 255)
-    static let chevronText = Color(red: 189 / 255, green: 194 / 255, blue: 201 / 255)
-    static let footerPrimaryText = Color(red: 205 / 255, green: 209 / 255, blue: 215 / 255)
-    static let footerText = Color(red: 174 / 255, green: 179 / 255, blue: 187 / 255)
-    static let accentTint = Color(red: 118 / 255, green: 153 / 255, blue: 255 / 255)
-    static let accentFill = Color(red: 82 / 255, green: 127 / 255, blue: 255 / 255).opacity(0.10)
-    static let accentBorder = Color(red: 108 / 255, green: 146 / 255, blue: 255 / 255).opacity(0.13)
-    static let logoBar = Color(red: 16 / 255, green: 19 / 255, blue: 25 / 255)
-    static let switchOffFill = Color(red: 58 / 255, green: 61 / 255, blue: 67 / 255)
-    static let switchOffThumb = Color(red: 169 / 255, green: 173 / 255, blue: 180 / 255)
+    static let background = AppTheme.background
+    static let headerFill = AppTheme.sidebar
+    static let footerFill = ThemeColor.adaptive(light: 0xF2F3F5, dark: 0x1B1D21)
+    static let recordingCardTop = ThemeColor.adaptive(light: 0xFFFFFF, dark: 0x23252A)
+    static let recordingCardBottom = ThemeColor.adaptive(light: 0xF8F9FB, dark: 0x1F2125)
+    static let modelsFill = ThemeColor.adaptive(light: 0xFFFFFF, dark: 0x1C1E22)
+    static let accent = AppTheme.accent
+    static let recording = ThemeColor.adaptive(light: 0xC43A49, dark: 0xE0525F)
+    static let cardBorder = ThemeColor.adaptive(light: 0xDCDFE4, dark: 0x303238)
+    static let modelsBorder = ThemeColor.adaptive(light: 0xDCDFE4, dark: 0x2D3035)
+    static let controlFill = ThemeColor.adaptive(light: 0xECEEF1, dark: 0x292B30)
+    static let controlBorder = ThemeColor.adaptive(light: 0xD3D7DD, dark: 0x3A3D43)
+    static let divider = ThemeColor.adaptive(light: 0xE0E3E8, dark: 0x2A2D32)
+    static let strongDivider = ThemeColor.adaptive(light: 0xD5D9DF, dark: 0x090A0C)
+    static let primaryText = AppTheme.primaryText
+    static let secondaryText = ThemeColor.adaptive(light: 0x636871, dark: 0x858B94)
+    static let tertiaryText = secondaryText
+    static let keycapText = ThemeColor.adaptive(light: 0x535964, dark: 0xB9BEC6)
+    static let chevronText = ThemeColor.adaptive(light: 0x535964, dark: 0xBDC2C9)
+    static let footerPrimaryText = ThemeColor.adaptive(light: 0x333943, dark: 0xCDD1D7)
+    static let footerText = ThemeColor.adaptive(light: 0x535964, dark: 0xAEB3BB)
+    static let accentTint = ThemeColor.adaptive(light: 0x345BC9, dark: 0x7699FF)
+    static let accentFill = accent.opacity(0.10)
+    static let accentBorder = accent.opacity(0.18)
+    static let logoBar = ThemeColor.adaptive(light: 0xFFFFFF, dark: 0x101319)
+    static let switchOffFill = ThemeColor.adaptive(light: 0xD3D7DD, dark: 0x3A3D43)
+    static let switchOffThumb = ThemeColor.adaptive(light: 0xFFFFFF, dark: 0xA9ADB4)
+    static let hoverFill = ThemeColor.adaptive(light: 0x000000, dark: 0xFFFFFF)
 }

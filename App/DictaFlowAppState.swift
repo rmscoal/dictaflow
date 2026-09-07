@@ -28,6 +28,7 @@ enum MainWindowPage {
     case refinement
     case history
     case shortcutAndAudio
+    case appearance
     case models
     case permissions
     case updates
@@ -37,6 +38,7 @@ enum MainWindowPage {
 final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isMainWindowVisible = false
     @Published private(set) var isSettingsWindowVisible = false
+    @Published private(set) var appAppearance: AppAppearance
     @Published var mainWindowPage: MainWindowPage = .overview
     @Published private(set) var microphonePermissionState: MicrophonePermissionState
     @Published private(set) var accessibilityPermissionState: AccessibilityPermissionState
@@ -155,6 +157,7 @@ final class DictaFlowAppState: ObservableObject {
         let initialRefinementConfiguration = settingsStore.refinementConfiguration
         let initialPromptText = refinementPromptStore.promptTemplate()
 
+        self.appAppearance = settingsStore.appAppearance
         self.settingsStore = settingsStore
         self.permissionService = permissionService
         self.audioRecorderService = audioRecorderService
@@ -743,6 +746,14 @@ final class DictaFlowAppState: ObservableObject {
         whisperConfiguration.taskMode = taskMode
         persistWhisperConfiguration()
         updateStatusMessage()
+    }
+
+    func updateAppAppearance(_ appearance: AppAppearance) {
+        guard appAppearance != appearance else {
+            return
+        }
+        settingsStore.saveAppAppearance(appearance)
+        appAppearance = appearance
     }
 
     func updateRecordingPlaybackBehavior(_ behavior: RecordingPlaybackBehavior) {

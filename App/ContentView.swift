@@ -104,6 +104,13 @@ struct ContentView: View {
             historyPage
         case .shortcutAndAudio:
             shortcutAndAudioPage
+        case .appearance:
+            DetailPage {
+                AppearanceSettingsView(appearance: Binding(
+                    get: { appState.appAppearance },
+                    set: { appState.updateAppAppearance($0) }
+                ))
+            }
         case .models:
             modelsPage
         case .permissions:
@@ -152,6 +159,7 @@ struct ContentView: View {
 
             SidebarSection(title: "CONFIGURATION", isCollapsed: isSidebarCollapsed) {
                 SidebarItem(page: .shortcutAndAudio, title: "Shortcut & Audio", systemImage: "keyboard", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
+                SidebarItem(page: .appearance, title: "Appearance", systemImage: "circle.lefthalf.filled", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
                 SidebarItem(page: .models, title: "Models", systemImage: "cpu", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
                 SidebarItem(page: .permissions, title: "Permissions", systemImage: "lock.shield", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
                 SidebarItem(page: .updates, title: "Updates", systemImage: "arrow.triangle.2.circlepath", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
@@ -521,7 +529,7 @@ struct ContentView: View {
                         HStack(spacing: 10) {
                             Text(appState.globalShortcutEditingMessage ?? "Escape cancels without changing the shortcut.")
                                 .font(.system(size: 10.5))
-                                .foregroundStyle(appState.globalShortcutEditingMessage == nil ? AppTheme.secondaryText : Color.orange.opacity(0.9))
+                                .foregroundStyle(appState.globalShortcutEditingMessage == nil ? AppTheme.secondaryText : AppTheme.warning.opacity(0.9))
 
                             Spacer(minLength: 8)
 
@@ -891,6 +899,7 @@ struct ContentView: View {
         case .refinement: "Refinement"
         case .history: "History"
         case .shortcutAndAudio: "Shortcut & Audio"
+        case .appearance: "Appearance"
         case .models: "Models"
         case .permissions: "Permissions"
         case .updates: "Updates"
@@ -904,6 +913,7 @@ struct ContentView: View {
         case .refinement: "Clean transcripts locally before insertion."
         case .history: "Review and reuse your latest transcript."
         case .shortcutAndAudio: "Control recording access and audio behavior."
+        case .appearance: "Choose how DictaFlow looks."
         case .models: "Manage local Whisper models and storage."
         case .permissions: "Check the system access DictaFlow needs."
         case .updates: "Version and update preferences."
@@ -1102,7 +1112,7 @@ struct ContentView: View {
         case .succeeded:
             return AppTheme.accent
         case .failed:
-            return Color.orange.opacity(0.9)
+            return AppTheme.warning.opacity(0.9)
         case .disabled, .skipped:
             return AppTheme.secondaryText
         }
@@ -1124,23 +1134,6 @@ struct ContentView: View {
             return "Empty refined transcript"
         }
     }
-}
-
-private enum AppTheme {
-    static let background = Color(red: 0.090, green: 0.098, blue: 0.114)
-    static let sidebar = Color(red: 0.125, green: 0.165, blue: 0.220)
-    static let sidebarBorder = Color.white.opacity(0.075)
-    static let barFill = Color(red: 0.108, green: 0.116, blue: 0.132)
-    static let tileFill = Color(red: 0.137, green: 0.145, blue: 0.165)
-    static let controlFill = Color.white.opacity(0.055)
-    static let editorFill = Color.black.opacity(0.12)
-    static let accent = Color(red: 0.302, green: 0.471, blue: 0.984)
-    static let modelActive = Color(red: 0.275, green: 0.706, blue: 0.443)
-    static let destructive = Color(red: 0.835, green: 0.235, blue: 0.286)
-    static let border = Color.white.opacity(0.085)
-    static let primaryText = Color(red: 0.961, green: 0.965, blue: 0.973)
-    static let secondaryText = Color(red: 0.58, green: 0.60, blue: 0.64)
-    static let tertiaryText = Color(red: 0.40, green: 0.43, blue: 0.48)
 }
 
 private enum AppLayout {
@@ -1173,7 +1166,7 @@ private struct DictaFlowLogo: View {
 private struct DictaFlowMark: View {
     var body: some View {
         ZStack {
-            Circle().fill(Color.white)
+            Circle().fill(AppTheme.primaryText)
             HStack(alignment: .center, spacing: 2) {
                 ForEach([8, 14, 20, 14, 8], id: \.self) { height in
                     Capsule(style: .continuous)
@@ -1380,11 +1373,11 @@ private struct PermissionStatusControl: View {
         VStack(alignment: .trailing, spacing: 5) {
             Text(title.uppercased())
                 .font(.system(size: 9.5, weight: .bold))
-                .foregroundStyle(isAllowed ? Color.green.opacity(0.9) : AppTheme.secondaryText)
+                .foregroundStyle(isAllowed ? AppTheme.modelActive.opacity(0.9) : AppTheme.secondaryText)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 5)
                 .background(
-                    (isAllowed ? Color.green : AppTheme.secondaryText).opacity(0.10),
+                    (isAllowed ? AppTheme.modelActive : AppTheme.secondaryText).opacity(0.10),
                     in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                 )
 
@@ -1871,7 +1864,7 @@ private struct ModelDownloadStatusPanel: View {
     let hasFailed: Bool
 
     private var statusColor: Color {
-        hasFailed ? Color.orange : (isActive ? AppTheme.accent : AppTheme.secondaryText)
+        hasFailed ? AppTheme.warning : (isActive ? AppTheme.accent : AppTheme.secondaryText)
     }
 
     var body: some View {
@@ -1934,7 +1927,7 @@ private struct ModelChoiceCard: View {
         }
 
         if needsPreparation {
-            return Color.orange
+            return AppTheme.warning
         }
 
         return AppTheme.accent

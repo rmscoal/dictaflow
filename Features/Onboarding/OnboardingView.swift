@@ -785,15 +785,15 @@ private struct CompactOnboardingButtonStyle: ButtonStyle {
 }
 
 private enum OnboardingTheme {
-    static let background = Color(red: 0.090, green: 0.098, blue: 0.114)
-    static let tileFill = Color(red: 0.137, green: 0.145, blue: 0.165)
-    static let controlFill = Color.white.opacity(0.055)
-    static let border = Color.white.opacity(0.085)
-    static let primaryText = Color(red: 0.961, green: 0.965, blue: 0.973)
-    static let secondaryText = Color(red: 0.58, green: 0.60, blue: 0.64)
-    static let tertiaryText = Color(red: 0.40, green: 0.43, blue: 0.48)
-    static let accent = Color(red: 0.302, green: 0.471, blue: 0.984)
-    static let success = Color(red: 0.275, green: 0.706, blue: 0.443)
-    static let warning = Color(red: 0.94, green: 0.67, blue: 0.31)
+    static let background = AppTheme.background
+    static let tileFill = AppTheme.tileFill
+    static let controlFill = AppTheme.controlFill
+    static let border = AppTheme.border
+    static let primaryText = AppTheme.primaryText
+    static let secondaryText = AppTheme.secondaryText
+    static let tertiaryText = AppTheme.tertiaryText
+    static let accent = AppTheme.accent
+    static let success = AppTheme.modelActive
+    static let warning = AppTheme.warning
     static let logoInk = Color(red: 0.12, green: 0.16, blue: 0.24)
 }
