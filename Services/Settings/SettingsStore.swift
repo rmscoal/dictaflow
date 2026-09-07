@@ -1,6 +1,7 @@
 import Foundation
 
 protocol SettingsStoreProtocol: AnyObject {
+    var appAppearance: AppAppearance { get }
     var shouldShowMainWindowOnLaunch: Bool { get }
     var hasRequestedAccessibilityPermission: Bool { get }
     var automaticallyChecksForUpdates: Bool { get }
@@ -10,6 +11,7 @@ protocol SettingsStoreProtocol: AnyObject {
     var recordingPlaybackBehavior: RecordingPlaybackBehavior { get }
     var whisperConfiguration: WhisperConfiguration { get }
     var refinementConfiguration: RefinementConfiguration { get }
+    func saveAppAppearance(_ appearance: AppAppearance)
     func markInitialWindowPresentationComplete()
     func markAccessibilityPermissionRequested()
     func saveAutomaticallyChecksForUpdates(_ isEnabled: Bool)
@@ -22,6 +24,7 @@ protocol SettingsStoreProtocol: AnyObject {
 
 final class UserDefaultsSettingsStore: SettingsStoreProtocol {
     private enum Keys {
+        static let appAppearance = "app.appearance"
         static let hasPresentedInitialWindow = "app.hasPresentedInitialWindow"
         static let hasRequestedAccessibilityPermission = "permissions.hasRequestedAccessibilityPermission"
         static let automaticallyChecksForUpdates = "updates.automaticallyChecks"
@@ -37,6 +40,17 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+    }
+
+    var appAppearance: AppAppearance {
+        guard let rawValue = defaults.string(forKey: Keys.appAppearance) else {
+            return .system
+        }
+        return AppAppearance(rawValue: rawValue) ?? .system
+    }
+
+    func saveAppAppearance(_ appearance: AppAppearance) {
+        defaults.set(appearance.rawValue, forKey: Keys.appAppearance)
     }
 
     var shouldShowMainWindowOnLaunch: Bool {

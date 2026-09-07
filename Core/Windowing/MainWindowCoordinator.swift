@@ -63,7 +63,7 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
         window.minSize = NSSize(width: 660, height: 520)
         window.center()
         window.isOpaque = true
-        window.backgroundColor = NSColor(red: 0.090, green: 0.098, blue: 0.114, alpha: 1)
+        window.backgroundColor = ThemeColor.adaptiveNSColor(light: 0xF7F7F8, dark: 0x17191D)
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.setFrameAutosaveName("DictaFlowMainWindowSidebar")
