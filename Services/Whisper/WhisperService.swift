@@ -45,13 +45,27 @@ actor WhisperCPPService: WhisperServiceProtocol {
         logDecodedAudioStats(samples)
         let context = try context(for: modelURL)
         let languageCode = configuration.inputLanguage.whisperCode ?? "auto"
+        let initialPrompt = configuration.initialPrompt
 
         return try languageCode.withCString { languagePointer in
-            try runTranscription(
+            if let initialPrompt {
+                return try initialPrompt.withCString { promptPointer in
+                    try runTranscription(
+                        context: context,
+                        samples: samples,
+                        configuration: configuration,
+                        languagePointer: languagePointer,
+                        promptPointer: promptPointer
+                    )
+                }
+            }
+
+            return try runTranscription(
                 context: context,
                 samples: samples,
                 configuration: configuration,
-                languagePointer: languagePointer
+                languagePointer: languagePointer,
+                promptPointer: nil
             )
         }
     }
@@ -80,7 +94,8 @@ actor WhisperCPPService: WhisperServiceProtocol {
         context: WhisperContextBox,
         samples: [Float],
         configuration: WhisperConfiguration,
-        languagePointer: UnsafePointer<CChar>?
+        languagePointer: UnsafePointer<CChar>?,
+        promptPointer: UnsafePointer<CChar>?
     ) throws -> WhisperTranscriptionResult {
         var parameters = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
         parameters.print_realtime = false
@@ -89,6 +104,7 @@ actor WhisperCPPService: WhisperServiceProtocol {
         parameters.print_special = false
         parameters.translate = configuration.taskMode == .translateToEnglish
         parameters.language = languagePointer
+        parameters.initial_prompt = promptPointer
         // In whisper.cpp, detect_language exits after language detection. Use "auto" to detect and transcribe.
         parameters.detect_language = false
         parameters.n_threads = Int32(Self.recommendedThreadCount)
