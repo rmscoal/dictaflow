@@ -780,6 +780,43 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
+    func addCustomVocabularyKeyword(_ rawText: String) -> CustomVocabularyKeywordError? {
+        guard !whisperSettingsLocked else {
+            return nil
+        }
+        let term = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else {
+            return nil
+        }
+        guard term.rangeOfCharacter(from: .whitespacesAndNewlines) == nil, !term.contains(",") else {
+            return .multiWord
+        }
+        guard !whisperConfiguration.customVocabulary.contains(where: { $0.lowercased() == term.lowercased() }) else {
+            return .duplicate
+        }
+        guard whisperConfiguration.customVocabulary.count < WhisperConfiguration.maxCustomVocabularyTerms else {
+            return .limitReached
+        }
+
+        whisperConfiguration.customVocabulary.append(term)
+        persistWhisperConfiguration()
+        updateStatusMessage()
+        return nil
+    }
+
+    func removeCustomVocabularyKeyword(_ keyword: String) {
+        guard !whisperSettingsLocked else {
+            return
+        }
+        guard whisperConfiguration.customVocabulary.contains(keyword) else {
+            return
+        }
+
+        whisperConfiguration.customVocabulary.removeAll { $0 == keyword }
+        persistWhisperConfiguration()
+        updateStatusMessage()
+    }
+
     func updateRefinementEnabled(_ isEnabled: Bool) {
         guard refinementConfiguration.isEnabled != isEnabled else {
             return
