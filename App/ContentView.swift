@@ -2176,14 +2176,22 @@ private struct CustomVocabularyEditor: View {
                             error = nil
                             appState.removeCustomVocabularyKeyword(keyword)
                         }
+                        .disabled(appState.whisperSettingsLocked)
                     }
                 }
             }
 
-            TextField("Type a keyword and press Return", text: inputBinding)
+            TextField("Type a keyword and press Return", text: $inputText)
                 .textFieldStyle(.roundedBorder)
                 .disabled(appState.whisperSettingsLocked)
                 .onSubmit(commitKeyword)
+                .onChange(of: inputText) { newValue in
+                    error = nil
+                    let stripped = newValue.filter { $0 != "," }
+                    if stripped != newValue {
+                        inputText = stripped
+                    }
+                }
 
             Text(helperText)
                 .font(.system(size: 10.5))
@@ -2199,16 +2207,6 @@ private struct CustomVocabularyEditor: View {
                     .padding(.leading, 2)
             }
         }
-    }
-
-    private var inputBinding: Binding<String> {
-        Binding(
-            get: { inputText },
-            set: {
-                inputText = $0
-                error = nil
-            }
-        )
     }
 
     private var helperText: String {

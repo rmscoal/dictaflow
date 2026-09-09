@@ -781,11 +781,14 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func addCustomVocabularyKeyword(_ rawText: String) -> CustomVocabularyKeywordError? {
+        guard !whisperSettingsLocked else {
+            return nil
+        }
         let term = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty else {
             return nil
         }
-        guard term.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else {
+        guard term.rangeOfCharacter(from: .whitespacesAndNewlines) == nil, !term.contains(",") else {
             return .multiWord
         }
         guard !whisperConfiguration.customVocabulary.contains(where: { $0.lowercased() == term.lowercased() }) else {
@@ -802,6 +805,9 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func removeCustomVocabularyKeyword(_ keyword: String) {
+        guard !whisperSettingsLocked else {
+            return
+        }
         guard whisperConfiguration.customVocabulary.contains(keyword) else {
             return
         }
