@@ -5,6 +5,8 @@ protocol ModelDownloadServiceProtocol: AnyObject {
     var modelsDirectoryURL: URL { get }
     func installedModelFiles() -> [LocalModelFile]
     func deleteModelFiles(_ files: [LocalModelFile]) async throws -> Int64
+    func cancelDownload(modelIdentifier: String)
+    func removeIncompleteDownloads() -> Int64
     func ensureModelAvailable(
         _ model: WhisperModelDescriptor,
         progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
@@ -87,6 +89,14 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
     nonisolated func installedModelFiles() -> [LocalModelFile] {
         Self.installedModelFiles(in: modelsDirectoryURL, fileManager: .default)
+    }
+
+    func cancelDownload(modelIdentifier: String) {
+        activeDownloads[modelIdentifier]?.cancel()
+    }
+
+    nonisolated func removeIncompleteDownloads() -> Int64 {
+        Self.removeIncompleteDownloads(in: modelsDirectoryURL, fileManager: .default)
     }
 
     func deleteModelFiles(_ files: [LocalModelFile]) async throws -> Int64 {
@@ -435,6 +445,28 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
             return directoryURL.appendingPathComponent(model.filename, isDirectory: false)
         }
+    }
+
+    nonisolated private static func removeIncompleteDownloads(
+        in directoryURL: URL,
+        fileManager: FileManager
+    ) -> Int64 {
+        guard let itemURLs = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+
+        var freedByteCount: Int64 = 0
+
+        for itemURL in itemURLs where itemURL.pathExtension == "download" {
+            freedByteCount += byteCount(at: itemURL, fileManager: fileManager)
+            try? fileManager.removeItem(at: itemURL)
+        }
+
+        return freedByteCount
     }
 
     nonisolated private static func byteCount(at fileURL: URL, fileManager: FileManager) -> Int64 {

@@ -396,7 +396,8 @@ struct ContentView: View {
                             statusText: appState.whisperModelPreparationStatusText,
                             isActive: isWhisperModelPreparationActive,
                             progress: whisperModelPreparationProgress,
-                            hasFailed: appState.whisperModelPreparationFailed
+                            hasFailed: appState.whisperModelPreparationFailed,
+                            cancelAction: { appState.cancelModelDownload() }
                         )
                     }
                 }
@@ -441,7 +442,8 @@ struct ContentView: View {
                             statusText: appState.refinementModelPreparationStatusText,
                             isActive: isRefinementModelPreparationActive,
                             progress: refinementModelPreparationProgress,
-                            hasFailed: appState.refinementModelPreparationFailed
+                            hasFailed: appState.refinementModelPreparationFailed,
+                            cancelAction: { appState.cancelModelDownload() }
                         )
                     }
                 }
@@ -1888,6 +1890,7 @@ private struct ModelDownloadStatusPanel: View {
     let isActive: Bool
     let progress: Double?
     let hasFailed: Bool
+    let cancelAction: (() -> Void)?
 
     private var statusColor: Color {
         hasFailed ? AppTheme.warning : (isActive ? AppTheme.accent : AppTheme.secondaryText)
@@ -1902,6 +1905,14 @@ private struct ModelDownloadStatusPanel: View {
                 Text(title)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(AppTheme.primaryText)
+
+                Spacer(minLength: 0)
+
+                if isActive, let cancelAction {
+                    Button("Cancel", action: cancelAction)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
             }
 
             if isActive {

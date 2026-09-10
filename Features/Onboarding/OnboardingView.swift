@@ -188,6 +188,15 @@ struct OnboardingView: View {
                         }
                         .font(.system(size: 11))
                         .foregroundStyle(OnboardingTheme.secondaryText)
+
+                        HStack {
+                            Spacer(minLength: 0)
+
+                            Button("Cancel Download") {
+                                appState.cancelModelDownload()
+                            }
+                            .buttonStyle(SecondaryOnboardingButtonStyle())
+                        }
                     }
                     .padding(.horizontal, 4)
                 } else if isPrepared {

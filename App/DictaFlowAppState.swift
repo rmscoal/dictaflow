@@ -122,6 +122,7 @@ final class DictaFlowAppState: ObservableObject {
     private var isOnboardingPracticeSession = false
     private var preservedStatusMessage: String?
     private var savedRefinementPromptText: String
+    private var activeModelPreparationID: UUID?
 
     convenience init() {
         self.init(
@@ -678,6 +679,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func handleApplicationLaunch() {
+        removeIncompleteModelDownloads()
         refreshMicrophonePermissionStatus()
         refreshAccessibilityPermissionStatus()
         registerGlobalHotkey()
@@ -1305,6 +1307,31 @@ final class DictaFlowAppState: ObservableObject {
         NSWorkspace.shared.open(promptsDirectoryURL)
     }
 
+    func cancelModelDownload() {
+        let modelIdentifier: String
+
+        switch transcriptionState {
+        case .preparingModel(let model), .downloadingModel(let model, _):
+            modelIdentifier = model.modelIdentifier
+        case .preparingRefinementModel(let model), .downloadingRefinementModel(let model, _):
+            modelIdentifier = model.modelIdentifier
+        case .idle, .transcribing, .refining:
+            return
+        }
+
+        Task { [modelDownloadService] in
+            await modelDownloadService.cancelDownload(modelIdentifier: modelIdentifier)
+        }
+    }
+
+    private func removeIncompleteModelDownloads() {
+        let freedByteCount = modelDownloadService.removeIncompleteDownloads()
+
+        if freedByteCount > 0 {
+            logger.info("Removed \(freedByteCount, privacy: .public) bytes of partial model downloads.")
+        }
+    }
+
     func deleteUnusedModelFiles(matching candidates: [LocalModelFile]) {
         guard !whisperSettingsLocked else {
             setPreservedStatusMessage("Wait until the current recording, transcription, or model preparation finishes before deleting models.")
@@ -1509,6 +1536,8 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         let model = whisperConfiguration.model
+        let preparationID = UUID()
+        activeModelPreparationID = preparationID
         transcriptionState = .preparingModel(model)
         modelDownloadProgressText = nil
         whisperModelPreparationStatusText = ""
@@ -1523,11 +1552,17 @@ final class DictaFlowAppState: ObservableObject {
             do {
                 _ = try await self.modelDownloadService.ensureModelAvailable(model) { [weak self] event in
                     Task { @MainActor [weak self] in
-                        self?.apply(modelDownloadEvent: event, for: model)
+                        self?.apply(modelDownloadEvent: event, for: model, preparationID: preparationID)
                     }
                 }
 
                 await MainActor.run {
+                    guard self.activeModelPreparationID == preparationID else {
+                        return
+                    }
+
+                    self.activeModelPreparationID = nil
+
                     if case .transcribing = self.transcriptionState {
                         return
                     }
@@ -1537,8 +1572,28 @@ final class DictaFlowAppState: ObservableObject {
                     self.whisperModelPreparationStatusText = ""
                     self.updateStatusMessage()
                 }
+            } catch is CancellationError {
+                await MainActor.run {
+                    guard self.activeModelPreparationID == preparationID else {
+                        return
+                    }
+
+                    self.activeModelPreparationID = nil
+                    self.transcriptionState = .idle
+                    self.modelDownloadProgressText = nil
+                    self.whisperModelPreparationStatusText = ""
+                    self.whisperModelPreparationFailed = false
+                    let message = "Download cancelled. The partial file was removed. Downloading again starts from the beginning."
+                    self.setPreservedStatusMessage(message)
+                    self.updateStatusMessage()
+                }
             } catch {
                 await MainActor.run {
+                    guard self.activeModelPreparationID == preparationID else {
+                        return
+                    }
+
+                    self.activeModelPreparationID = nil
                     self.transcriptionState = .idle
                     self.modelDownloadProgressText = nil
                     let message = "Could not prepare the Whisper model. \(error.localizedDescription)"
@@ -1568,6 +1623,8 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
+        let preparationID = UUID()
+        activeModelPreparationID = preparationID
         transcriptionState = .preparingRefinementModel(model)
         modelDownloadProgressText = nil
         refinementModelPreparationStatusText = ""
@@ -1582,11 +1639,17 @@ final class DictaFlowAppState: ObservableObject {
             do {
                 _ = try await self.modelDownloadService.ensureRefinementModelAvailable(model) { [weak self] event in
                     Task { @MainActor [weak self] in
-                        self?.apply(refinementModelDownloadEvent: event, for: model)
+                        self?.apply(refinementModelDownloadEvent: event, for: model, preparationID: preparationID)
                     }
                 }
 
                 await MainActor.run {
+                    guard self.activeModelPreparationID == preparationID else {
+                        return
+                    }
+
+                    self.activeModelPreparationID = nil
+
                     if case .refining = self.transcriptionState {
                         return
                     }
@@ -1599,8 +1662,28 @@ final class DictaFlowAppState: ObservableObject {
                     }
                     self.updateStatusMessage()
                 }
+            } catch is CancellationError {
+                await MainActor.run {
+                    guard self.activeModelPreparationID == preparationID else {
+                        return
+                    }
+
+                    self.activeModelPreparationID = nil
+                    self.transcriptionState = .idle
+                    self.modelDownloadProgressText = nil
+                    self.refinementModelPreparationStatusText = ""
+                    self.refinementModelPreparationFailed = false
+                    let message = "Download cancelled. The partial file was removed. Downloading again starts from the beginning."
+                    self.setPreservedStatusMessage(message)
+                    self.updateStatusMessage()
+                }
             } catch {
                 await MainActor.run {
+                    guard self.activeModelPreparationID == preparationID else {
+                        return
+                    }
+
+                    self.activeModelPreparationID = nil
                     self.transcriptionState = .idle
                     self.modelDownloadProgressText = nil
                     let message = "Could not prepare the refinement model. \(error.localizedDescription)"
@@ -1613,7 +1696,11 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func apply(modelDownloadEvent: ModelDownloadEvent, for model: WhisperModelDescriptor) {
+    private func apply(modelDownloadEvent: ModelDownloadEvent, for model: WhisperModelDescriptor, preparationID: UUID) {
+        guard activeModelPreparationID == preparationID else {
+            return
+        }
+
         switch modelDownloadEvent {
         case .located(let url):
             if case .transcribing = transcriptionState {
@@ -1646,7 +1733,11 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
-    private func apply(refinementModelDownloadEvent event: ModelDownloadEvent, for model: RefinementModelDescriptor) {
+    private func apply(refinementModelDownloadEvent event: ModelDownloadEvent, for model: RefinementModelDescriptor, preparationID: UUID) {
+        guard activeModelPreparationID == preparationID else {
+            return
+        }
+
         switch event {
         case .located(let url):
             if case .refining = transcriptionState {
