@@ -571,6 +571,14 @@ final class DictaFlowAppState: ObservableObject {
         modelDownloadService.isWhisperModelPrepared(model)
     }
 
+    func canDeleteWhisperModel(_ model: WhisperModelDescriptor) -> Bool {
+        guard isWhisperModelPrepared(model), model != whisperConfiguration.model else {
+            return false
+        }
+
+        return preparedWhisperModels.count >= 2
+    }
+
     func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool {
         modelDownloadService.isRefinementModelPrepared(model)
     }
@@ -609,6 +617,10 @@ final class DictaFlowAppState: ObservableObject {
 
     private var preparedRefinementModels: Set<RefinementModelDescriptor> {
         Set(RefinementModelDescriptor.allCases.filter { modelDownloadService.isRefinementModelPrepared($0) })
+    }
+
+    private var preparedWhisperModels: [WhisperModelDescriptor] {
+        WhisperModelDescriptor.allCases.filter { modelDownloadService.isWhisperModelPrepared($0) }
     }
 
     private var activeLocalModelIdentifiers: Set<String> {
@@ -872,6 +884,10 @@ final class DictaFlowAppState: ObservableObject {
         refinementConfiguration.model = model
         persistRefinementConfiguration()
         updateStatusMessage()
+
+        if refinementConfiguration.isEnabled {
+            startPreparedRefinementServer(enableAfterStart: true)
+        }
     }
 
     func updateRefinementPromptText(_ promptText: String) {
@@ -1303,13 +1319,17 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
-        Task { [weak self] in
+        Task { [weak self, transcriptRefinementService] in
             guard let self else {
                 return
             }
 
             do {
                 let deletedByteCount = try await self.modelDownloadService.deleteModelFiles(filesToDelete)
+
+                if filesToDelete.contains(where: { $0.category == .refinement }) {
+                    await transcriptRefinementService.reloadModels()
+                }
 
                 await MainActor.run {
                     let fileCount = filesToDelete.count
@@ -1337,15 +1357,10 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
-        let isActiveModel = refinementConfiguration.model == model
-        let wasRefinementEnabled = isActiveModel && refinementConfiguration.isEnabled
-        let fallbackModel = RefinementModelDescriptor.allCases
-            .filter {
-                $0 != model
-                    && modelDownloadService.isRefinementModelPrepared($0)
-                    && isRefinementModelSupported($0)
-            }
-            .max { $0.qualityRank < $1.qualityRank }
+        guard refinementConfiguration.model != model else {
+            setPreservedStatusMessage("Select another model before deleting \(model.displayName).")
+            return
+        }
 
         isDeletingModel = true
         clearPreservedStatusMessage()
@@ -1356,8 +1371,62 @@ final class DictaFlowAppState: ObservableObject {
                 return
             }
 
-            if wasRefinementEnabled {
-                await transcriptRefinementService.stop()
+            do {
+                let deletedByteCount = try await self.modelDownloadService.deleteModelFiles([file])
+                await transcriptRefinementService.reloadModels()
+
+                await MainActor.run {
+                    self.isDeletingModel = false
+
+                    let freedSpace = self.formattedLocalModelSize(deletedByteCount)
+                    self.setPreservedStatusMessage("Deleted \(model.displayName) and freed \(freedSpace).")
+                    self.updateStatusMessage()
+                }
+            } catch {
+                await MainActor.run {
+                    self.isDeletingModel = false
+                    self.setPreservedStatusMessage("Could not delete \(model.displayName). \(error.localizedDescription)")
+                    self.showMainWindowPage(.models)
+                    self.updateStatusMessage()
+                }
+            }
+        }
+    }
+
+    func deleteWhisperModel(_ model: WhisperModelDescriptor) {
+        guard !whisperSettingsLocked else {
+            setPreservedStatusMessage("Wait until the current recording, transcription, or model operation finishes before deleting a model.")
+            return
+        }
+
+        guard let file = installedLocalModelFiles.first(where: {
+            $0.category == .whisper && $0.modelIdentifier == model.modelIdentifier
+        }) else {
+            setPreservedStatusMessage("The \(model.displayName) model is not downloaded.")
+            return
+        }
+
+        let otherPreparedModels = WhisperModelDescriptor.allCases.filter {
+            $0 != model && modelDownloadService.isWhisperModelPrepared($0)
+        }
+
+        guard !otherPreparedModels.isEmpty else {
+            setPreservedStatusMessage("Keep at least one downloaded Whisper model. Download another model before deleting \(model.displayName).")
+            return
+        }
+
+        guard whisperConfiguration.model != model else {
+            setPreservedStatusMessage("Select another model before deleting \(model.displayName).")
+            return
+        }
+
+        isDeletingModel = true
+        clearPreservedStatusMessage()
+        updateStatusMessage()
+
+        Task { [weak self] in
+            guard let self else {
+                return
             }
 
             do {
@@ -1366,34 +1435,13 @@ final class DictaFlowAppState: ObservableObject {
                 await MainActor.run {
                     self.isDeletingModel = false
 
-                    if isActiveModel {
-                        if let fallbackModel {
-                            self.refinementConfiguration.model = fallbackModel
-                        } else {
-                            self.refinementConfiguration.isEnabled = false
-                        }
-                        self.persistRefinementConfiguration()
-                    }
-
                     let freedSpace = self.formattedLocalModelSize(deletedByteCount)
-                    if isActiveModel, let fallbackModel {
-                        self.setPreservedStatusMessage("Deleted \(model.displayName), freed \(freedSpace), and selected \(fallbackModel.displayName).")
-                        if wasRefinementEnabled {
-                            self.startPreparedRefinementServer(enableAfterStart: false)
-                        }
-                    } else if isActiveModel {
-                        self.setPreservedStatusMessage("Deleted \(model.displayName), freed \(freedSpace), and turned off text refinement because no downloaded refinement model remains.")
-                    } else {
-                        self.setPreservedStatusMessage("Deleted \(model.displayName) and freed \(freedSpace).")
-                    }
+                    self.setPreservedStatusMessage("Deleted \(model.displayName) and freed \(freedSpace).")
                     self.updateStatusMessage()
                 }
             } catch {
                 await MainActor.run {
                     self.isDeletingModel = false
-                    if wasRefinementEnabled {
-                        self.startPreparedRefinementServer(enableAfterStart: false)
-                    }
                     self.setPreservedStatusMessage("Could not delete \(model.displayName). \(error.localizedDescription)")
                     self.showMainWindowPage(.models)
                     self.updateStatusMessage()
