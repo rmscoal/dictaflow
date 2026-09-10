@@ -6,10 +6,12 @@ struct ContentView: View {
     @State private var isSidebarCollapsed = false
     @State private var isShowingModelPreparationConfirmation = false
     @State private var isShowingRefinementModelPreparationConfirmation = false
+    @State private var isShowingWhisperModelDeletionConfirmation = false
     @State private var isShowingRefinementModelDeletionConfirmation = false
     @State private var isShowingUnusedModelDeletionConfirmation = false
     @State private var selectedModel: WhisperModelDescriptor
     @State private var selectedRefinementModel: RefinementModelDescriptor
+    @State private var whisperModelPendingDeletion: WhisperModelDescriptor?
     @State private var refinementModelPendingDeletion: RefinementModelDescriptor?
     @State private var unusedModelDeletionCandidates: [LocalModelFile] = []
 
@@ -74,6 +76,22 @@ struct ContentView: View {
             Text(unusedModelDeletionConfirmationText)
         }
         .alert(
+            "Delete \(whisperModelPendingDeletion?.displayName ?? "Whisper Model")?",
+            isPresented: $isShowingWhisperModelDeletionConfirmation
+        ) {
+            Button("Cancel", role: .cancel) {
+                whisperModelPendingDeletion = nil
+            }
+            Button("Delete Model", role: .destructive) {
+                if let model = whisperModelPendingDeletion {
+                    appState.deleteWhisperModel(model)
+                }
+                whisperModelPendingDeletion = nil
+            }
+        } message: {
+            Text("This permanently deletes the local model file. DictaFlow keeps at least one downloaded Whisper model, and the active model cannot be deleted.")
+        }
+        .alert(
             "Delete \(refinementModelPendingDeletion?.displayName ?? "Refinement Model")?",
             isPresented: $isShowingRefinementModelDeletionConfirmation
         ) {
@@ -87,7 +105,7 @@ struct ContentView: View {
                 refinementModelPendingDeletion = nil
             }
         } message: {
-            Text("This permanently deletes the local model file. If it is active, DictaFlow will use another downloaded refinement model when available. Otherwise, text refinement will turn off.")
+            Text("This permanently deletes the local model file. Only inactive models can be deleted.")
         }
     }
 
@@ -357,7 +375,10 @@ struct ContentView: View {
                                 needsPreparation: !isPrepared,
                                 isUnavailable: false,
                                 isInteractionLocked: appState.whisperSettingsLocked,
-                                deleteAction: nil
+                                deleteAction: appState.canDeleteWhisperModel(model) ? {
+                                    whisperModelPendingDeletion = model
+                                    isShowingWhisperModelDeletionConfirmation = true
+                                } : nil
                             ) {
                                 selectedModel = model
                                 if !isPrepared {
@@ -399,7 +420,7 @@ struct ContentView: View {
                                 needsPreparation: !isPrepared,
                                 isUnavailable: !appState.isRefinementModelSupported(model),
                                 isInteractionLocked: appState.whisperSettingsLocked,
-                                deleteAction: isPrepared ? {
+                                deleteAction: isPrepared && !isActive ? {
                                     refinementModelPendingDeletion = model
                                     isShowingRefinementModelDeletionConfirmation = true
                                 } : nil

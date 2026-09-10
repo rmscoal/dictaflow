@@ -4,6 +4,7 @@ import Foundation
 protocol TranscriptRefinementServiceProtocol: AnyObject {
     func isRuntimeAvailable() async -> Bool
     func prepare(modelURL: URL) async throws
+    func reloadModels() async
     func stop() async
 
     func refine(
@@ -46,7 +47,7 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
     private let executableURL: URL?
     private let urlSession: URLSession
     private var serverProcess: Process?
-    private var serverModelURL: URL?
+    private var routerModelsDirectoryURL: URL?
     private var serverBaseURL: URL?
 
     init(executableURL: URL? = nil, urlSession: URLSession = .shared) {
@@ -68,7 +69,30 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
     }
 
     func prepare(modelURL: URL) async throws {
-        _ = try await ensureServer(for: modelURL)
+        let baseURL = try await ensureRouter(modelsDirectory: modelURL.deletingLastPathComponent())
+        try await loadModel(id: Self.routerModelID(for: modelURL), baseURL: baseURL)
+    }
+
+    func reloadModels() async {
+        guard let serverProcess,
+              serverProcess.isRunning,
+              let serverBaseURL else {
+            return
+        }
+
+        var components = URLComponents(
+            url: serverBaseURL.appendingPathComponent("models"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "reload", value: "1")]
+
+        guard let reloadURL = components?.url else {
+            return
+        }
+
+        var request = URLRequest(url: reloadURL)
+        request.timeoutInterval = 30
+        _ = try? await urlSession.data(for: request)
     }
 
     func refine(
@@ -145,7 +169,7 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         transcript: String,
         maxTokens: Int
     ) async throws -> String {
-        let baseURL = try await ensureServer(for: modelURL)
+        let baseURL = try await ensureRouter(modelsDirectory: modelURL.deletingLastPathComponent())
         let requestURL = baseURL
             .appendingPathComponent("v1")
             .appendingPathComponent("chat")
@@ -156,6 +180,7 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         request.timeoutInterval = 120
 
         let payload: [String: Any] = [
+            "model": Self.routerModelID(for: modelURL),
             "messages": [
                 ["role": "system", "content": instructions],
                 ["role": "user", "content": transcript]
@@ -190,10 +215,10 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         throw TranscriptRefinementServiceError.emptyOutput
     }
 
-    private func ensureServer(for modelURL: URL) async throws -> URL {
+    private func ensureRouter(modelsDirectory: URL) async throws -> URL {
         if let serverProcess,
            serverProcess.isRunning,
-           serverModelURL == modelURL,
+           routerModelsDirectoryURL == modelsDirectory,
            let serverBaseURL {
             return serverBaseURL
         }
@@ -206,7 +231,8 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         let process = Process()
         process.executableURL = runtimeURL
         process.arguments = [
-            "--model", modelURL.path,
+            "--models-dir", modelsDirectory.path,
+            "--models-max", "1",
             "--host", "127.0.0.1",
             "--port", "\(port)",
             "--n-gpu-layers", "all",
@@ -230,11 +256,77 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         }
 
         serverProcess = process
-        serverModelURL = modelURL
+        routerModelsDirectoryURL = modelsDirectory
         serverBaseURL = baseURL
 
         try await waitForServerReady(baseURL: baseURL, process: process)
         return baseURL
+    }
+
+    private func loadModel(id modelID: String, baseURL: URL) async throws {
+        await reloadModels()
+
+        var request = URLRequest(url: baseURL.appendingPathComponent("models/load"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["model": modelID])
+
+        let (_, response) = try await urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
+            throw TranscriptRefinementServiceError.failedToRun("The local llama-server could not load the refinement model.")
+        }
+
+        try await waitForModelLoaded(id: modelID, baseURL: baseURL)
+    }
+
+    private func waitForModelLoaded(id modelID: String, baseURL: URL) async throws {
+        let deadline = Date().addingTimeInterval(180)
+
+        while Date() < deadline {
+            let statuses = (try? await modelStatuses(baseURL: baseURL)) ?? [:]
+
+            switch statuses[modelID] {
+            case "loaded":
+                return
+            case "failed":
+                throw TranscriptRefinementServiceError.failedToRun("The local llama-server could not load the refinement model.")
+            default:
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+
+        throw TranscriptRefinementServiceError.timedOut
+    }
+
+    private func modelStatuses(baseURL: URL) async throws -> [String: String] {
+        var request = URLRequest(url: baseURL.appendingPathComponent("models"))
+        request.timeoutInterval = 30
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
+            throw TranscriptRefinementServiceError.failedToRun("The local llama-server returned an invalid response.")
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = json["data"] as? [[String: Any]] else {
+            throw TranscriptRefinementServiceError.failedToRun("The local llama-server returned invalid JSON.")
+        }
+
+        var statuses: [String: String] = [:]
+        for model in models {
+            guard let id = model["id"] as? String,
+                  let status = model["status"] as? [String: Any],
+                  let value = status["value"] as? String else {
+                continue
+            }
+            statuses[id] = value
+        }
+        return statuses
+    }
+
+    nonisolated private static func routerModelID(for modelURL: URL) -> String {
+        modelURL.deletingPathExtension().lastPathComponent
     }
 
     private func waitForServerReady(baseURL: URL, process: Process) async throws {
@@ -270,7 +362,7 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         }
 
         self.serverProcess = nil
-        self.serverModelURL = nil
+        self.routerModelsDirectoryURL = nil
         self.serverBaseURL = nil
     }
 
