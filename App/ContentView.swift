@@ -362,12 +362,12 @@ struct ContentView: View {
                         subtitle: "Local speech recognition and translation"
                     )
 
-                    EqualHeightModelGrid(spacing: AppLayout.sectionSpacing) {
+                    SettingsFormPanel {
                         ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
                             let isPrepared = appState.isWhisperModelPrepared(model)
                             let isActive = model == appState.whisperConfiguration.model && isPrepared
 
-                            ModelChoiceCard(
+                            ModelListRow(
                                 name: model.displayName,
                                 sizeText: model.approximateDiskSizeDescription,
                                 detailText: model.detailText,
@@ -386,6 +386,10 @@ struct ContentView: View {
                                 } else if !isActive {
                                     appState.updateWhisperModel(model)
                                 }
+                            }
+
+                            if model != WhisperModelDescriptor.allCases.last {
+                                Divider().overlay(AppTheme.border)
                             }
                         }
                     }
@@ -408,12 +412,12 @@ struct ContentView: View {
                         subtitle: "Local cleanup for punctuation and wording"
                     )
 
-                    EqualHeightModelGrid(spacing: AppLayout.sectionSpacing) {
+                    SettingsFormPanel {
                         ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
                             let isPrepared = appState.isRefinementModelPrepared(model)
                             let isActive = model == appState.refinementConfiguration.model && isPrepared
 
-                            ModelChoiceCard(
+                            ModelListRow(
                                 name: model.displayName,
                                 sizeText: "\(model.approximateDiskSizeDescription) · \(model.estimatedRuntimeMemoryDescription)",
                                 detailText: appState.refinementModelDetailText(for: model),
@@ -432,6 +436,10 @@ struct ContentView: View {
                                 } else if !isActive {
                                     appState.updateRefinementModel(model)
                                 }
+                            }
+
+                            if model != RefinementModelDescriptor.allCases.last {
+                                Divider().overlay(AppTheme.border)
                             }
                         }
                     }
@@ -942,7 +950,7 @@ struct ContentView: View {
         case .history: "Review and reuse your latest transcript."
         case .shortcutAndAudio: "Control recording access and audio behavior."
         case .appearance: "Choose how DictaFlow looks."
-        case .models: "Manage local Whisper models and storage."
+        case .models: "Manage local Whisper and refinement models."
         case .permissions: "Check the system access DictaFlow needs."
         case .updates: "Version and update preferences."
         }
@@ -1813,77 +1821,6 @@ private struct ModelPageSectionHeader: View {
     }
 }
 
-private struct EqualHeightModelGrid: Layout {
-    let spacing: CGFloat
-
-    private func columnCount(for subviews: Subviews) -> Int {
-        min(2, max(1, subviews.count))
-    }
-
-    private func itemWidth(totalWidth: CGFloat, columns: Int) -> CGFloat {
-        max(0, (totalWidth - CGFloat(columns - 1) * spacing) / CGFloat(columns))
-    }
-
-    private func maximumItemHeight(subviews: Subviews, itemWidth: CGFloat) -> CGFloat {
-        subviews.reduce(0) { height, subview in
-            max(height, subview.sizeThatFits(ProposedViewSize(width: itemWidth, height: nil)).height)
-        }
-    }
-
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) -> CGSize {
-        guard !subviews.isEmpty else {
-            return .zero
-        }
-
-        let columns = columnCount(for: subviews)
-        let naturalItemWidth = subviews.reduce(0) { width, subview in
-            max(width, subview.sizeThatFits(.unspecified).width)
-        }
-        let totalWidth = proposal.width ?? (naturalItemWidth * CGFloat(columns) + spacing * CGFloat(columns - 1))
-        let width = itemWidth(totalWidth: totalWidth, columns: columns)
-        let height = maximumItemHeight(subviews: subviews, itemWidth: width)
-        let rows = Int(ceil(Double(subviews.count) / Double(columns)))
-
-        return CGSize(
-            width: totalWidth,
-            height: height * CGFloat(rows) + spacing * CGFloat(rows - 1)
-        )
-    }
-
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) {
-        guard !subviews.isEmpty else {
-            return
-        }
-
-        let columns = columnCount(for: subviews)
-        let width = itemWidth(totalWidth: bounds.width, columns: columns)
-        let height = maximumItemHeight(subviews: subviews, itemWidth: width)
-
-        for (index, subview) in subviews.enumerated() {
-            let row = index / columns
-            let column = index % columns
-            let origin = CGPoint(
-                x: bounds.minX + CGFloat(column) * (width + spacing),
-                y: bounds.minY + CGFloat(row) * (height + spacing)
-            )
-            subview.place(
-                at: origin,
-                anchor: .topLeading,
-                proposal: ProposedViewSize(width: width, height: height)
-            )
-        }
-    }
-}
-
 private struct ModelDownloadStatusPanel: View {
     let title: String
     let statusText: String
@@ -1943,7 +1880,7 @@ private struct ModelDownloadStatusPanel: View {
     }
 }
 
-private struct ModelChoiceCard: View {
+private struct ModelListRow: View {
     let name: String
     let sizeText: String
     let detailText: String
@@ -1953,50 +1890,6 @@ private struct ModelChoiceCard: View {
     let isInteractionLocked: Bool
     let deleteAction: (() -> Void)?
     let action: () -> Void
-
-    private var stateColor: Color {
-        if isActive {
-            return AppTheme.modelActive
-        }
-
-        if isUnavailable {
-            return AppTheme.tertiaryText
-        }
-
-        if needsPreparation {
-            return AppTheme.warning
-        }
-
-        return AppTheme.accent
-    }
-
-    private var cardTint: Color {
-        if isUnavailable {
-            return AppTheme.controlFill
-        }
-
-        let opacity: Double
-        if isInteractionLocked {
-            opacity = 0.045
-        } else if isActive {
-            opacity = 0.12
-        } else {
-            opacity = 0.06
-        }
-        return stateColor.opacity(opacity)
-    }
-
-    private var borderColor: Color {
-        if isUnavailable {
-            return AppTheme.tertiaryText.opacity(0.28)
-        }
-
-        if isInteractionLocked {
-            return stateColor.opacity(0.25)
-        }
-
-        return stateColor.opacity(isActive ? 0.85 : 0.42)
-    }
 
     private var accessibilityHint: String {
         if isActive {
@@ -2014,16 +1907,65 @@ private struct ModelChoiceCard: View {
         return "Uses this prepared model"
     }
 
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(AppTheme.primaryText.opacity(isUnavailable ? 0.55 : 1))
+
+                    statusTag
+                }
+
+                Text(sizeText)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(AppTheme.secondaryText)
+
+                Text(detailText)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            if let deleteAction {
+                Button(action: deleteAction) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(AppTheme.destructive)
+                .disabled(isInteractionLocked)
+                .help("Delete downloaded model")
+            }
+
+            if !isActive && !isUnavailable {
+                Button(needsPreparation ? "Download" : "Use", action: action)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(AppTheme.accent)
+                    .disabled(isInteractionLocked)
+                    .accessibilityHint(accessibilityHint)
+            }
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+
     @ViewBuilder
-    private var modelAction: some View {
+    private var statusTag: some View {
         if isActive {
-            Label("ACTIVE", systemImage: "checkmark")
+            Text("ACTIVE")
                 .font(.system(size: 9.5, weight: .bold))
-                .foregroundStyle(Color.white.opacity(isInteractionLocked ? 0.65 : 1))
+                .foregroundStyle(AppTheme.modelActive.opacity(0.9))
                 .padding(.horizontal, 7)
-                .padding(.vertical, 5)
+                .padding(.vertical, 4)
                 .background(
-                    stateColor.opacity(isInteractionLocked ? 0.38 : 1),
+                    AppTheme.modelActive.opacity(0.10),
                     in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                 )
         } else if isUnavailable {
@@ -2031,96 +1973,12 @@ private struct ModelChoiceCard: View {
                 .font(.system(size: 9.5, weight: .bold))
                 .foregroundStyle(AppTheme.tertiaryText)
                 .padding(.horizontal, 7)
-                .padding(.vertical, 5)
-                .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-        } else if needsPreparation {
-            Button(action: action) {
-                Label("DOWNLOAD", systemImage: "arrow.down")
-                    .font(.system(size: 9.5, weight: .bold))
-                    .foregroundStyle(Color.white.opacity(isInteractionLocked ? 0.58 : 1))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(
-                        stateColor.opacity(isInteractionLocked ? 0.34 : 0.92),
-                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(isInteractionLocked)
-            .accessibilityHint(accessibilityHint)
-        } else {
-            Button(action: action) {
-                Label("USE", systemImage: "checkmark")
-                    .font(.system(size: 9.5, weight: .bold))
-                    .foregroundStyle(Color.white.opacity(isInteractionLocked ? 0.58 : 1))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(
-                        stateColor.opacity(isInteractionLocked ? 0.34 : 0.92),
-                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(isInteractionLocked)
-            .accessibilityHint(accessibilityHint)
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(name)
-                    .font(.system(size: 15, weight: .semibold))
-
-                Spacer()
-
-                if let deleteAction {
-                    Button(action: deleteAction) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(Color.white.opacity(isInteractionLocked ? 0.58 : 1))
-                            .frame(width: 24, height: 23)
-                            .background(
-                                AppTheme.destructive.opacity(isInteractionLocked ? 0.34 : 0.9),
-                                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isInteractionLocked)
-                    .help("Delete downloaded model")
-                }
-
-                modelAction
-            }
-
-            Text(sizeText)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(stateColor.opacity(isInteractionLocked ? 0.58 : 1))
-
-            Text(detailText)
-                .font(.system(size: 12))
-                .foregroundStyle(AppTheme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(AppTheme.tileFill)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(cardTint)
+                .padding(.vertical, 4)
+                .background(
+                    AppTheme.controlFill,
+                    in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                 )
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(
-                    borderColor,
-                    lineWidth: isActive ? 1.25 : 0.75
-                )
-        )
-        .shadow(color: Color.black.opacity(0.08), radius: 6, x: 0, y: 2)
-        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }
 
