@@ -5,6 +5,8 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable, Sendable, 
     case base
     case small
     case medium
+    case largeV3Turbo = "large-v3-turbo"
+    case largeV3 = "large-v3"
 
     static let recommendedDefault: WhisperModelDescriptor = .small
 
@@ -22,6 +24,10 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable, Sendable, 
             return "Small"
         case .medium:
             return "Medium"
+        case .largeV3Turbo:
+            return "Large V3 Turbo"
+        case .largeV3:
+            return "Large V3"
         }
     }
 
@@ -43,6 +49,10 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable, Sendable, 
             return "55356645c2b361a969dfd0ef2c5a50d530afd8d5"
         case .medium:
             return "fd9727b6e1217c2f614f9b698455c4ffd82463b4"
+        case .largeV3Turbo:
+            return "4af2b29d7ec73d781377bfd1758ca957a807e941"
+        case .largeV3:
+            return "ad82bf6a9043ceed055076d0fd39f5f186ff8062"
         }
     }
 
@@ -60,6 +70,10 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable, Sendable, 
             return 466_000_000
         case .medium:
             return 1_500_000_000
+        case .largeV3Turbo:
+            return 1_500_000_000
+        case .largeV3:
+            return 2_900_000_000
         }
     }
 
@@ -77,6 +91,10 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable, Sendable, 
             return "466 MB"
         case .medium:
             return "1.5 GB"
+        case .largeV3Turbo:
+            return "1.5 GB"
+        case .largeV3:
+            return "2.9 GB"
         }
     }
 
@@ -89,7 +107,11 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable, Sendable, 
         case .small:
             return "Recommended default with strong quality for most general-purpose dictation."
         case .medium:
-            return "Highest quality in V1, but noticeably heavier on CPU, memory, and disk."
+            return "Strong accuracy with reliable translation. Noticeably heavier on CPU, memory, and disk."
+        case .largeV3Turbo:
+            return "Best balance of speed and quality. Near Large V3 accuracy at Medium size."
+        case .largeV3:
+            return "Highest accuracy for difficult audio, but the heaviest and slowest model."
         }
     }
 }
