@@ -47,10 +47,10 @@ struct ContentView: View {
         ) {
             Button("Cancel", role: .cancel) {}
             Button("Download Model") {
-                appState.prepareAndUseModel(selectedModel)
+                appState.downloadWhisperModel(selectedModel)
             }
         } message: {
-            Text("DictaFlow will download \(selectedModel.displayName) locally and use it for future recordings.")
+            Text("DictaFlow will download \(selectedModel.displayName) locally in the background. Your current model stays selected until you switch.")
         }
         .alert(
             "Download \(selectedRefinementModel.displayName) Model?",
@@ -58,10 +58,10 @@ struct ContentView: View {
         ) {
             Button("Cancel", role: .cancel) {}
             Button("Download Model") {
-                appState.prepareAndUseRefinementModel(selectedRefinementModel)
+                appState.downloadRefinementModel(selectedRefinementModel)
             }
         } message: {
-            Text("DictaFlow will download \(selectedRefinementModel.displayName) locally and use it for text refinement.")
+            Text("DictaFlow will download \(selectedRefinementModel.displayName) locally in the background. Your current model stays selected until you switch.")
         }
         .alert(
             "Delete Unused Models?",
@@ -374,14 +374,16 @@ struct ContentView: View {
                                 isActive: isActive,
                                 needsPreparation: !isPrepared,
                                 isUnavailable: false,
-                                isInteractionLocked: appState.whisperSettingsLocked,
+                                isInteractionLocked: appState.whisperSettingsLocked || appState.isDownloadingWhisperModel(model),
                                 deleteAction: appState.canDeleteWhisperModel(model) ? {
                                     whisperModelPendingDeletion = model
                                     isShowingWhisperModelDeletionConfirmation = true
                                 } : nil
                             ) {
                                 selectedModel = model
-                                if !isPrepared {
+                                if appState.isDownloadingWhisperModel(model) {
+                                    return
+                                } else if !isPrepared {
                                     isShowingModelPreparationConfirmation = true
                                 } else if !isActive {
                                     appState.updateWhisperModel(model)
@@ -394,14 +396,17 @@ struct ContentView: View {
                         }
                     }
 
-                    if isWhisperModelPreparationActive || appState.whisperModelPreparationFailed {
+                    ForEach(appState.visibleWhisperDownloadModels, id: \.self) { model in
+                        let isActive = appState.isDownloadingWhisperModel(model)
+                        let failureMessage = appState.whisperDownloadError(for: model)
+
                         ModelDownloadStatusPanel(
-                            title: whisperModelDownloadStatusTitle,
-                            statusText: appState.whisperModelPreparationStatusText,
-                            isActive: isWhisperModelPreparationActive,
-                            progress: whisperModelPreparationProgress,
-                            hasFailed: appState.whisperModelPreparationFailed,
-                            cancelAction: { appState.cancelModelDownload() }
+                            title: isActive ? "Downloading \(model.displayName)" : "\(model.displayName) download failed",
+                            statusText: isActive ? appState.whisperDownloadStatusText(for: model) : (failureMessage ?? ""),
+                            isActive: isActive,
+                            progress: appState.whisperDownloadProgress(for: model),
+                            hasFailed: !isActive && failureMessage != nil,
+                            cancelAction: { appState.cancelWhisperModelDownload(model) }
                         )
                     }
                 }
@@ -424,14 +429,16 @@ struct ContentView: View {
                                 isActive: isActive,
                                 needsPreparation: !isPrepared,
                                 isUnavailable: !appState.isRefinementModelSupported(model),
-                                isInteractionLocked: appState.whisperSettingsLocked,
+                                isInteractionLocked: appState.refinementSettingsLocked || appState.isDownloadingRefinementModel(model),
                                 deleteAction: isPrepared && !isActive ? {
                                     refinementModelPendingDeletion = model
                                     isShowingRefinementModelDeletionConfirmation = true
                                 } : nil
                             ) {
                                 selectedRefinementModel = model
-                                if !isPrepared {
+                                if appState.isDownloadingRefinementModel(model) {
+                                    return
+                                } else if !isPrepared {
                                     isShowingRefinementModelPreparationConfirmation = true
                                 } else if !isActive {
                                     appState.updateRefinementModel(model)
@@ -444,14 +451,17 @@ struct ContentView: View {
                         }
                     }
 
-                    if isRefinementModelPreparationActive || appState.refinementModelPreparationFailed {
+                    ForEach(appState.visibleRefinementDownloadModels, id: \.self) { model in
+                        let isActive = appState.isDownloadingRefinementModel(model)
+                        let failureMessage = appState.refinementDownloadError(for: model)
+
                         ModelDownloadStatusPanel(
-                            title: refinementModelDownloadStatusTitle,
-                            statusText: appState.refinementModelPreparationStatusText,
-                            isActive: isRefinementModelPreparationActive,
-                            progress: refinementModelPreparationProgress,
-                            hasFailed: appState.refinementModelPreparationFailed,
-                            cancelAction: { appState.cancelModelDownload() }
+                            title: isActive ? "Downloading \(model.displayName)" : "\(model.displayName) download failed",
+                            statusText: isActive ? appState.refinementDownloadStatusText(for: model) : (failureMessage ?? ""),
+                            isActive: isActive,
+                            progress: appState.refinementDownloadProgress(for: model),
+                            hasFailed: !isActive && failureMessage != nil,
+                            cancelAction: { appState.cancelRefinementModelDownload(model) }
                         )
                     }
                 }
@@ -696,7 +706,7 @@ struct ContentView: View {
                         Toggle("Refine before insertion", isOn: refinementEnabledBinding)
                             .labelsHidden()
                             .toggleStyle(.switch)
-                            .disabled(appState.whisperSettingsLocked)
+                            .disabled(appState.refinementSettingsLocked)
                     }
 
                     Divider().overlay(AppTheme.border)
@@ -712,7 +722,7 @@ struct ContentView: View {
                             emptySelectionTitle: RefinementModelDescriptor.allCases.contains {
                                 appState.isRefinementModelSupported($0) && appState.isRefinementModelPrepared($0)
                             } ? "Select a model" : "No model available",
-                            isEnabled: !appState.whisperSettingsLocked && appState.isRefinementRuntimeAvailable,
+                            isEnabled: !appState.refinementSettingsLocked && appState.isRefinementRuntimeAvailable,
                             isModelSelectable: {
                                 appState.isRefinementModelSupported($0) && appState.isRefinementModelPrepared($0)
                             },
@@ -1021,60 +1031,6 @@ struct ContentView: View {
             get: { appState.mainWindowPage },
             set: { appState.showMainWindowPage($0) }
         )
-    }
-
-    private var isWhisperModelPreparationActive: Bool {
-        switch appState.transcriptionState {
-        case .preparingModel, .downloadingModel:
-            return true
-        case .idle, .transcribing, .preparingRefinementModel, .downloadingRefinementModel, .refining:
-            return false
-        }
-    }
-
-    private var whisperModelPreparationProgress: Double? {
-        switch appState.transcriptionState {
-        case .downloadingModel(_, let progress):
-            return progress
-        case .idle, .preparingModel, .transcribing, .preparingRefinementModel, .downloadingRefinementModel, .refining:
-            return nil
-        }
-    }
-
-    private var whisperModelDownloadStatusTitle: String {
-        switch appState.transcriptionState {
-        case .preparingModel(let model), .downloadingModel(let model, _):
-            return "Downloading \(model.displayName)"
-        case .idle, .transcribing, .preparingRefinementModel, .downloadingRefinementModel, .refining:
-            return "Download failed"
-        }
-    }
-
-    private var isRefinementModelPreparationActive: Bool {
-        switch appState.transcriptionState {
-        case .preparingRefinementModel, .downloadingRefinementModel:
-            return true
-        case .idle, .preparingModel, .downloadingModel, .transcribing, .refining:
-            return false
-        }
-    }
-
-    private var refinementModelPreparationProgress: Double? {
-        switch appState.transcriptionState {
-        case .downloadingRefinementModel(_, let progress):
-            return progress
-        case .idle, .preparingModel, .downloadingModel, .transcribing, .preparingRefinementModel, .refining:
-            return nil
-        }
-    }
-
-    private var refinementModelDownloadStatusTitle: String {
-        switch appState.transcriptionState {
-        case .preparingRefinementModel(let model), .downloadingRefinementModel(let model, _):
-            return "Downloading \(model.displayName)"
-        case .idle, .preparingModel, .downloadingModel, .transcribing, .refining:
-            return "Download failed"
-        }
     }
 
     private var recordingPlaybackBehaviorBinding: Binding<RecordingPlaybackBehavior> {

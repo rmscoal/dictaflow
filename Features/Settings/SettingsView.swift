@@ -192,7 +192,7 @@ struct SettingsView: View {
 
     private var headerDetailText: String {
         if appState.whisperSettingsLocked {
-            return "Settings are temporarily locked while DictaFlow is recording, preparing a model, transcribing, or inserting text."
+            return "Settings are temporarily locked while DictaFlow is recording, transcribing, or inserting text."
         }
 
         return "Changes are saved immediately and apply to the next recording."

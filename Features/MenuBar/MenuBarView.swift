@@ -141,7 +141,7 @@ struct MenuBarView: View {
                         Toggle("", isOn: refinementEnabledBinding)
                             .labelsHidden()
                             .toggleStyle(AccentSwitchStyle())
-                            .disabled(appState.whisperSettingsLocked)
+                            .disabled(appState.refinementSettingsLocked)
 
                         Menu {
                             ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
@@ -163,7 +163,7 @@ struct MenuBarView: View {
                             ChevronButtonLabel()
                         }
                         .buttonStyle(.plain)
-                        .disabled(appState.whisperSettingsLocked)
+                        .disabled(appState.refinementSettingsLocked)
                     }
                 }
             )
