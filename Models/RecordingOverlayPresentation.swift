@@ -4,7 +4,6 @@ struct RecordingOverlayPresentation: Equatable {
     enum Phase: Equatable {
         case requestingPermission
         case recording
-        case downloadingModel
         case transcribing
         case refining
         case requestingAccessibilityPermission

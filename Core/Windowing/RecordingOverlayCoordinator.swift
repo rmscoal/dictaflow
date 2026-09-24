@@ -192,18 +192,10 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
         case .transcribing, .refining:
             return NSSize(width: transcriptionAndRefinementPanelWidth, height: processingPanelHeight)
         case .requestingPermission,
-             .downloadingModel,
              .requestingAccessibilityPermission,
              .inserting:
-            let sizingTitle: String
-            switch presentation.phase {
-            case .downloadingModel:
-                sizingTitle = "Downloading Refinement • 100%"
-            default:
-                sizingTitle = presentation.title
-            }
             let titleWidth = ceil(
-                (sizingTitle as NSString).size(
+                (presentation.title as NSString).size(
                     withAttributes: [
                         .font: NSFont.systemFont(ofSize: 12, weight: .semibold)
                     ]

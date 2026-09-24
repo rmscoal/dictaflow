@@ -156,7 +156,7 @@ struct OnboardingView: View {
                     Spacer()
 
                     Button(modelActionTitle(isPrepared: isPrepared)) {
-                        appState.prepareAndUseModel(model)
+                        appState.downloadWhisperModel(model)
                     }
                     .buttonStyle(CompactOnboardingButtonStyle(isProminent: !isPrepared))
                     .disabled(isPrepared || modelPreparationIsBusy)
@@ -193,7 +193,7 @@ struct OnboardingView: View {
                             Spacer(minLength: 0)
 
                             Button("Cancel Download") {
-                                appState.cancelModelDownload()
+                                appState.cancelWhisperModelDownload(model)
                             }
                             .buttonStyle(SecondaryOnboardingButtonStyle())
                         }
@@ -205,8 +205,8 @@ struct OnboardingView: View {
                         .foregroundStyle(OnboardingTheme.success)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4)
-                } else if appState.whisperModelPreparationFailed {
-                    Label(appState.whisperModelPreparationStatusText, systemImage: "exclamationmark.circle.fill")
+                } else if let downloadError = modelDownloadError {
+                    Label(downloadError, systemImage: "exclamationmark.circle.fill")
                         .font(.system(size: 11))
                         .foregroundStyle(OnboardingTheme.warning)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -471,20 +471,15 @@ struct OnboardingView: View {
     }
 
     private var modelPreparationIsBusy: Bool {
-        switch appState.transcriptionState {
-        case .preparingModel, .downloadingModel:
-            return true
-        default:
-            return false
-        }
+        appState.isDownloadingWhisperModel(appState.whisperConfiguration.model)
     }
 
     private var modelDownloadProgress: Double? {
-        guard case .downloadingModel(let model, let progress) = appState.transcriptionState,
-              model == appState.whisperConfiguration.model else {
-            return nil
-        }
-        return progress
+        appState.whisperDownloadProgress(for: appState.whisperConfiguration.model)
+    }
+
+    private var modelDownloadError: String? {
+        appState.whisperDownloadError(for: appState.whisperConfiguration.model)
     }
 
     private func modelActionTitle(isPrepared: Bool) -> String {
