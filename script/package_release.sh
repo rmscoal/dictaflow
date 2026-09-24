@@ -64,7 +64,12 @@ if [ "$BUILT_BUNDLE_ID" != "$BUNDLE_ID" ]; then
   exit 1
 fi
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$EXPORTED_APP"
-/usr/bin/codesign -dvvv "$EXPORTED_APP" 2>&1 | grep -q "Authority=$EXPECTED_AUTHORITY"
+SIGNING_INFO="$(/usr/bin/codesign -dvvv "$EXPORTED_APP" 2>&1)"
+if [[ "$SIGNING_INFO" != *"Authority=$EXPECTED_AUTHORITY"* ]]; then
+  echo "error: expected authority $EXPECTED_AUTHORITY" >&2
+  echo "$SIGNING_INFO" >&2
+  exit 1
+fi
 
 echo "==> Packaging DMG..."
 VOLUME_NAME="$APP_NAME" "$ROOT_DIR/script/package_dmg.sh" "$EXPORTED_APP" "$DMG_PATH"
