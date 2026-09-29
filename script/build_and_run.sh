@@ -11,6 +11,9 @@ DEV_BUNDLE_ID="com.dictaflow.dev"
 DEV_BUILT_APP="$DEV_DERIVED_DATA/Build/Products/$DEV_CONFIGURATION/$DEV_APP_NAME.app"
 DEV_INSTALLED_APP="/Applications/$DEV_APP_NAME.app"
 PACKAGE_DMG_PATH="$ROOT_DIR/.build/DictaFlow.dmg"
+WHISPER_VENDOR_DIR="$ROOT_DIR/Vendor/whisper.cpp"
+WHISPER_FRAMEWORK_DIR="$WHISPER_VENDOR_DIR/build-apple/whisper.xcframework"
+WHISPER_BUILD_SCRIPT="$WHISPER_VENDOR_DIR/build-xcframework.sh"
 
 MODE="${1:-run}"
 
@@ -39,7 +42,27 @@ stop_dev_app() {
   stop_app "$DEV_APP_NAME" "$DEV_BUNDLE_ID"
 }
 
+ensure_whisper_xcframework() {
+  if [ -d "$WHISPER_FRAMEWORK_DIR" ] && [ "$WHISPER_FRAMEWORK_DIR" -nt "$WHISPER_BUILD_SCRIPT" ]; then
+    return 0
+  fi
+
+  if [ ! -d "$WHISPER_VENDOR_DIR" ]; then
+    echo "error: whisper.cpp vendor sources were not found at $WHISPER_VENDOR_DIR" >&2
+    exit 1
+  fi
+
+  if [ ! -x "$WHISPER_BUILD_SCRIPT" ]; then
+    chmod +x "$WHISPER_BUILD_SCRIPT"
+  fi
+
+  echo "Whisper XCFramework missing or outdated, building it first (slow on first run)..."
+  export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+  (cd "$WHISPER_VENDOR_DIR" && "$WHISPER_BUILD_SCRIPT")
+}
+
 build_dev_app() {
+  ensure_whisper_xcframework
   xcodebuild \
     -project "$PROJECT" \
     -scheme "$DEV_SCHEME" \
