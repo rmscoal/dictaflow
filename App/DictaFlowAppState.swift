@@ -1760,7 +1760,20 @@ final class DictaFlowAppState: ObservableObject {
             do {
                 self.modelDownloadService.cancelDownload(modelIdentifier: model.encoderModelIdentifier)
                 let deletedByteCount = try await self.modelDownloadService.deleteModelFiles([file])
-                let encoderByteCount = (try? await self.modelDownloadService.deleteWhisperEncoder(model)) ?? 0
+                let encoderByteCount: Int64
+                do {
+                    encoderByteCount = try await self.modelDownloadService.deleteWhisperEncoder(model)
+                } catch {
+                    await MainActor.run {
+                        self.isDeletingModel = false
+                        self.setPreservedStatusMessage(
+                            "Deleted \(model.displayName), but could not delete its Neural Engine encoder. \(error.localizedDescription)"
+                        )
+                        self.updateStatusMessage()
+                        self.refreshInstalledLocalModelFiles()
+                    }
+                    return
+                }
                 let totalFreedBytes = deletedByteCount + encoderByteCount
 
                 await MainActor.run {
