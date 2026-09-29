@@ -9,7 +9,7 @@
 
 <p align="center">
   <a href="https://github.com/rmscoal/dictaflow/releases/latest"><img src="https://img.shields.io/github/v/release/rmscoal/dictaflow?style=flat-square&label=download&color=4f72ff" alt="Download the latest release"></a>
-  <img src="https://img.shields.io/badge/macOS-13%2B-111827?style=flat-square&logo=apple" alt="macOS 13 or newer">
+  <img src="https://img.shields.io/badge/macOS-14%2B-111827?style=flat-square&logo=apple" alt="macOS 14 or newer">
   <img src="https://img.shields.io/badge/Mac-Apple%20silicon-111827?style=flat-square&logo=apple" alt="Apple silicon Mac">
   <img src="https://img.shields.io/badge/processing-local-16a34a?style=flat-square" alt="Local processing">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=flat-square" alt="AGPL-3.0 license"></a>
@@ -74,7 +74,7 @@ or API key.
 | | Requirement |
 | --- | --- |
 | **Mac** | Apple silicon |
-| **macOS** | 13.0 or newer |
+| **macOS** | 14.0 or newer |
 | **Internet** | Needed to download the app, models, and updates |
 
 After the models are downloaded, dictation works offline.

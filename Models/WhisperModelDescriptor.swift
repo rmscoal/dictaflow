@@ -60,6 +60,81 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable, Sendable, 
         .sha1(sha1Checksum)
     }
 
+    nonisolated var encoderModelIdentifier: String {
+        "\(modelIdentifier).encoder"
+    }
+
+    nonisolated var encoderZipFilename: String {
+        "ggml-\(rawValue)-encoder.mlmodelc.zip"
+    }
+
+    nonisolated var encoderDirectoryName: String {
+        "ggml-\(rawValue)-encoder.mlmodelc"
+    }
+
+    nonisolated var encoderDisabledDirectoryName: String {
+        "\(encoderDirectoryName).disabled"
+    }
+
+    nonisolated var encoderDownloadURL: URL {
+        URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/\(encoderZipFilename)")!
+    }
+
+    nonisolated var encoderChecksum: ModelChecksum {
+        switch self {
+        case .tiny:
+            return .sha256("c88cbd2648e1f5415092bcf5256add463a0f19943e6938f46e8d4ffdebd47739")
+        case .base:
+            return .sha256("7e6ab77041942572f239b5b602f8aaa1c3ed29d73e3d8f20abea03a773541089")
+        case .small:
+            return .sha256("de43fb9fed471e95c19e60ae67575c2bf09e8fb607016da171b06ddad313988b")
+        case .medium:
+            return .sha256("79b0b8d436d47d3f24dd3afc91f19447dd686a4f37521b2f6d9c30a642133fbd")
+        case .largeV3Turbo:
+            return .sha256("84bedfe895bd7b5de6e8e89a0803dfc5addf8c0c5bc4c937451716bf7cf7988a")
+        case .largeV3:
+            return .sha256("47837be7594a29429ec08620043390c4d6d467f8bd362df09e9390ace76a55a4")
+        }
+    }
+
+    nonisolated var encoderApproximateSizeBytes: Int64 {
+        switch self {
+        case .tiny:
+            return 15_037_446
+        case .base:
+            return 37_922_638
+        case .small:
+            return 163_083_239
+        case .medium:
+            return 567_829_413
+        case .largeV3Turbo:
+            return 1_173_393_014
+        case .largeV3:
+            return 1_175_711_232
+        }
+    }
+
+    nonisolated var encoderMaximumDownloadSizeBytes: Int64 {
+        encoderApproximateSizeBytes + 250_000_000
+    }
+
+    nonisolated var encoderApproximateSizeDescription: String {
+        switch self {
+        case .tiny:
+            return "15 MB"
+        case .base:
+            return "38 MB"
+        case .small:
+            return "163 MB"
+        case .medium:
+            return "568 MB"
+        case .largeV3Turbo:
+            return "1.2 GB"
+        case .largeV3:
+            return "1.2 GB"
+        }
+    }
+
     nonisolated var approximateDiskSizeBytes: Int64 {
         switch self {
         case .tiny:
@@ -109,9 +184,9 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable, Sendable, 
         case .medium:
             return "Strong accuracy with reliable translation. Noticeably heavier on CPU, memory, and disk."
         case .largeV3Turbo:
-            return "Best balance of speed and quality. Near Large V3 accuracy at Medium size."
+            return "Best balance of speed and quality. Near Large V3 accuracy at Medium size. Uses more battery per dictation than smaller models."
         case .largeV3:
-            return "Highest accuracy for difficult audio, but the heaviest and slowest model."
+            return "Highest accuracy for difficult audio, but the heaviest and slowest model. Uses the most battery per dictation."
         }
     }
 }

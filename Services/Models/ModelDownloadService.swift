@@ -17,8 +17,16 @@ protocol ModelDownloadServiceProtocol: AnyObject {
     ) async throws -> URL
     func isWhisperModelPrepared(_ model: WhisperModelDescriptor) -> Bool
     func verifiedWhisperModelURL(for model: WhisperModelDescriptor) async -> URL?
+    func isWhisperEncoderPrepared(_ model: WhisperModelDescriptor) -> Bool
+    func isWhisperEncoderDownloaded(_ model: WhisperModelDescriptor) -> Bool
+    func setWhisperEncoderEnabled(_ enabled: Bool, for model: WhisperModelDescriptor) async throws
+    func removeOrphanedEncoders() -> Int64
+    func ensureWhisperEncoderAvailable(
+        _ model: WhisperModelDescriptor,
+        progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
+    ) async throws -> URL
+    func deleteWhisperEncoder(_ model: WhisperModelDescriptor) async throws -> Int64
     func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool
-    func preparedRefinementModelURL(for model: RefinementModelDescriptor) -> URL?
     func verifiedRefinementModelURL(for model: RefinementModelDescriptor) async -> URL?
 }
 
@@ -32,6 +40,7 @@ enum ModelDownloadServiceError: LocalizedError {
     case invalidLocalModelFile
     case invalidModelDeletionRequest
     case modelDeletionUnavailable
+    case encoderExtractionFailed
 
     var errorDescription: String? {
         switch self {
@@ -53,6 +62,8 @@ enum ModelDownloadServiceError: LocalizedError {
             return "DictaFlow can only delete local model files it recognizes."
         case .modelDeletionUnavailable:
             return "A model is still being prepared. Try deleting unused models after it finishes."
+        case .encoderExtractionFailed:
+            return "DictaFlow could not unpack the Neural Engine encoder. Try downloading it again."
         }
     }
 }
@@ -63,6 +74,14 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
     private let fileManager: FileManager
     private let session: URLSession
     private var activeDownloads: [String: Task<URL, Error>] = [:]
+    private var activeExtractions: [String: Process] = [:]
+    private var verifiedModelFingerprints: [String: VerifiedModelFingerprint] = [:]
+
+    private struct VerifiedModelFingerprint: Equatable {
+        let byteCount: Int64
+        let modificationDate: Date
+        let checksum: ModelChecksum
+    }
 
     init(
         fileManager: FileManager = .default,
@@ -77,14 +96,28 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         _ model: WhisperModelDescriptor,
         progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
     ) async throws -> URL {
-        try await ensureLocalModelAvailable(model, progressHandler: progressHandler)
+        try await ensureLocalModelAvailable(
+            modelIdentifier: model.modelIdentifier,
+            filename: model.filename,
+            downloadURL: model.downloadURL,
+            checksum: model.checksum,
+            maximumDownloadSizeBytes: model.maximumDownloadSizeBytes,
+            progressHandler: progressHandler
+        )
     }
 
     func ensureRefinementModelAvailable(
         _ model: RefinementModelDescriptor,
         progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
     ) async throws -> URL {
-        try await ensureLocalModelAvailable(model, progressHandler: progressHandler)
+        try await ensureLocalModelAvailable(
+            modelIdentifier: model.modelIdentifier,
+            filename: model.filename,
+            downloadURL: model.downloadURL,
+            checksum: model.checksum,
+            maximumDownloadSizeBytes: model.maximumDownloadSizeBytes,
+            progressHandler: progressHandler
+        )
     }
 
     nonisolated func installedModelFiles() -> [LocalModelFile] {
@@ -93,6 +126,10 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
     func cancelDownload(modelIdentifier: String) {
         activeDownloads[modelIdentifier]?.cancel()
+
+        if let extraction = activeExtractions.removeValue(forKey: modelIdentifier) {
+            extraction.terminate()
+        }
     }
 
     nonisolated func removeIncompleteDownloads() -> Int64 {
@@ -109,7 +146,8 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         }
 
         for file in uniqueFiles {
-            guard activeDownloads[file.modelIdentifier] == nil else {
+            guard activeDownloads[file.modelIdentifier] == nil,
+                  activeExtractions[file.modelIdentifier] == nil else {
                 throw ModelDownloadServiceError.modelDeletionUnavailable
             }
 
@@ -127,12 +165,36 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             }
 
             var isDirectory = ObjCBool(false)
-            guard fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            guard fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) else {
+                continue
+            }
+
+            if file.category == .whisperEncoder {
+                guard isDirectory.boolValue else {
+                    continue
+                }
+
+                deletedByteCount += Self.directoryByteCount(at: fileURL)
+                try fileManager.removeItem(at: fileURL)
+
+                if let model = WhisperModelDescriptor.allCases.first(where: { $0.encoderModelIdentifier == file.modelIdentifier }) {
+                    let zipURL = modelsDirectoryURL.appendingPathComponent(model.encoderZipFilename, isDirectory: false)
+                    if fileManager.fileExists(atPath: zipURL.path) {
+                        deletedByteCount += Self.byteCount(at: zipURL, fileManager: fileManager)
+                        try? fileManager.removeItem(at: zipURL)
+                    }
+                }
+
+                continue
+            }
+
+            guard !isDirectory.boolValue else {
                 continue
             }
 
             deletedByteCount += Self.byteCount(at: fileURL, fileManager: fileManager)
             try fileManager.removeItem(at: fileURL)
+            verifiedModelFingerprints[file.modelIdentifier] = nil
         }
 
         return deletedByteCount
@@ -149,34 +211,200 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
     }
 
     func verifiedWhisperModelURL(for model: WhisperModelDescriptor) async -> URL? {
-        let modelURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
-        guard Self.isRegularModelFile(at: modelURL),
-              (try? Self.modelFileMatchesChecksum(at: modelURL, expectedChecksum: model.checksum)) == true else {
-            return nil
-        }
-
-        return modelURL
+        verifiedModelURL(for: model)
     }
 
-    nonisolated func preparedRefinementModelURL(for model: RefinementModelDescriptor) -> URL? {
-        let modelURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
-        guard Self.isRegularModelFile(at: modelURL),
-              (try? Self.modelFileMatchesChecksum(at: modelURL, expectedChecksum: model.checksum)) == true else {
-            return nil
+    nonisolated func isWhisperEncoderPrepared(_ model: WhisperModelDescriptor) -> Bool {
+        let directoryURL = modelsDirectoryURL.appendingPathComponent(model.encoderDirectoryName, isDirectory: true)
+        return Self.isValidEncoderDirectory(at: directoryURL)
+    }
+
+    nonisolated func isWhisperEncoderDownloaded(_ model: WhisperModelDescriptor) -> Bool {
+        if isWhisperEncoderPrepared(model) {
+            return true
         }
 
-        return modelURL
+        let disabledURL = modelsDirectoryURL.appendingPathComponent(model.encoderDisabledDirectoryName, isDirectory: true)
+        return Self.isValidEncoderDirectory(at: disabledURL)
+    }
+
+    func setWhisperEncoderEnabled(_ enabled: Bool, for model: WhisperModelDescriptor) async throws {
+        guard activeDownloads[model.encoderModelIdentifier] == nil,
+              activeExtractions[model.encoderModelIdentifier] == nil else {
+            throw ModelDownloadServiceError.modelDeletionUnavailable
+        }
+
+        let activeURL = modelsDirectoryURL.appendingPathComponent(model.encoderDirectoryName, isDirectory: true)
+        let disabledURL = modelsDirectoryURL.appendingPathComponent(model.encoderDisabledDirectoryName, isDirectory: false)
+
+        if enabled {
+            guard !Self.isValidEncoderDirectory(at: activeURL),
+                  Self.isValidEncoderDirectory(at: disabledURL) else {
+                return
+            }
+
+            try fileManager.moveItem(at: disabledURL, to: activeURL)
+        } else {
+            guard Self.isValidEncoderDirectory(at: activeURL),
+                  !fileManager.fileExists(atPath: disabledURL.path) else {
+                return
+            }
+
+            try fileManager.moveItem(at: activeURL, to: disabledURL)
+        }
+    }
+
+    nonisolated func removeOrphanedEncoders() -> Int64 {
+        var freedByteCount: Int64 = 0
+
+        for model in WhisperModelDescriptor.allCases {
+            let stagingURL = modelsDirectoryURL.appendingPathComponent(model.encoderDirectoryName + ".extracting", isDirectory: true)
+            var isStagingDirectory = ObjCBool(false)
+            if FileManager.default.fileExists(atPath: stagingURL.path, isDirectory: &isStagingDirectory),
+               isStagingDirectory.boolValue {
+                freedByteCount += Self.directoryByteCount(at: stagingURL)
+                try? FileManager.default.removeItem(at: stagingURL)
+            }
+
+            let modelURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
+            var isRegular = ObjCBool(false)
+            if FileManager.default.fileExists(atPath: modelURL.path, isDirectory: &isRegular), !isRegular.boolValue {
+                continue
+            }
+
+            for directoryName in [model.encoderDirectoryName, model.encoderDisabledDirectoryName] {
+                let directoryURL = modelsDirectoryURL.appendingPathComponent(directoryName, isDirectory: true)
+                var isDirectory = ObjCBool(false)
+                guard FileManager.default.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory),
+                      isDirectory.boolValue else {
+                    continue
+                }
+
+                freedByteCount += Self.directoryByteCount(at: directoryURL)
+                try? FileManager.default.removeItem(at: directoryURL)
+            }
+        }
+
+        return freedByteCount
+    }
+
+    func ensureWhisperEncoderAvailable(
+        _ model: WhisperModelDescriptor,
+        progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
+    ) async throws -> URL {
+        let directoryURL = modelsDirectoryURL.appendingPathComponent(model.encoderDirectoryName, isDirectory: true)
+        let zipURL = modelsDirectoryURL.appendingPathComponent(model.encoderZipFilename, isDirectory: false)
+
+        if Self.isValidEncoderDirectory(at: directoryURL) {
+            try? fileManager.removeItem(at: zipURL)
+            progressHandler(.located(directoryURL))
+            return directoryURL
+        }
+
+        try? fileManager.removeItem(at: directoryURL)
+
+        _ = try await ensureLocalModelAvailable(
+            modelIdentifier: model.encoderModelIdentifier,
+            filename: model.encoderZipFilename,
+            downloadURL: model.encoderDownloadURL,
+            checksum: model.encoderChecksum,
+            maximumDownloadSizeBytes: model.encoderMaximumDownloadSizeBytes,
+            progressHandler: progressHandler
+        )
+
+        let stagingURL = modelsDirectoryURL.appendingPathComponent(model.encoderDirectoryName + ".extracting", isDirectory: true)
+        try? fileManager.removeItem(at: stagingURL)
+
+        do {
+            try await extractZip(at: zipURL, toDirectory: stagingURL, modelIdentifier: model.encoderModelIdentifier)
+        } catch {
+            try? fileManager.removeItem(at: stagingURL)
+            throw error
+        }
+
+        try? fileManager.removeItem(at: zipURL)
+
+        let extractedURL = stagingURL.appendingPathComponent(model.encoderDirectoryName, isDirectory: true)
+
+        guard Self.isValidEncoderDirectory(at: extractedURL) else {
+            try? fileManager.removeItem(at: stagingURL)
+            throw ModelDownloadServiceError.encoderExtractionFailed
+        }
+
+        do {
+            try fileManager.moveItem(at: extractedURL, to: directoryURL)
+        } catch {
+            try? fileManager.removeItem(at: stagingURL)
+            throw ModelDownloadServiceError.encoderExtractionFailed
+        }
+
+        try? fileManager.removeItem(at: stagingURL)
+        return directoryURL
+    }
+
+    func deleteWhisperEncoder(_ model: WhisperModelDescriptor) async throws -> Int64 {
+        guard activeDownloads[model.encoderModelIdentifier] == nil,
+              activeExtractions[model.encoderModelIdentifier] == nil else {
+            throw ModelDownloadServiceError.modelDeletionUnavailable
+        }
+
+        var deletedByteCount: Int64 = 0
+
+        for directoryName in [model.encoderDirectoryName, model.encoderDisabledDirectoryName] {
+            let directoryURL = modelsDirectoryURL.appendingPathComponent(directoryName, isDirectory: true)
+            var isDirectory = ObjCBool(false)
+            guard fileManager.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else {
+                continue
+            }
+
+            deletedByteCount += Self.directoryByteCount(at: directoryURL)
+            try fileManager.removeItem(at: directoryURL)
+        }
+
+        let zipURL = modelsDirectoryURL.appendingPathComponent(model.encoderZipFilename, isDirectory: false)
+        if fileManager.fileExists(atPath: zipURL.path) {
+            deletedByteCount += Self.byteCount(at: zipURL, fileManager: fileManager)
+            try? fileManager.removeItem(at: zipURL)
+        }
+
+        return deletedByteCount
     }
 
     func verifiedRefinementModelURL(for model: RefinementModelDescriptor) async -> URL? {
-        preparedRefinementModelURL(for: model)
+        verifiedModelURL(for: model)
     }
 
-    private func ensureLocalModelAvailable<Model: LocalModelDescriptor>(
-        _ model: Model,
+    private func verifiedModelURL<Model: LocalModelDescriptor>(for model: Model) -> URL? {
+        let modelURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
+        guard Self.isRegularModelFile(at: modelURL),
+              let fingerprint = Self.fingerprint(at: modelURL, expectedChecksum: model.checksum) else {
+            verifiedModelFingerprints[model.modelIdentifier] = nil
+            return nil
+        }
+
+        if verifiedModelFingerprints[model.modelIdentifier] == fingerprint {
+            return modelURL
+        }
+
+        guard (try? Self.modelFileMatchesChecksum(at: modelURL, expectedChecksum: model.checksum)) == true else {
+            verifiedModelFingerprints[model.modelIdentifier] = nil
+            return nil
+        }
+
+        verifiedModelFingerprints[model.modelIdentifier] = fingerprint
+        return modelURL
+    }
+
+    private func ensureLocalModelAvailable(
+        modelIdentifier: String,
+        filename: String,
+        downloadURL: URL,
+        checksum: ModelChecksum,
+        maximumDownloadSizeBytes: Int64,
         progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
     ) async throws -> URL {
-        let destinationURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
+        let destinationURL = modelsDirectoryURL.appendingPathComponent(filename, isDirectory: false)
 
         if fileManager.fileExists(atPath: destinationURL.path) {
             if !Self.isRegularModelFile(at: destinationURL) {
@@ -186,7 +414,7 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
                 }
 
                 try? fileManager.removeItem(at: destinationURL)
-            } else if try Self.modelFileMatchesChecksum(at: destinationURL, expectedChecksum: model.checksum) {
+            } else if try Self.modelFileMatchesChecksum(at: destinationURL, expectedChecksum: checksum) {
                 progressHandler(.located(destinationURL))
                 return destinationURL
             }
@@ -194,7 +422,7 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             try? fileManager.removeItem(at: destinationURL)
         }
 
-        if let activeTask = activeDownloads[model.modelIdentifier] {
+        if let activeTask = activeDownloads[modelIdentifier] {
             return try await activeTask.value
         }
 
@@ -202,7 +430,7 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             try Self.ensureModelsDirectoryExists(at: modelsDirectoryURL, using: fileManager)
             progressHandler(.starting(expectedBytes: nil))
 
-            guard model.downloadURL.scheme?.lowercased() == "https" else {
+            guard downloadURL.scheme?.lowercased() == "https" else {
                 throw ModelDownloadServiceError.untrustedDownloadURL
             }
 
@@ -217,7 +445,7 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
                 }
             }
 
-            let (bytes, response) = try await session.bytes(from: model.downloadURL)
+            let (bytes, response) = try await session.bytes(from: downloadURL)
 
             guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
                 throw ModelDownloadServiceError.invalidServerResponse
@@ -227,7 +455,7 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             }
 
             let expectedLength = response.expectedContentLength > 0 ? response.expectedContentLength : nil
-            if let expectedLength, expectedLength > model.maximumDownloadSizeBytes {
+            if let expectedLength, expectedLength > maximumDownloadSizeBytes {
                 throw ModelDownloadServiceError.downloadTooLarge
             }
 
@@ -250,7 +478,7 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
             for try await byte in bytes {
                 chunkBuffer.append(byte)
-                if bytesWritten + Int64(chunkBuffer.count) > model.maximumDownloadSizeBytes {
+                if bytesWritten + Int64(chunkBuffer.count) > maximumDownloadSizeBytes {
                     throw ModelDownloadServiceError.downloadTooLarge
                 }
 
@@ -271,7 +499,7 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             try outputHandle.synchronize()
             try outputHandle.close()
 
-            guard try Self.modelFileMatchesChecksum(at: temporaryURL, expectedChecksum: model.checksum) else {
+            guard try Self.modelFileMatchesChecksum(at: temporaryURL, expectedChecksum: checksum) else {
                 try? fileManager.removeItem(at: temporaryURL)
                 throw ModelDownloadServiceError.checksumMismatch
             }
@@ -291,14 +519,15 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             return destinationURL
         }
 
-        activeDownloads[model.modelIdentifier] = task
+        activeDownloads[modelIdentifier] = task
 
         do {
             let destinationURL = try await task.value
-            activeDownloads[model.modelIdentifier] = nil
+            activeDownloads[modelIdentifier] = nil
+            verifiedModelFingerprints[modelIdentifier] = nil
             return destinationURL
         } catch {
-            activeDownloads[model.modelIdentifier] = nil
+            activeDownloads[modelIdentifier] = nil
             throw error
         }
     }
@@ -339,6 +568,97 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         }
 
         return resourceValues.isRegularFile == true && resourceValues.isSymbolicLink != true
+    }
+
+    nonisolated private static func isValidEncoderDirectory(at directoryURL: URL) -> Bool {
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return false
+        }
+
+        let modelURL = directoryURL.appendingPathComponent("model.mil", isDirectory: false)
+        return isRegularModelFile(at: modelURL)
+    }
+
+    nonisolated private static func directoryByteCount(at directoryURL: URL) -> Int64 {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directoryURL,
+            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]
+        ) else {
+            return 0
+        }
+
+        var totalByteCount: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let resourceValues = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+                  resourceValues.isRegularFile == true else {
+                continue
+            }
+
+            totalByteCount += Int64(resourceValues.fileSize ?? 0)
+        }
+
+        return totalByteCount
+    }
+
+    private func extractZip(at zipURL: URL, toDirectory directoryURL: URL, modelIdentifier: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+            process.arguments = ["-x", "-k", zipURL.path, directoryURL.path]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            process.qualityOfService = .utility
+            process.terminationHandler = { [weak self] process in
+                guard let self else {
+                    return
+                }
+
+                Task {
+                    await self.completeExtraction(of: process, modelIdentifier: modelIdentifier, continuation: continuation)
+                }
+            }
+
+            activeExtractions[modelIdentifier] = process
+
+            do {
+                try process.run()
+            } catch {
+                activeExtractions[modelIdentifier] = nil
+                continuation.resume(throwing: ModelDownloadServiceError.encoderExtractionFailed)
+            }
+        }
+    }
+
+    private func completeExtraction(
+        of process: Process,
+        modelIdentifier: String,
+        continuation: CheckedContinuation<Void, Error>
+    ) {
+        let wasCancelled = activeExtractions.removeValue(forKey: modelIdentifier) == nil
+
+        if wasCancelled {
+            continuation.resume(throwing: CancellationError())
+        } else if process.terminationStatus == 0 {
+            continuation.resume()
+        } else {
+            continuation.resume(throwing: ModelDownloadServiceError.encoderExtractionFailed)
+        }
+    }
+
+    nonisolated private static func fingerprint(at fileURL: URL, expectedChecksum: ModelChecksum) -> VerifiedModelFingerprint? {
+        guard let resourceValues = try? fileURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+              let byteCount = resourceValues.fileSize,
+              let modificationDate = resourceValues.contentModificationDate else {
+            return nil
+        }
+
+        return VerifiedModelFingerprint(
+            byteCount: Int64(byteCount),
+            modificationDate: modificationDate,
+            checksum: expectedChecksum
+        )
     }
 
     nonisolated private static func modelFileMatchesChecksum(at fileURL: URL, expectedChecksum: ModelChecksum) throws -> Bool {
@@ -391,7 +711,11 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             localModelFile(for: $0, category: .refinement, in: directoryURL, fileManager: fileManager)
         }
 
-        return (whisperFiles + refinementFiles).sorted {
+        let encoderFiles = WhisperModelDescriptor.allCases.compactMap {
+            encoderModelFile(for: $0, in: directoryURL, fileManager: fileManager)
+        }
+
+        return (whisperFiles + encoderFiles + refinementFiles).sorted {
             if $0.category.sortIndex != $1.category.sortIndex {
                 return $0.category.sortIndex < $1.category.sortIndex
             }
@@ -421,7 +745,42 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             displayName: model.displayName,
             filename: model.filename,
             fileURL: fileURL,
-            byteCount: byteCount(at: fileURL, fileManager: fileManager)
+            byteCount: byteCount(at: fileURL, fileManager: fileManager),
+            isEnabled: true
+        )
+    }
+
+    nonisolated private static func encoderModelFile(
+        for model: WhisperModelDescriptor,
+        in directoryURL: URL,
+        fileManager: FileManager
+    ) -> LocalModelFile? {
+        let activeURL = directoryURL.appendingPathComponent(model.encoderDirectoryName, isDirectory: true)
+        if isValidEncoderDirectory(at: activeURL) {
+            return LocalModelFile(
+                category: .whisperEncoder,
+                modelIdentifier: model.encoderModelIdentifier,
+                displayName: "\(model.displayName) Encoder",
+                filename: model.encoderDirectoryName,
+                fileURL: activeURL,
+                byteCount: directoryByteCount(at: activeURL),
+                isEnabled: true
+            )
+        }
+
+        let disabledURL = directoryURL.appendingPathComponent(model.encoderDisabledDirectoryName, isDirectory: true)
+        guard isValidEncoderDirectory(at: disabledURL) else {
+            return nil
+        }
+
+        return LocalModelFile(
+            category: .whisperEncoder,
+            modelIdentifier: model.encoderModelIdentifier,
+            displayName: "\(model.displayName) Encoder",
+            filename: model.encoderDisabledDirectoryName,
+            fileURL: disabledURL,
+            byteCount: directoryByteCount(at: disabledURL),
+            isEnabled: false
         )
     }
 
@@ -444,6 +803,13 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             }
 
             return directoryURL.appendingPathComponent(model.filename, isDirectory: false)
+        case .whisperEncoder:
+            guard let model = WhisperModelDescriptor.allCases.first(where: { $0.encoderModelIdentifier == file.modelIdentifier }),
+                  file.filename == model.encoderDirectoryName || file.filename == model.encoderDisabledDirectoryName else {
+                return nil
+            }
+
+            return directoryURL.appendingPathComponent(file.filename, isDirectory: true)
         }
     }
 

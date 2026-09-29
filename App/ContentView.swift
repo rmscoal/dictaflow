@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var isShowingHelp = false
     @State private var isSidebarCollapsed = false
     @State private var isShowingModelPreparationConfirmation = false
+    @State private var isShowingEncoderDownloadConfirmation = false
     @State private var isShowingRefinementModelPreparationConfirmation = false
     @State private var isShowingWhisperModelDeletionConfirmation = false
     @State private var isShowingRefinementModelDeletionConfirmation = false
@@ -53,6 +54,17 @@ struct ContentView: View {
             Text("DictaFlow will download \(selectedModel.displayName) locally in the background. Your current model stays selected until you switch.")
         }
         .alert(
+            "Download \(selectedModel.displayName) Neural Engine Encoder?",
+            isPresented: $isShowingEncoderDownloadConfirmation
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Download Encoder") {
+                appState.downloadWhisperEncoder(selectedModel)
+            }
+        } message: {
+            Text("DictaFlow will download the \(selectedModel.encoderApproximateSizeDescription) encoder in the background. Transcription keeps working and switches to the Neural Engine automatically.")
+        }
+        .alert(
             "Download \(selectedRefinementModel.displayName) Model?",
             isPresented: $isShowingRefinementModelPreparationConfirmation
         ) {
@@ -89,7 +101,7 @@ struct ContentView: View {
                 whisperModelPendingDeletion = nil
             }
         } message: {
-            Text("This permanently deletes the local model file. DictaFlow keeps at least one downloaded Whisper model, and the active model cannot be deleted.")
+            Text("This permanently deletes the local model file and its Neural Engine encoder, if downloaded. DictaFlow keeps at least one downloaded Whisper model, and the active model cannot be deleted.")
         }
         .alert(
             "Delete \(refinementModelPendingDeletion?.displayName ?? "Refinement Model")?",
@@ -390,6 +402,25 @@ struct ContentView: View {
                                 }
                             }
 
+                            if isPrepared {
+                                WhisperEncoderRow(
+                                    statusText: appState.whisperEncoderStatusText(for: model),
+                                    isDownloaded: appState.isWhisperEncoderDownloaded(model),
+                                    isEnabled: appState.isWhisperEncoderEnabled(model),
+                                    isInteractionLocked: appState.whisperSettingsLocked || appState.isDownloadingWhisperModel(model) || appState.isDownloadingWhisperEncoder(model) || appState.isDeletingModel,
+                                    toggleAction: {
+                                        appState.setWhisperEncoderEnabled(!appState.isWhisperEncoderEnabled(model), for: model)
+                                    }
+                                ) {
+                                    if appState.isWhisperEncoderDownloaded(model) {
+                                        appState.removeWhisperEncoder(model)
+                                    } else if !appState.isDownloadingWhisperEncoder(model) {
+                                        selectedModel = model
+                                        isShowingEncoderDownloadConfirmation = true
+                                    }
+                                }
+                            }
+
                             if model != WhisperModelDescriptor.allCases.last {
                                 Divider().overlay(AppTheme.border)
                             }
@@ -407,6 +438,20 @@ struct ContentView: View {
                             progress: appState.whisperDownloadProgress(for: model),
                             hasFailed: !isActive && failureMessage != nil,
                             cancelAction: { appState.cancelWhisperModelDownload(model) }
+                        )
+                    }
+
+                    ForEach(appState.visibleWhisperEncoderDownloadModels, id: \.self) { model in
+                        let isActive = appState.isDownloadingWhisperEncoder(model)
+                        let failureMessage = appState.whisperEncoderDownloadError(for: model)
+
+                        ModelDownloadStatusPanel(
+                            title: isActive ? "Downloading \(model.displayName) encoder" : "\(model.displayName) encoder download failed",
+                            statusText: isActive ? appState.whisperEncoderDownloadStatusText(for: model) : (failureMessage ?? ""),
+                            isActive: isActive,
+                            progress: appState.whisperEncoderDownloadProgress(for: model),
+                            hasFailed: !isActive && failureMessage != nil,
+                            cancelAction: { appState.cancelWhisperEncoderDownload(model) }
                         )
                     }
                 }
@@ -1836,6 +1881,46 @@ private struct ModelDownloadStatusPanel: View {
     }
 }
 
+private struct WhisperEncoderRow: View {
+    let statusText: String
+    let isDownloaded: Bool
+    let isEnabled: Bool
+    let isInteractionLocked: Bool
+    let toggleAction: () -> Void
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: isEnabled ? "bolt.fill" : "bolt")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isEnabled ? AppTheme.accent : AppTheme.secondaryText)
+
+            Text(statusText)
+                .font(.system(size: 11.5))
+                .foregroundStyle(AppTheme.secondaryText)
+
+            Spacer(minLength: 12)
+
+            if isDownloaded {
+                Toggle("", isOn: Binding(get: { isEnabled }, set: { _ in toggleAction() }))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .disabled(isInteractionLocked)
+                    .help("Turn the Neural Engine encoder on or off without deleting it")
+            }
+
+            Button(isDownloaded ? "Remove" : "Download", action: action)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(isDownloaded ? AppTheme.destructive : AppTheme.accent)
+                .disabled(isInteractionLocked)
+                .help(isDownloaded ? "Remove the Neural Engine encoder" : "Download the Neural Engine encoder")
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 6)
+    }
+}
+
 private struct ModelListRow: View {
     let name: String
     let sizeText: String
@@ -1945,7 +2030,7 @@ private struct ModelStorageRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: file.category == .whisper ? "waveform" : "wand.and.sparkles")
+            Image(systemName: file.category == .whisper ? "waveform" : file.category == .whisperEncoder ? "bolt.fill" : "wand.and.sparkles")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(AppTheme.accent)
                 .frame(width: 20)
