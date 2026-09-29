@@ -8,6 +8,8 @@ protocol WhisperServiceProtocol: AnyObject {
         modelURL: URL,
         configuration: WhisperConfiguration
     ) async throws -> WhisperTranscriptionResult
+    func prepare(modelURL: URL) async throws
+    func unloadModel() async
 }
 
 enum WhisperServiceError: LocalizedError {
@@ -70,6 +72,19 @@ actor WhisperCPPService: WhisperServiceProtocol {
         }
     }
 
+    func prepare(modelURL: URL) async throws {
+        _ = try context(for: modelURL)
+    }
+
+    func unloadModel() {
+        guard let cachedContext else {
+            return
+        }
+
+        logger.info("Whisper model unloaded after idle: \(cachedContext.modelURL.lastPathComponent, privacy: .public)")
+        self.cachedContext = nil
+    }
+
     private func context(for modelURL: URL) throws -> WhisperContextBox {
         if let cachedContext, cachedContext.modelURL == modelURL {
             return cachedContext.context
@@ -85,6 +100,7 @@ actor WhisperCPPService: WhisperServiceProtocol {
             throw WhisperServiceError.failedToInitializeContext
         }
 
+        logger.info("Whisper model loaded: \(modelURL.lastPathComponent, privacy: .public)")
         let context = WhisperContextBox(pointer: contextPointer)
         cachedContext = (modelURL, context)
         return context

@@ -125,7 +125,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Picker("Model", selection: modelBinding) {
                     ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
-                        Text("\(model.displayName) (\(model.approximateDiskSizeDescription))")
+                        Text("\(model.displayName) (\(model.approximateDiskSizeDescription))\(appState.isWhisperEncoderPrepared(model) ? " · ANE" : "")")
                             .tag(model)
                             .disabled(!appState.isWhisperModelPrepared(model))
                     }

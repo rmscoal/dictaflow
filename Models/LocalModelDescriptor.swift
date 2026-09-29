@@ -12,12 +12,15 @@ protocol LocalModelDescriptor: Hashable, Sendable {
 struct LocalModelFile: Identifiable, Equatable, Sendable {
     enum Category: String, Sendable {
         case whisper
+        case whisperEncoder
         case refinement
 
         nonisolated var title: String {
             switch self {
             case .whisper:
                 return "Whisper"
+            case .whisperEncoder:
+                return "Whisper Encoder"
             case .refinement:
                 return "Refinement"
             }
@@ -27,8 +30,10 @@ struct LocalModelFile: Identifiable, Equatable, Sendable {
             switch self {
             case .whisper:
                 return 0
-            case .refinement:
+            case .whisperEncoder:
                 return 1
+            case .refinement:
+                return 2
             }
         }
     }
@@ -39,6 +44,7 @@ struct LocalModelFile: Identifiable, Equatable, Sendable {
     let filename: String
     let fileURL: URL
     let byteCount: Int64
+    let isEnabled: Bool
 
     var id: String {
         modelIdentifier

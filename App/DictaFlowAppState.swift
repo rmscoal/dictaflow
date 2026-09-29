@@ -79,6 +79,8 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var refinementDownloads: [RefinementModelDescriptor: ModelDownloadProgress] = [:]
     @Published private(set) var whisperDownloadErrors: [WhisperModelDescriptor: String] = [:]
     @Published private(set) var refinementDownloadErrors: [RefinementModelDescriptor: String] = [:]
+    @Published private(set) var whisperEncoderDownloads: [WhisperModelDescriptor: ModelDownloadProgress] = [:]
+    @Published private(set) var whisperEncoderDownloadErrors: [WhisperModelDescriptor: String] = [:]
     @Published private(set) var isRefinementRuntimeAvailable = false
     @Published private(set) var isRefinementServerPreparing = false
     @Published private(set) var refinementPromptText: String
@@ -115,6 +117,9 @@ final class DictaFlowAppState: ObservableObject {
     private weak var recordingOverlayRouter: RecordingOverlayRouting?
     private var workspaceObservers = Set<AnyCancellable>()
     private var recordingMeterTimer: Timer?
+    private var whisperIdleEvictionTimer: Timer?
+    private var isWarmingUpWhisperEncoder = false
+    var whisperIdleEvictionInterval: TimeInterval = 600
     private var isRecordingOverlaySessionActive = false
     private var lastKnownExternalTargetApplication: InsertionTargetApplication?
     private var pendingInsertionTargetApplication: InsertionTargetApplication?
@@ -123,6 +128,7 @@ final class DictaFlowAppState: ObservableObject {
     private var savedRefinementPromptText: String
     private var activeWhisperDownloadTokens: [WhisperModelDescriptor: UUID] = [:]
     private var activeRefinementDownloadTokens: [RefinementModelDescriptor: UUID] = [:]
+    private var activeWhisperEncoderDownloadTokens: [WhisperModelDescriptor: UUID] = [:]
 
     convenience init() {
         self.init(
@@ -526,8 +532,13 @@ final class DictaFlowAppState: ObservableObject {
         WhisperLanguageCatalog.additionalLanguages
     }
 
-    var installedLocalModelFiles: [LocalModelFile] {
-        modelDownloadService.installedModelFiles()
+    @Published private(set) var installedLocalModelFiles: [LocalModelFile] = []
+
+    func refreshInstalledLocalModelFiles() {
+        Task(priority: .utility) { [weak self, modelDownloadService] in
+            let files = await Task.detached { modelDownloadService.installedModelFiles() }.value
+            self?.installedLocalModelFiles = files
+        }
     }
 
     func isWhisperModelPrepared(_ model: WhisperModelDescriptor) -> Bool {
@@ -553,6 +564,62 @@ final class DictaFlowAppState: ObservableObject {
     var visibleWhisperDownloadModels: [WhisperModelDescriptor] {
         let models = Set(whisperDownloads.keys).union(whisperDownloadErrors.keys)
         return WhisperModelDescriptor.allCases.filter { models.contains($0) }
+    }
+
+    func isWhisperEncoderPrepared(_ model: WhisperModelDescriptor) -> Bool {
+        modelDownloadService.isWhisperEncoderPrepared(model)
+    }
+
+    func isDownloadingWhisperEncoder(_ model: WhisperModelDescriptor) -> Bool {
+        whisperEncoderDownloads[model] != nil
+    }
+
+    func whisperEncoderDownloadProgress(for model: WhisperModelDescriptor) -> Double? {
+        whisperEncoderDownloads[model]?.progress
+    }
+
+    func whisperEncoderDownloadStatusText(for model: WhisperModelDescriptor) -> String {
+        whisperEncoderDownloads[model]?.statusText ?? ""
+    }
+
+    func whisperEncoderDownloadError(for model: WhisperModelDescriptor) -> String? {
+        whisperEncoderDownloadErrors[model]
+    }
+
+    var visibleWhisperEncoderDownloadModels: [WhisperModelDescriptor] {
+        let models = Set(whisperEncoderDownloads.keys).union(whisperEncoderDownloadErrors.keys)
+        return WhisperModelDescriptor.allCases.filter { models.contains($0) }
+    }
+
+    func whisperEncoderFile(for model: WhisperModelDescriptor) -> LocalModelFile? {
+        installedLocalModelFiles.first {
+            $0.category == .whisperEncoder && $0.modelIdentifier == model.encoderModelIdentifier
+        }
+    }
+
+    func isWhisperEncoderDownloaded(_ model: WhisperModelDescriptor) -> Bool {
+        modelDownloadService.isWhisperEncoderDownloaded(model)
+    }
+
+    func isWhisperEncoderEnabled(_ model: WhisperModelDescriptor) -> Bool {
+        modelDownloadService.isWhisperEncoderPrepared(model)
+    }
+
+    func whisperEncoderStatusText(for model: WhisperModelDescriptor) -> String {
+        guard isWhisperEncoderDownloaded(model) else {
+            return "Neural Engine encoder available · \(model.encoderApproximateSizeDescription)"
+        }
+
+        let size: String
+        if let entry = whisperEncoderFile(for: model) {
+            size = formattedLocalModelSize(entry.byteCount)
+        } else {
+            size = model.encoderApproximateSizeDescription
+        }
+
+        return isWhisperEncoderEnabled(model)
+            ? "Neural Engine encoder on · \(size)"
+            : "Neural Engine encoder off · \(size)"
     }
 
     func isDownloadingRefinementModel(_ model: RefinementModelDescriptor) -> Bool {
@@ -631,6 +698,7 @@ final class DictaFlowAppState: ObservableObject {
     private var activeLocalModelIdentifiers: Set<String> {
         [
             whisperConfiguration.model.modelIdentifier,
+            whisperConfiguration.model.encoderModelIdentifier,
             refinementConfiguration.model.modelIdentifier
         ]
     }
@@ -684,6 +752,7 @@ final class DictaFlowAppState: ObservableObject {
 
     func handleApplicationLaunch() {
         removeIncompleteModelDownloads()
+        refreshInstalledLocalModelFiles()
         refreshMicrophonePermissionStatus()
         refreshAccessibilityPermissionStatus()
         registerGlobalHotkey()
@@ -715,6 +784,10 @@ final class DictaFlowAppState: ObservableObject {
 
         mainWindowPage = page
         mainWindowRouter?.showMainWindow()
+
+        if page == .models {
+            refreshInstalledLocalModelFiles()
+        }
     }
 
     func openSettingsWindow() {
@@ -1076,17 +1149,20 @@ final class DictaFlowAppState: ObservableObject {
     private func startPreparedRefinementServer(enableAfterStart: Bool) {
         let model = refinementConfiguration.model
 
-        guard let modelURL = modelDownloadService.preparedRefinementModelURL(for: model) else {
-            setPreservedStatusMessage("Choose and prepare a refinement model before turning on local cleanup.")
-            showMainWindow()
-            return
-        }
-
         isRefinementServerPreparing = true
         clearPreservedStatusMessage()
         updateStatusMessage()
 
         Task { [weak self, transcriptRefinementService] in
+            guard let modelURL = await self?.modelDownloadService.verifiedRefinementModelURL(for: model) else {
+                await MainActor.run {
+                    self?.isRefinementServerPreparing = false
+                    self?.setPreservedStatusMessage("Choose and prepare a refinement model before turning on local cleanup.")
+                    self?.showMainWindow()
+                }
+                return
+            }
+
             do {
                 try await transcriptRefinementService.prepare(modelURL: modelURL)
 
@@ -1170,6 +1246,149 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    func downloadWhisperEncoder(_ model: WhisperModelDescriptor) {
+        guard isWhisperModelPrepared(model) else {
+            setPreservedStatusMessage("Download \(model.displayName) before adding its Neural Engine encoder.")
+            return
+        }
+
+        guard !isWhisperEncoderDownloaded(model) else {
+            return
+        }
+
+        guard whisperEncoderDownloads[model] == nil else {
+            return
+        }
+
+        whisperEncoderDownloadErrors[model] = nil
+        let token = UUID()
+        activeWhisperEncoderDownloadTokens[model] = token
+        whisperEncoderDownloads[model] = ModelDownloadProgress(progress: nil, statusText: "Starting download")
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                _ = try await self.modelDownloadService.ensureWhisperEncoderAvailable(model) { [weak self] event in
+                    Task { @MainActor [weak self] in
+                        self?.applyWhisperEncoderDownloadEvent(event, for: model, token: token)
+                    }
+                }
+
+                await MainActor.run {
+                    self.finishWhisperEncoderDownload(model, token: token)
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    self.discardWhisperEncoderDownload(model, token: token)
+                }
+            } catch {
+                await MainActor.run {
+                    self.failWhisperEncoderDownload(model, token: token, error: error)
+                }
+            }
+        }
+    }
+
+    func cancelWhisperEncoderDownload(_ model: WhisperModelDescriptor) {
+        guard whisperEncoderDownloads[model] != nil else {
+            return
+        }
+
+        Task { [modelDownloadService] in
+            modelDownloadService.cancelDownload(modelIdentifier: model.encoderModelIdentifier)
+        }
+    }
+
+    func setWhisperEncoderEnabled(_ enabled: Bool, for model: WhisperModelDescriptor) {
+        guard isWhisperEncoderDownloaded(model),
+              !isDownloadingWhisperEncoder(model) else {
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                try await self.modelDownloadService.setWhisperEncoderEnabled(enabled, for: model)
+
+                if self.whisperConfiguration.model == model {
+                    await self.whisperService.unloadModel()
+                }
+
+                await MainActor.run { [weak self] in
+                    guard let self else {
+                        return
+                    }
+
+                    self.refreshInstalledLocalModelFiles()
+
+                    if enabled {
+                        self.setPreservedStatusMessage("Turned on the \(model.displayName) Neural Engine encoder. It applies from the next recording.")
+                    } else {
+                        self.setPreservedStatusMessage("Turned off the \(model.displayName) Neural Engine encoder. Transcription falls back to Metal.")
+                    }
+
+                    self.updateStatusMessage()
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.setPreservedStatusMessage("Could not change the \(model.displayName) encoder setting. \(error.localizedDescription)")
+                    self?.updateStatusMessage()
+                }
+            }
+        }
+    }
+
+    func removeWhisperEncoder(_ model: WhisperModelDescriptor) {
+        if isDownloadingWhisperEncoder(model) {
+            cancelWhisperEncoderDownload(model)
+            setPreservedStatusMessage("Cancelled the \(model.displayName) encoder download.")
+            updateStatusMessage()
+            return
+        }
+
+        guard isWhisperEncoderDownloaded(model) else {
+            return
+        }
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            do {
+                let freedBytes = try await self.modelDownloadService.deleteWhisperEncoder(model)
+
+                await MainActor.run { [weak self] in
+                    guard let self else {
+                        return
+                    }
+
+                    if self.whisperConfiguration.model == model {
+                        Task { [whisperService] in
+                            await whisperService.unloadModel()
+                        }
+                    }
+
+                    let freedSize = self.formattedLocalModelSize(freedBytes)
+                    self.setPreservedStatusMessage("Removed the \(model.displayName) Neural Engine encoder and freed \(freedSize).")
+                    self.updateStatusMessage()
+                    self.refreshInstalledLocalModelFiles()
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.setPreservedStatusMessage("Could not remove the \(model.displayName) encoder. \(error.localizedDescription)")
+                    self?.updateStatusMessage()
+                }
+            }
+        }
+    }
+
     func updateWhisperModel(_ model: WhisperModelDescriptor) {
         guard whisperConfiguration.model != model else {
             return
@@ -1183,6 +1402,7 @@ final class DictaFlowAppState: ObservableObject {
         whisperConfiguration.model = model
         persistWhisperConfiguration()
         updateStatusMessage()
+        resetWhisperIdleTimer()
     }
 
     func downloadRefinementModel(_ model: RefinementModelDescriptor) {
@@ -1404,6 +1624,12 @@ final class DictaFlowAppState: ObservableObject {
         if freedByteCount > 0 {
             logger.info("Removed \(freedByteCount, privacy: .public) bytes of partial model downloads.")
         }
+
+        let orphanedByteCount = modelDownloadService.removeOrphanedEncoders()
+
+        if orphanedByteCount > 0 {
+            logger.info("Removed \(orphanedByteCount, privacy: .public) bytes of orphaned Neural Engine encoders.")
+        }
     }
 
     func deleteUnusedModelFiles(matching candidates: [LocalModelFile]) {
@@ -1435,6 +1661,7 @@ final class DictaFlowAppState: ObservableObject {
                 await MainActor.run {
                     let fileCount = filesToDelete.count
                     self.setPreservedStatusMessage("Deleted \(fileCount) unused \(fileCount == 1 ? "model" : "models") and freed \(self.formattedLocalModelSize(deletedByteCount)).")
+                    self.refreshInstalledLocalModelFiles()
                 }
             } catch {
                 await MainActor.run {
@@ -1481,6 +1708,7 @@ final class DictaFlowAppState: ObservableObject {
                     let freedSpace = self.formattedLocalModelSize(deletedByteCount)
                     self.setPreservedStatusMessage("Deleted \(model.displayName) and freed \(freedSpace).")
                     self.updateStatusMessage()
+                    self.refreshInstalledLocalModelFiles()
                 }
             } catch {
                 await MainActor.run {
@@ -1530,14 +1758,31 @@ final class DictaFlowAppState: ObservableObject {
             }
 
             do {
+                self.modelDownloadService.cancelDownload(modelIdentifier: model.encoderModelIdentifier)
                 let deletedByteCount = try await self.modelDownloadService.deleteModelFiles([file])
+                let encoderByteCount: Int64
+                do {
+                    encoderByteCount = try await self.modelDownloadService.deleteWhisperEncoder(model)
+                } catch {
+                    await MainActor.run {
+                        self.isDeletingModel = false
+                        self.setPreservedStatusMessage(
+                            "Deleted \(model.displayName), but could not delete its Neural Engine encoder. \(error.localizedDescription)"
+                        )
+                        self.updateStatusMessage()
+                        self.refreshInstalledLocalModelFiles()
+                    }
+                    return
+                }
+                let totalFreedBytes = deletedByteCount + encoderByteCount
 
                 await MainActor.run {
                     self.isDeletingModel = false
 
-                    let freedSpace = self.formattedLocalModelSize(deletedByteCount)
+                    let freedSpace = self.formattedLocalModelSize(totalFreedBytes)
                     self.setPreservedStatusMessage("Deleted \(model.displayName) and freed \(freedSpace).")
                     self.updateStatusMessage()
+                    self.refreshInstalledLocalModelFiles()
                 }
             } catch {
                 await MainActor.run {
@@ -1552,6 +1797,7 @@ final class DictaFlowAppState: ObservableObject {
 
     func prepareForTermination() {
         stopRecordingMetering()
+        cancelWhisperIdleTimer()
         restoreRecordingPlaybackAdjustmentForTermination()
         recordingOverlayRouter?.updateOverlay(nil, cancelAction: {})
         hotkeyService.unregisterToggleHotkey()
@@ -1656,6 +1902,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         updateStatusMessage()
+        refreshInstalledLocalModelFiles()
     }
 
     private func discardWhisperDownload(_ model: WhisperModelDescriptor, token: UUID) {
@@ -1680,6 +1927,184 @@ final class DictaFlowAppState: ObservableObject {
         whisperDownloadErrors[model] = message
         setPreservedStatusMessage(message)
         updateStatusMessage()
+    }
+
+    private func applyWhisperEncoderDownloadEvent(_ event: ModelDownloadEvent, for model: WhisperModelDescriptor, token: UUID) {
+        guard activeWhisperEncoderDownloadTokens[model] == token, whisperEncoderDownloads[model] != nil else {
+            return
+        }
+
+        switch event {
+        case .located:
+            break
+        case .starting(let expectedBytes):
+            whisperEncoderDownloads[model] = ModelDownloadProgress(
+                progress: nil,
+                statusText: formattedModelProgress(bytesWritten: 0, totalBytes: expectedBytes)
+            )
+        case .downloading(let bytesWritten, let totalBytes):
+            let progress: Double?
+            if let totalBytes, totalBytes > 0 {
+                progress = min(1, max(0, Double(bytesWritten) / Double(totalBytes)))
+            } else {
+                progress = nil
+            }
+            whisperEncoderDownloads[model] = ModelDownloadProgress(
+                progress: progress,
+                statusText: formattedModelProgress(bytesWritten: bytesWritten, totalBytes: totalBytes)
+            )
+        case .finished:
+            whisperEncoderDownloads[model]?.statusText = "Unpacking encoder"
+        }
+    }
+
+    private func finishWhisperEncoderDownload(_ model: WhisperModelDescriptor, token: UUID) {
+        guard activeWhisperEncoderDownloadTokens[model] == token else {
+            return
+        }
+
+        activeWhisperEncoderDownloadTokens[model] = nil
+        whisperEncoderDownloads[model] = nil
+        whisperEncoderDownloadErrors[model] = nil
+
+        guard isWhisperModelPrepared(model) else {
+            Task { [modelDownloadService] in
+                try? await modelDownloadService.deleteWhisperEncoder(model)
+            }
+            setPreservedStatusMessage("The \(model.displayName) model was removed before its encoder finished downloading, so the encoder was discarded.")
+            updateStatusMessage()
+            return
+        }
+
+        setPreservedStatusMessage("Downloaded the \(model.displayName) Neural Engine encoder.")
+        updateStatusMessage()
+        refreshInstalledLocalModelFiles()
+
+        Task { [weak self] in
+            await self?.activateWhisperEncoder(model)
+        }
+    }
+
+    private func discardWhisperEncoderDownload(_ model: WhisperModelDescriptor, token: UUID) {
+        guard activeWhisperEncoderDownloadTokens[model] == token else {
+            return
+        }
+
+        activeWhisperEncoderDownloadTokens[model] = nil
+        whisperEncoderDownloads[model] = nil
+        refreshInstalledLocalModelFiles()
+
+        guard isWhisperModelPrepared(model) else {
+            updateStatusMessage()
+            return
+        }
+
+        setPreservedStatusMessage("Cancelled the \(model.displayName) encoder download. Downloading again starts from the beginning.")
+        updateStatusMessage()
+    }
+
+    private func failWhisperEncoderDownload(_ model: WhisperModelDescriptor, token: UUID, error: Error) {
+        guard activeWhisperEncoderDownloadTokens[model] == token else {
+            return
+        }
+
+        activeWhisperEncoderDownloadTokens[model] = nil
+        whisperEncoderDownloads[model] = nil
+
+        guard isWhisperModelPrepared(model) else {
+            updateStatusMessage()
+            return
+        }
+
+        let message = "Could not download the \(model.displayName) Neural Engine encoder. \(error.localizedDescription)"
+        whisperEncoderDownloadErrors[model] = message
+        setPreservedStatusMessage(message)
+        updateStatusMessage()
+    }
+
+    private func activateWhisperEncoder(_ model: WhisperModelDescriptor) async {
+        if whisperConfiguration.model == model {
+            await whisperService.unloadModel()
+        }
+
+        await warmupWhisperEncoder(for: model)
+    }
+
+    private func warmupWhisperEncoder(for model: WhisperModelDescriptor) async {
+        guard model == whisperConfiguration.model,
+              !isWarmingUpWhisperEncoder,
+              isWhisperPipelineIdle else {
+            return
+        }
+
+        isWarmingUpWhisperEncoder = true
+        defer {
+            isWarmingUpWhisperEncoder = false
+        }
+
+        guard let modelURL = await modelDownloadService.verifiedWhisperModelURL(for: model) else {
+            return
+        }
+
+        setPreservedStatusMessage("Optimizing \(model.displayName) for the Neural Engine. This only happens once.")
+        updateStatusMessage()
+
+        do {
+            let silenceURL = try Self.silentWarmupAudioURL()
+            defer {
+                try? FileManager.default.removeItem(at: silenceURL)
+            }
+
+            var configuration = whisperConfiguration
+            configuration.model = model
+            _ = try await whisperService.transcribe(
+                audioFileURL: silenceURL,
+                modelURL: modelURL,
+                configuration: configuration
+            )
+
+            resetWhisperIdleTimer()
+            setPreservedStatusMessage("The \(model.displayName) Neural Engine encoder is ready.")
+        } catch {
+            logger.error("Whisper encoder warmup failed: \(error.localizedDescription, privacy: .public)")
+            setPreservedStatusMessage("The \(model.displayName) encoder is installed. The first transcription may take longer while it optimizes.")
+            resetWhisperIdleTimer()
+        }
+
+        updateStatusMessage()
+    }
+
+    nonisolated private static func silentWarmupAudioURL() throws -> URL {
+        let sampleRate: UInt32 = 16_000
+        let dataByteCount: UInt32 = 8_000 * 2
+        var wav = Data()
+        wav.append(contentsOf: "RIFF".utf8)
+        wav.append(littleEndianBytes(36 + dataByteCount))
+        wav.append(contentsOf: "WAVE".utf8)
+        wav.append(contentsOf: "fmt ".utf8)
+        wav.append(littleEndianBytes(UInt32(16)))
+        wav.append(littleEndianBytes(UInt16(1)))
+        wav.append(littleEndianBytes(UInt16(1)))
+        wav.append(littleEndianBytes(sampleRate))
+        wav.append(littleEndianBytes(sampleRate * 2))
+        wav.append(littleEndianBytes(UInt16(2)))
+        wav.append(littleEndianBytes(UInt16(16)))
+        wav.append(contentsOf: "data".utf8)
+        wav.append(littleEndianBytes(dataByteCount))
+        wav.append(Data(repeating: 0, count: Int(dataByteCount)))
+
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DictaFlowEncoderWarmup-\(UUID().uuidString).wav", isDirectory: false)
+        try wav.write(to: fileURL, options: .atomic)
+        return fileURL
+    }
+
+    nonisolated private static func littleEndianBytes(_ value: UInt16) -> Data {
+        withUnsafeBytes(of: value.littleEndian) { Data($0) }
+    }
+
+    nonisolated private static func littleEndianBytes(_ value: UInt32) -> Data {
+        withUnsafeBytes(of: value.littleEndian) { Data($0) }
     }
 
     private func applyRefinementDownloadEvent(_ event: ModelDownloadEvent, for model: RefinementModelDescriptor, token: UUID) {
@@ -1733,6 +2158,8 @@ final class DictaFlowAppState: ObservableObject {
         } else {
             setPreservedStatusMessage("Downloaded \(model.displayName) in the background. Still using \(refinementConfiguration.model.displayName).")
         }
+
+        refreshInstalledLocalModelFiles()
 
         updateStatusMessage()
     }
@@ -1895,6 +2322,8 @@ final class DictaFlowAppState: ObservableObject {
             recordingState = .recording(startedAt: Date(), fileURL: fileURL)
             setRecordingOverlaySessionActive(true)
             startRecordingMetering()
+            resetWhisperIdleTimer()
+            prewarmWhisperModel()
             updateStatusMessage()
         } catch {
             await restoreRecordingPlaybackAdjustment()
@@ -1985,6 +2414,60 @@ final class DictaFlowAppState: ObservableObject {
 
         if resetLevel {
             recordingAudioLevel = 0
+        }
+    }
+
+    private var isWhisperPipelineIdle: Bool {
+        recordingState == .idle && !transcriptionState.isBusy && !textInsertionState.isBusy && !isWarmingUpWhisperEncoder
+    }
+
+    private func resetWhisperIdleTimer() {
+        cancelWhisperIdleTimer()
+
+        let timer = Timer(timeInterval: whisperIdleEvictionInterval, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.evictIdleWhisperModel()
+            }
+        }
+        timer.tolerance = min(60, whisperIdleEvictionInterval / 10)
+        RunLoop.main.add(timer, forMode: .common)
+        whisperIdleEvictionTimer = timer
+    }
+
+    private func cancelWhisperIdleTimer() {
+        whisperIdleEvictionTimer?.invalidate()
+        whisperIdleEvictionTimer = nil
+    }
+
+    private func evictIdleWhisperModel() async {
+        whisperIdleEvictionTimer = nil
+
+        guard isWhisperPipelineIdle else {
+            resetWhisperIdleTimer()
+            return
+        }
+
+        await whisperService.unloadModel()
+    }
+
+    private func prewarmWhisperModel() {
+        let model = whisperConfiguration.model
+        guard modelDownloadService.isWhisperModelPrepared(model) else {
+            return
+        }
+
+        let modelURL = modelDownloadService.modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
+        Task { [weak self, whisperService, logger] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard let self, self.recordingState.isRecording, self.whisperConfiguration.model == model else {
+                return
+            }
+
+            do {
+                try await whisperService.prepare(modelURL: modelURL)
+            } catch {
+                logger.error("Whisper prewarm failed, transcription will load on demand: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
@@ -2096,6 +2579,8 @@ final class DictaFlowAppState: ObservableObject {
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("\(model.displayName) is not prepared. Open Models and prepare it before recording.")
             showMainWindowPage(.models)
+            await whisperService.unloadModel()
+            resetWhisperIdleTimer()
             return
         }
 
@@ -2126,6 +2611,7 @@ final class DictaFlowAppState: ObservableObject {
                 clearPreservedStatusMessage()
                 updateStatusMessage()
                 shouldSurfaceCleanupFailure = true
+                resetWhisperIdleTimer()
                 return
             }
 
@@ -2137,6 +2623,7 @@ final class DictaFlowAppState: ObservableObject {
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)")
             showMainWindow()
+            resetWhisperIdleTimer()
         }
     }
 
@@ -2257,6 +2744,7 @@ final class DictaFlowAppState: ObservableObject {
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Whisper returned an empty transcript, so there was nothing to insert.")
             showMainWindow()
+            resetWhisperIdleTimer()
             return
         }
 
@@ -2290,6 +2778,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         updateStatusMessage()
+        resetWhisperIdleTimer()
     }
 
     private func ensureAccessibilityPermissionForInsertion(targetApplicationName: String?) {

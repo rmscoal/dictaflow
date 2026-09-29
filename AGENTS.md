@@ -18,7 +18,7 @@ DictaFlow is a native macOS-only Swift app for private local dictation. It recor
 
 - Main scheme/target: `DictaFlow Dev`.
 - Bundle id: `com.dictaflow.dev`; display name: `DictaFlow Dev`.
-- macOS deployment target: 13.0.
+- macOS deployment target: 14.0.
 - Build with:
 
 ```sh
