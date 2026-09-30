@@ -11,6 +11,14 @@
 		FBD100002D11000100000002 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		FBE942B32D0A000100000007 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */; };
 		FBE942B32D0A000100000008 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		DF300000000000000000A010 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000001 /* MLXLLM */; };
+		DF300000000000000000B010 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000001 /* MLXLLM */; };
+		DF300000000000000000A020 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000002 /* MLXLMCommon */; };
+		DF300000000000000000B020 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000002 /* MLXLMCommon */; };
+		DF300000000000000000A030 /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000003 /* MLXHuggingFace */; };
+		DF300000000000000000B030 /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000003 /* MLXHuggingFace */; };
+		DF300000000000000000A040 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000004 /* Tokenizers */; };
+		DF300000000000000000B040 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000004 /* Tokenizers */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -43,6 +51,7 @@
 		FB742D982F9A63D800AA0EED /* DictaFlow Dev.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "DictaFlow Dev.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		FB742D992F9A63D800AA0EED /* DictaFlow-Dev-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "DictaFlow-Dev-Info.plist"; sourceTree = "<group>"; };
 		FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = "Vendor/whisper.cpp/build-apple/whisper.xcframework"; sourceTree = "<group>"; };
+		DF40000000000000000000001 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = DictaFlowTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -81,6 +90,7 @@
 			path = Services;
 			sourceTree = "<group>";
 		};
+		DF40000000000000000000002 = {isa = PBXFileSystemSynchronizedRootGroup; path = Tests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,6 +98,10 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DF300000000000000000A040 /* Tokenizers in Frameworks */,
+				DF300000000000000000A030 /* MLXHuggingFace in Frameworks */,
+				DF300000000000000000A020 /* MLXLMCommon in Frameworks */,
+				DF300000000000000000A010 /* MLXLLM in Frameworks */,
 				FBD100002D11000100000001 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -96,16 +110,23 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DF300000000000000000B040 /* Tokenizers in Frameworks */,
+				DF300000000000000000B030 /* MLXHuggingFace in Frameworks */,
+				DF300000000000000000B020 /* MLXLMCommon in Frameworks */,
+				DF300000000000000000B010 /* MLXLLM in Frameworks */,
 				FBE942B32D0A000100000007 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DF40000000000000000000006 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		FB2958102F9A4FAA008AE621 = {
 			isa = PBXGroup;
 			children = (
+                DF40000000000000000000001,
+                DF40000000000000000000002,
 				FB742D992F9A63D800AA0EED /* DictaFlow-Dev-Info.plist */,
 				FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */,
 				FBE942B32D0A000100000002 /* Features */,
@@ -148,6 +169,10 @@
 			);
 			name = DictaFlow;
 			packageProductDependencies = (
+				DF30000000000000000000004 /* Tokenizers */,
+				DF30000000000000000000003 /* MLXHuggingFace */,
+				DF30000000000000000000002 /* MLXLMCommon */,
+				DF30000000000000000000001 /* MLXLLM */,
 			);
 			productName = DictaFlow;
 			productReference = FBD100002D11000100000004 /* DictaFlow.app */;
@@ -162,6 +187,7 @@
 				FB2958162F9A4FAA008AE621 /* Frameworks */,
 				FBE942B32D0A000100000009 /* Embed Frameworks */,
 				FB2958172F9A4FAA008AE621 /* Resources */,
+                DF4000000000000000000000B /* Bundle Llama Server Runtime */,
 			);
 			buildRules = (
 			);
@@ -177,13 +203,35 @@
 			);
 			name = "DictaFlow Dev";
 			packageProductDependencies = (
+				DF30000000000000000000004 /* Tokenizers */,
+				DF30000000000000000000003 /* MLXHuggingFace */,
+				DF30000000000000000000002 /* MLXLMCommon */,
+				DF30000000000000000000001 /* MLXLLM */,
 			);
 			productName = "DictaFlow Dev";
 			productReference = FB742D982F9A63D800AA0EED /* DictaFlow Dev.app */;
 			productType = "com.apple.product-type.application";
 		};
+		DF40000000000000000000003 = {
+            isa = PBXNativeTarget;
+            name = DictaFlowTests;
+            productName = DictaFlowTests;
+            productReference = DF40000000000000000000001;
+            productType = "com.apple.product-type.bundle.unit-test";
+            buildConfigurationList = DF40000000000000000000004;
+            buildPhases = (DF40000000000000000000005, DF40000000000000000000006, );
+            fileSystemSynchronizedGroups = (DF40000000000000000000002, );
+            dependencies = (DF40000000000000000000009, );
+            buildRules = ();
+        };
 /* End PBXNativeTarget section */
 
+/* Begin PBXContainerItemProxy section */
+ DF4000000000000000000000A = {isa = PBXContainerItemProxy; containerPortal = FB2958112F9A4FAA008AE621; proxyType = 1; remoteGlobalIDString = FB2958182F9A4FAA008AE621; remoteInfo = "DictaFlow Dev"; };
+/* End PBXContainerItemProxy section */
+/* Begin PBXTargetDependency section */
+ DF40000000000000000000009 = {isa = PBXTargetDependency; target = FB2958182F9A4FAA008AE621; targetProxy = DF4000000000000000000000A; };
+/* End PBXTargetDependency section */
 /* Begin PBXProject section */
 		FB2958112F9A4FAA008AE621 /* Project object */ = {
 			isa = PBXProject;
@@ -211,9 +259,11 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FB2958102F9A4FAA008AE621;
+			packageReferences = (DF3000000000000000000010, DF3000000000000000000011, );
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+                DF40000000000000000000003,
 				FBD100002D11000100000007 /* DictaFlow */,
 				FB2958182F9A4FAA008AE621 /* DictaFlow Dev */,
 			);
@@ -282,6 +332,22 @@
 			shellPath = /bin/sh;
 			shellScript = "set -eu\nROOT_DIR=\"$SRCROOT\"\nVENDOR_DIR=\"$ROOT_DIR/Vendor/whisper.cpp\"\nFRAMEWORK_DIR=\"$VENDOR_DIR/build-apple/whisper.xcframework\"\nBUILD_SCRIPT=\"$VENDOR_DIR/build-xcframework.sh\"\nif [ -d \"$FRAMEWORK_DIR\" ] && [ \"$FRAMEWORK_DIR\" -nt \"$BUILD_SCRIPT\" ]; then\n    exit 0\nfi\nif [ ! -d \"$VENDOR_DIR\" ]; then\n    echo \"error: whisper.cpp vendor sources were not found at $VENDOR_DIR\" >&2\n    exit 1\nfi\nif [ ! -x \"$BUILD_SCRIPT\" ]; then\n    chmod +x \"$BUILD_SCRIPT\"\nfi\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\ncd \"$VENDOR_DIR\"\n\"$BUILD_SCRIPT\"\n";
 		};
+		DF4000000000000000000000B /* Bundle Llama Server Runtime */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/script/ensure_llama_server.sh",
+			);
+			name = "Bundle Llama Server Runtime";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/llama-server",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\n\"$SRCROOT/script/ensure_llama_server.sh\" \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -299,7 +365,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DF40000000000000000000005 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		DF3000000000000000000010 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/ml-explore/mlx-swift-lm"; requirement = {kind = exactVersion; version = 3.31.3; }; };
+		DF3000000000000000000011 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/huggingface/swift-transformers"; requirement = {kind = exactVersion; version = 1.3.0; }; };
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		DF30000000000000000000001 = {isa = XCSwiftPackageProductDependency; package = DF3000000000000000000010; productName = MLXLLM; };
+		DF30000000000000000000002 = {isa = XCSwiftPackageProductDependency; package = DF3000000000000000000010; productName = MLXLMCommon; };
+		DF30000000000000000000003 = {isa = XCSwiftPackageProductDependency; package = DF3000000000000000000010; productName = MLXHuggingFace; };
+		DF30000000000000000000004 = {isa = XCSwiftPackageProductDependency; package = DF3000000000000000000011; productName = Tokenizers; };
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		FBD100002D1100010000000C /* Debug */ = {
@@ -637,6 +716,20 @@
 			};
 			name = Release;
 		};
+		DF40000000000000000000007 = {isa = XCBuildConfiguration; buildSettings = {
+ BUNDLE_LOADER = "$(TEST_HOST)";
+ TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DictaFlow Dev.app/Contents/MacOS/DictaFlow Dev";
+ GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow.dev.tests;
+ PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; MACOSX_DEPLOYMENT_TARGET = 14.0;
+ CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = 627M6A6KRH; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @loader_path/../Frameworks @executable_path/../Frameworks";
+}; name = Debug; };
+		DF40000000000000000000008 = {isa = XCBuildConfiguration; buildSettings = {
+ BUNDLE_LOADER = "$(TEST_HOST)";
+ TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DictaFlow Dev.app/Contents/MacOS/DictaFlow Dev";
+ GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow.dev.tests;
+ PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; MACOSX_DEPLOYMENT_TARGET = 14.0;
+ CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = 627M6A6KRH; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @loader_path/../Frameworks @executable_path/../Frameworks";
+}; name = Release; };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -667,6 +760,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		DF40000000000000000000004 = {isa = XCConfigurationList; buildConfigurations = (DF40000000000000000000007, DF40000000000000000000008, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
 	};
 	rootObject = FB2958112F9A4FAA008AE621 /* Project object */;

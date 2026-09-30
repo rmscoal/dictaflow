@@ -118,6 +118,10 @@ final class DictaFlowAppState: ObservableObject {
     private var workspaceObservers = Set<AnyCancellable>()
     private var recordingMeterTimer: Timer?
     private var whisperIdleEvictionTimer: Timer?
+    private var refinementPreparationTask: Task<URL, Error>?
+    private var refinementShutdownTask: Task<Void, Never>?
+    private var refinementPreparationID = UUID()
+    private var isTerminating = false
     private var isWarmingUpWhisperEncoder = false
     var whisperIdleEvictionInterval: TimeInterval = 600
     private var isRecordingOverlaySessionActive = false
@@ -139,7 +143,7 @@ final class DictaFlowAppState: ObservableObject {
             hotkeyService: CarbonHotkeyService(),
             modelDownloadService: WhisperModelDownloadService(),
             whisperService: WhisperCPPService(),
-            transcriptRefinementService: LlamaCLITranscriptRefinementService(),
+            transcriptRefinementService: LocalTranscriptRefinementService(),
             refinementPromptStore: FileRefinementPromptStore(),
             textInsertionService: SystemTextInsertionService(),
             localNotificationService: UserLocalNotificationService(),
@@ -290,6 +294,18 @@ final class DictaFlowAppState: ObservableObject {
         recordingState.isRecording ? "Stop Recording" : "Start Recording"
     }
 
+    var isDictationActionDisabled: Bool {
+        if isEditingGlobalShortcut || transcriptionState.isBusy || textInsertionState.isBusy {
+            return true
+        }
+        switch recordingState {
+        case .requestingPermission, .starting, .stopping:
+            return true
+        case .idle, .recording:
+            return false
+        }
+    }
+
     var dictationActionSymbolName: String {
         if recordingState.isRecording {
             return "stop.circle.fill"
@@ -312,6 +328,8 @@ final class DictaFlowAppState: ObservableObject {
             break
         case .requestingPermission:
             return "Requesting microphone access."
+        case .starting:
+            return "Preparing to record locally."
         case .recording(let startedAt, _):
             return "Recording since \(startedAt.formatted(date: .omitted, time: .standard))."
         case .stopping:
@@ -378,7 +396,7 @@ final class DictaFlowAppState: ObservableObject {
 
     var refinementStatusText: String {
         if isRefinementServerPreparing {
-            return "Starting the local llama-server and loading \(refinementConfiguration.model.displayName)."
+            return "Preparing Qwen3 0.6B for this recording…"
         }
 
         if let unsupportedReason = refinementModelSupport(for: refinementConfiguration.model).unsupportedReason {
@@ -389,12 +407,11 @@ final class DictaFlowAppState: ObservableObject {
             return missingRefinementRuntimeStatusText
         }
 
-        if refinementConfiguration.isEnabled {
-            return "Cleans transcripts locally before insertion."
+        if !isSelectedRefinementModelPrepared {
+            return "Download Qwen3 0.6B for \(refinementConfiguration.model.usesMLX ? "MLX" : "standard refinement"). Your original transcript is used until it is ready."
         }
-
-        if !hasPreparedRefinementModel {
-            return "Choose and prepare a local refinement model before turning this on."
+        if refinementConfiguration.isEnabled {
+            return "Loads when recording starts and sleeps after five minutes without use."
         }
 
         return "Refinement is off. DictaFlow will insert the raw Whisper transcript."
@@ -433,72 +450,9 @@ final class DictaFlowAppState: ObservableObject {
         refinementModelSupport(for: model).isSupported
     }
 
-    func refinementModelPickerTitle(for model: RefinementModelDescriptor) -> String {
-        let badges = refinementModelBadges(for: model).joined(separator: ", ")
-        let baseTitle = "\(model.displayName) (\(model.approximateDiskSizeDescription), \(model.estimatedRuntimeMemoryDescription))"
-        return badges.isEmpty ? baseTitle : "\(baseTitle) - \(badges)"
-    }
-
-    func refinementModelMenuTitle(for model: RefinementModelDescriptor) -> String {
-        let compactBadges = refinementModelBadges(for: model).map { badge in
-            switch badge {
-            case "Best quality":
-                return "Best"
-            case "Recommended for this Mac":
-                return "Rec"
-            case "Unavailable on this Mac":
-                return "Unavailable"
-            default:
-                return badge
-            }
-        }
-
-        return compactBadges.isEmpty ? model.displayName : "\(model.displayName) (\(compactBadges.joined(separator: ", ")))"
-    }
-
     func refinementModelDetailText(for model: RefinementModelDescriptor) -> String {
-        let support = refinementModelSupport(for: model)
-
-        if let unsupportedReason = support.unsupportedReason {
-            return "\(unsupportedReason) \(model.detailText)"
-        }
-
-        let badges = refinementModelBadges(for: model)
-
-        if badges.contains("Best quality"), badges.contains("Recommended for this Mac") {
-            return "Best quality and recommended for this Mac. \(model.detailText)"
-        }
-
-        if badges.contains("Best quality") {
-            return "Best quality, but above this Mac's recommendation if not also marked recommended. \(model.detailText)"
-        }
-
-        if badges.contains("Recommended for this Mac") {
-            return "Recommended for this Mac. \(model.detailText)"
-        }
-
+        if let reason = refinementModelSupport(for: model).unsupportedReason { return reason }
         return model.detailText
-    }
-
-    private func refinementModelBadges(for model: RefinementModelDescriptor) -> [String] {
-        let recommendation = refinementRecommendation
-        let support = recommendation.support(for: model)
-
-        if !support.isSupported {
-            return ["Unavailable on this Mac"]
-        }
-
-        var badges: [String] = []
-
-        if model == recommendation.bestModel {
-            badges.append("Best quality")
-        }
-
-        if model == recommendation.recommendedModel {
-            badges.append("Recommended for this Mac")
-        }
-
-        return badges
     }
 
     var whisperSettingsLocked: Bool {
@@ -509,7 +463,7 @@ final class DictaFlowAppState: ObservableObject {
         switch recordingState {
         case .idle:
             break
-        case .requestingPermission, .recording, .stopping:
+        case .requestingPermission, .starting, .recording, .stopping:
             return true
         }
 
@@ -724,7 +678,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         return !lastTranscription.insertionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !recordingState.isRecording
+            && recordingState == .idle
             && !transcriptionState.isBusy
             && !textInsertionState.isBusy
     }
@@ -909,71 +863,49 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func updateRefinementEnabled(_ isEnabled: Bool) {
-        guard !isRefinementServerPreparing else {
-            return
-        }
-
-        guard refinementConfiguration.isEnabled != isEnabled else {
-            return
-        }
-
-        if !isEnabled {
-            refinementConfiguration.isEnabled = false
-            persistRefinementConfiguration()
-            isRefinementServerPreparing = false
-            Task { [transcriptRefinementService] in
-                await transcriptRefinementService.stop()
+        guard !whisperSettingsLocked, refinementConfiguration.isEnabled != isEnabled else { return }
+        if isEnabled {
+            guard isSelectedRefinementModelSupported, isRefinementRuntimeAvailable else {
+                setPreservedStatusMessage("Local refinement is unavailable. Check the Refinement page.")
+                showMainWindowPage(.refinement)
+                return
             }
-            updateStatusMessage()
-            return
+            guard isSelectedRefinementModelPrepared else {
+                setPreservedStatusMessage("Download Qwen3 0.6B before turning on text refinement.")
+                showMainWindowPage(.refinement)
+                return
+            }
         }
-
-        guard isSelectedRefinementModelSupported else {
-            setPreservedStatusMessage(unsupportedRefinementModelMessage(for: refinementConfiguration.model))
-            showMainWindow()
-            return
-        }
-
-        guard isRefinementRuntimeAvailable else {
-            setPreservedStatusMessage(missingRefinementRuntimeEnableMessage)
-            showMainWindow()
-            return
-        }
-
-        guard isSelectedRefinementModelPrepared else {
-            setPreservedStatusMessage("Download and select a refinement model from Models before turning on local cleanup.")
-            showMainWindowPage(.models)
-            return
-        }
-
-        startPreparedRefinementServer(enableAfterStart: true)
+        refinementConfiguration.isEnabled = isEnabled
+        persistRefinementConfiguration()
+        if !isEnabled { stopRefinement() }
+        updateStatusMessage()
     }
 
     func updateRefinementModel(_ model: RefinementModelDescriptor) {
-        guard !isRefinementServerPreparing else {
-            return
-        }
-
-        guard refinementConfiguration.model != model else {
-            return
-        }
-
-        guard isRefinementModelSupported(model) else {
-            setPreservedStatusMessage(unsupportedRefinementModelMessage(for: model))
-            return
-        }
-
-        guard isRefinementModelPrepared(model) else {
-            setPreservedStatusMessage("Prepare \(model.displayName) from the Models page before selecting it.")
-            return
-        }
-
+        guard !refinementSettingsLocked, RefinementModelDescriptor.allCases.contains(model), refinementConfiguration.model != model else { return }
+        stopRefinement()
         refinementConfiguration.model = model
         persistRefinementConfiguration()
+        refreshRefinementRuntimeAvailability()
         updateStatusMessage()
+    }
 
-        if refinementConfiguration.isEnabled {
-            startPreparedRefinementServer(enableAfterStart: true)
+    func updateExperimentalMLXEnabled(_ enabled: Bool) {
+        updateRefinementModel(enabled ? .qwen3SmallMLX : .qwen3Small)
+    }
+
+    private func stopRefinement() {
+        refinementPreparationID = UUID()
+        let preparation = refinementPreparationTask
+        preparation?.cancel()
+        refinementPreparationTask = nil
+        isRefinementServerPreparing = false
+        let previousShutdown = refinementShutdownTask
+        refinementShutdownTask = Task { [transcriptRefinementService] in
+            await previousShutdown?.value
+            await transcriptRefinementService.stop()
+            _ = try? await preparation?.value
         }
     }
 
@@ -1125,82 +1057,42 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func refreshRefinementRuntimeAvailability() {
+        let model = refinementConfiguration.model
         Task { [weak self] in
-            guard let self else {
-                return
-            }
-
-            let isAvailable = await self.transcriptRefinementService.isRuntimeAvailable()
-
-            await MainActor.run {
-                self.isRefinementRuntimeAvailable = isAvailable
-                if !isAvailable, self.refinementConfiguration.isEnabled {
-                    self.refinementConfiguration.isEnabled = false
-                    self.persistRefinementConfiguration()
-                    self.setPreservedStatusMessage(self.missingRefinementRuntimeDisabledMessage)
-                } else if isAvailable, self.refinementConfiguration.isEnabled {
-                    self.startPreparedRefinementServer(enableAfterStart: false)
-                }
-                self.updateStatusMessage()
-            }
+            guard let self else { return }
+            let available = await self.transcriptRefinementService.isRuntimeAvailable(for: model)
+            guard self.refinementConfiguration.model == model else { return }
+            self.isRefinementRuntimeAvailable = available
+            // Checking availability never starts a server or loads model weights.
+            self.updateStatusMessage()
         }
     }
 
-    private func startPreparedRefinementServer(enableAfterStart: Bool) {
+    private func prewarmRefinementModel() {
+        guard !isTerminating, refinementConfiguration.isEnabled, isSelectedRefinementModelPrepared,
+              refinementPreparationTask == nil else { return }
         let model = refinementConfiguration.model
-
+        let id = UUID()
+        refinementPreparationID = id
         isRefinementServerPreparing = true
-        clearPreservedStatusMessage()
-        updateStatusMessage()
-
-        Task { [weak self, transcriptRefinementService] in
-            guard let modelURL = await self?.modelDownloadService.verifiedRefinementModelURL(for: model) else {
-                await MainActor.run {
+        let shutdown = refinementShutdownTask
+        refinementPreparationTask = Task { [weak self, transcriptRefinementService, modelDownloadService] in
+            defer {
+                if self?.refinementPreparationID == id {
                     self?.isRefinementServerPreparing = false
-                    self?.setPreservedStatusMessage("Choose and prepare a refinement model before turning on local cleanup.")
-                    self?.showMainWindow()
-                }
-                return
-            }
-
-            do {
-                try await transcriptRefinementService.prepare(modelURL: modelURL)
-
-                await MainActor.run {
-                    guard let self else {
-                        return
-                    }
-
-                    self.isRefinementServerPreparing = false
-                    guard self.refinementConfiguration.model == model else {
-                        Task { [transcriptRefinementService] in
-                            await transcriptRefinementService.stop()
-                        }
-                        return
-                    }
-
-                    if enableAfterStart {
-                        self.refinementConfiguration.isEnabled = true
-                        self.persistRefinementConfiguration()
-                    }
-
-                    self.clearPreservedStatusMessage()
-                    self.updateStatusMessage()
-                }
-            } catch {
-                await MainActor.run {
-                    guard let self else {
-                        return
-                    }
-
-                    self.isRefinementServerPreparing = false
-                    self.refinementConfiguration.isEnabled = false
-                    self.persistRefinementConfiguration()
-                    self.setPreservedStatusMessage("Could not start local LLM refinement. \(error.localizedDescription)")
-                    self.showMainWindow()
-                    self.updateStatusMessage()
+                    self?.refinementPreparationTask = nil
+                    self?.updateStatusMessage()
                 }
             }
+            await shutdown?.value
+            try Task.checkCancellation()
+            guard let modelURL = await modelDownloadService.verifiedRefinementModelURL(for: model) else {
+                throw TranscriptRefinementServiceError.failedToRun("The model could not be verified. Remove it and download it again from Refinement.")
+            }
+            try Task.checkCancellation()
+            try await transcriptRefinementService.prepare(modelURL: modelURL)
+            try Task.checkCancellation()
+            return modelURL
         }
     }
 
@@ -1652,6 +1544,7 @@ final class DictaFlowAppState: ObservableObject {
             }
 
             do {
+                await self.refinementShutdownTask?.value
                 let deletedByteCount = try await self.modelDownloadService.deleteModelFiles(filesToDelete)
 
                 if filesToDelete.contains(where: { $0.category == .refinement }) {
@@ -1684,10 +1577,11 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
-        guard refinementConfiguration.model != model else {
-            setPreservedStatusMessage("Select another model before deleting \(model.displayName).")
+        if refinementConfiguration.model == model, refinementConfiguration.isEnabled {
+            setPreservedStatusMessage("Turn off text refinement before removing its model.")
             return
         }
+        if refinementConfiguration.model == model { stopRefinement() }
 
         isDeletingModel = true
         clearPreservedStatusMessage()
@@ -1699,6 +1593,7 @@ final class DictaFlowAppState: ObservableObject {
             }
 
             do {
+                await self.refinementShutdownTask?.value
                 let deletedByteCount = try await self.modelDownloadService.deleteModelFiles([file])
                 await transcriptRefinementService.reloadModels()
 
@@ -1796,14 +1691,17 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func prepareForTermination() {
+        isTerminating = true
         stopRecordingMetering()
         cancelWhisperIdleTimer()
         restoreRecordingPlaybackAdjustmentForTermination()
         recordingOverlayRouter?.updateOverlay(nil, cancelAction: {})
         hotkeyService.unregisterToggleHotkey()
-        Task { [transcriptRefinementService] in
-            await transcriptRefinementService.stop()
-        }
+        stopRefinement()
+    }
+
+    func waitForRefinementShutdown() async {
+        await refinementShutdownTask?.value
     }
 
     func quit() {
@@ -2145,19 +2043,7 @@ final class DictaFlowAppState: ObservableObject {
         refinementDownloads[model] = nil
         refinementDownloadErrors[model] = nil
 
-        let otherPreparedModels = RefinementModelDescriptor.allCases.filter {
-            $0 != model && isRefinementModelPrepared($0)
-        }
-
-        if refinementConfiguration.model == model {
-            setPreservedStatusMessage("Downloaded \(model.displayName). It is ready for text refinement.")
-        } else if otherPreparedModels.isEmpty {
-            refinementConfiguration.model = model
-            persistRefinementConfiguration()
-            setPreservedStatusMessage("Downloaded \(model.displayName). It is now selected for text refinement.")
-        } else {
-            setPreservedStatusMessage("Downloaded \(model.displayName) in the background. Still using \(refinementConfiguration.model.displayName).")
-        }
+        setPreservedStatusMessage("Downloaded \(model.displayName). It is ready for text refinement.")
 
         refreshInstalledLocalModelFiles()
 
@@ -2171,7 +2057,11 @@ final class DictaFlowAppState: ObservableObject {
 
         activeRefinementDownloadTokens[model] = nil
         refinementDownloads[model] = nil
-        setPreservedStatusMessage("Cancelled the \(model.displayName) download. The partial file was removed. Downloading again starts from the beginning.")
+        if model.usesMLX {
+            setPreservedStatusMessage("Cancelled the Qwen3 MLX download. Any verified files are kept; downloading again continues with the remaining files.")
+        } else {
+            setPreservedStatusMessage("Cancelled the \(model.displayName) download. The partial file was removed. Downloading again starts from the beginning.")
+        }
         updateStatusMessage()
     }
 
@@ -2275,7 +2165,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         switch recordingState {
-        case .requestingPermission, .stopping:
+        case .requestingPermission, .starting, .stopping:
             return
         case .idle:
             await beginRecordingFlow()
@@ -2298,11 +2188,11 @@ final class DictaFlowAppState: ObservableObject {
             ? nil
             : captureCurrentInsertionTargetApplication()
 
-        if microphonePermissionState != .granted {
-            setRecordingOverlaySessionActive(true)
-            recordingState = .requestingPermission
-            updateStatusMessage()
-        }
+        // Reserve startup before any await so another shortcut cannot start
+        // a second recorder and reset the first session's state on failure.
+        recordingState = microphonePermissionState == .granted ? .starting : .requestingPermission
+        setRecordingOverlaySessionActive(true)
+        updateStatusMessage()
 
         let permissionState = await permissionService.requestMicrophonePermissionIfNeeded()
         microphonePermissionState = permissionState
@@ -2317,6 +2207,8 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         do {
+            recordingState = .starting
+            updateStatusMessage()
             await beginRecordingPlaybackAdjustment()
             let fileURL = try await audioRecorderService.startRecording()
             recordingState = .recording(startedAt: Date(), fileURL: fileURL)
@@ -2324,6 +2216,7 @@ final class DictaFlowAppState: ObservableObject {
             startRecordingMetering()
             resetWhisperIdleTimer()
             prewarmWhisperModel()
+            prewarmRefinementModel()
             updateStatusMessage()
         } catch {
             await restoreRecordingPlaybackAdjustment()
@@ -2497,6 +2390,13 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         switch recordingState {
+        case .starting:
+            return RecordingOverlayPresentation(
+                phase: .starting,
+                title: "Starting Recording",
+                detail: "Preparing local audio",
+                audioLevel: 0
+            )
         case .requestingPermission:
             return RecordingOverlayPresentation(
                 phase: .requestingPermission,
@@ -2597,6 +2497,7 @@ final class DictaFlowAppState: ObservableObject {
             lastTranscription = transcription
             clearPreservedStatusMessage()
             let insertionTranscription = await refinedTranscriptionIfNeeded(transcription)
+            guard !isTerminating else { return }
 
             if isOnboardingPracticeSession {
                 let practiceText = insertionTranscription.insertionText
@@ -2656,19 +2557,18 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func refinedTranscriptionIfNeeded(_ transcription: WhisperTranscriptionResult) async -> WhisperTranscriptionResult {
-        guard refinementConfiguration.isEnabled else {
+        guard !isTerminating, refinementConfiguration.isEnabled else {
             return transcription
         }
 
-        guard !isRefinementServerPreparing else {
+        let model = refinementConfiguration.model
+
+        guard isSelectedRefinementModelPrepared else {
             var skippedTranscription = transcription
-            skippedTranscription.refinementStatus = .skipped(reason: "The local refinement server was still starting when transcription finished.")
+            skippedTranscription.refinementStatus = .skipped(reason: "Download Qwen3 0.6B from the Refinement page.")
             lastTranscription = skippedTranscription
-            updateStatusMessage()
             return skippedTranscription
         }
-
-        let model = refinementConfiguration.model
 
         guard isRefinementModelSupported(model) else {
             let message = unsupportedRefinementModelMessage(for: model)
@@ -2684,25 +2584,21 @@ final class DictaFlowAppState: ObservableObject {
         transcriptionState = .refining(model)
         updateStatusMessage()
 
-        guard let modelURL = await modelDownloadService.verifiedRefinementModelURL(for: model) else {
-            refinementConfiguration.isEnabled = false
-            persistRefinementConfiguration()
-            var skippedTranscription = transcription
-            skippedTranscription.refinementStatus = .skipped(reason: "\(model.displayName) was not prepared.")
-            lastTranscription = skippedTranscription
-            setPreservedStatusMessage("Refinement was turned off because \(model.displayName) is not prepared. DictaFlow will use the raw Whisper text.")
-            showMainWindow()
-            updateStatusMessage()
-            return skippedTranscription
-        }
-
+        let configuration = refinementConfiguration
+        let prompt = refinementPromptText
+        prewarmRefinementModel()
         do {
+            guard let preparation = refinementPreparationTask else {
+                throw TranscriptRefinementServiceError.failedToRun("Download Qwen3 0.6B from the Refinement page.")
+            }
+            let modelURL = try await preparation.value
+            guard !isTerminating else { return transcription }
             let refinement = try await transcriptRefinementService.refine(
                 transcript: transcription.text,
                 whisperTaskMode: transcription.taskMode,
                 modelURL: modelURL,
-                configuration: refinementConfiguration,
-                promptTemplate: refinementPromptText
+                configuration: configuration,
+                promptTemplate: prompt
             )
 
             var refinedTranscription = transcription
@@ -2717,6 +2613,7 @@ final class DictaFlowAppState: ObservableObject {
             updateStatusMessage()
             return refinedTranscription
         } catch {
+            guard !isTerminating else { return transcription }
             let message = "Could not refine the transcript locally, so DictaFlow will use the raw Whisper text. \(error.localizedDescription)"
             var failedTranscription = transcription
             failedTranscription.refinementStatus = .failed(
@@ -2961,6 +2858,9 @@ final class DictaFlowAppState: ObservableObject {
 
     private func updateStatusMessage() {
         switch recordingState {
+        case .starting:
+            statusMessage = "Preparing local audio before recording starts."
+            return
         case .requestingPermission:
             statusMessage = "DictaFlow is requesting microphone access before starting local dictation."
             return

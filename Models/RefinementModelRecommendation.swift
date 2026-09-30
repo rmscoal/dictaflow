@@ -40,9 +40,7 @@ struct RefinementModelRecommendation: Equatable, Sendable {
         hardwareProfile: MacHardwareProfile,
         preparedModels: Set<RefinementModelDescriptor>
     ) -> RefinementModelDescriptor {
-        RefinementModelDescriptor.allCases
-            .filter { support(for: $0, hardwareProfile: hardwareProfile, isPrepared: preparedModels.contains($0)).isSupported }
-            .max { $0.qualityRank < $1.qualityRank } ?? .qwen25HalfB
+        .qwen3Small
     }
 
     private static func support(
@@ -50,6 +48,9 @@ struct RefinementModelRecommendation: Equatable, Sendable {
         hardwareProfile: MacHardwareProfile,
         isPrepared: Bool
     ) -> RefinementModelSupport {
+        #if !arch(arm64)
+        if model.usesMLX { return .unsupported("MLX refinement requires Apple Silicon.") }
+        #endif
         if hardwareProfile.physicalMemoryGB < model.minimumMemoryGB {
             return .unsupported("Needs at least \(model.minimumMemoryGB) GB memory.")
         }

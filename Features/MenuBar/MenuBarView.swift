@@ -138,32 +138,20 @@ struct MenuBarView: View {
                 subtitle: refinementSubtitle,
                 trailing: {
                     HStack(spacing: 6) {
-                        Toggle("", isOn: refinementEnabledBinding)
+                        Toggle("Text refinement", isOn: refinementEnabledBinding)
                             .labelsHidden()
                             .toggleStyle(AccentSwitchStyle())
                             .disabled(appState.refinementSettingsLocked)
 
-                        Menu {
-                            ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
-                                Button {
-                                    appState.updateRefinementModel(model)
-                                } label: {
-                                    if model == appState.refinementConfiguration.model {
-                                        Label(appState.refinementModelMenuTitle(for: model), systemImage: "checkmark")
-                                    } else {
-                                        Text(appState.refinementModelMenuTitle(for: model))
-                                    }
-                                }
-                                .disabled(
-                                    !appState.isRefinementModelSupported(model)
-                                        || !appState.isRefinementModelPrepared(model)
-                                )
-                            }
+                        Button {
+                            appState.showMainWindowPage(.refinement)
                         } label: {
-                            ChevronButtonLabel()
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 11))
                         }
                         .buttonStyle(.plain)
-                        .disabled(appState.refinementSettingsLocked)
+                        .help("Open text refinement settings")
+                        .accessibilityLabel("Text refinement settings")
                     }
                 }
             )
@@ -228,9 +216,7 @@ struct MenuBarView: View {
     }
 
     private var isRecordControlDisabled: Bool {
-        appState.isEditingGlobalShortcut
-            || appState.transcriptionState.isBusy
-            || appState.textInsertionState.isBusy
+        appState.isDictationActionDisabled
     }
 
     private var refinementEnabledBinding: Binding<Bool> {
@@ -245,7 +231,7 @@ struct MenuBarView: View {
             return "Off · Raw Whisper output"
         }
 
-        return "\(appState.refinementModelMenuTitle(for: appState.refinementConfiguration.model)) · Local"
+        return appState.isSelectedRefinementModelPrepared ? "Qwen3 0.6B · Local" : "Qwen3 · Download needed"
     }
 }
 
