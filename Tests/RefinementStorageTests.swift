@@ -21,48 +21,41 @@ final class RefinementStorageTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
 
-    func testMLXBundleRequiresEveryFileAndValidChecksums() async throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let model = RefinementModelDescriptor.qwen3SmallMLX
-        let bundle = directory.appendingPathComponent(model.filename)
-        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
-        let service = WhisperModelDownloadService(modelsDirectoryURL: directory)
-        XCTAssertFalse(service.isRefinementModelPrepared(model))
-        for file in MLXRefinementModelFile.files {
-            try Data("invalid fixture".utf8).write(to: bundle.appendingPathComponent(file.filename))
-        }
-        XCTAssertTrue(service.isRefinementModelPrepared(model))
-        let verified = await service.verifiedRefinementModelURL(for: model)
-        XCTAssertNil(verified, "Present files must not bypass checksum verification")
-        let partial = bundle.appendingPathComponent("model.safetensors.download")
-        try Data([1, 2, 3]).write(to: partial)
-        XCTAssertEqual(service.removeIncompleteDownloads(), 3)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: bundle.appendingPathComponent("config.json").path))
-    }
 
-    func testMLXBundleDoesNotFollowDirectorySymlinks() async throws {
+    func testRetiredBundleRemainsAvailableForExplicitCleanup() async throws {
         let directory = try makeDirectory()
-        let externalDirectory = try makeDirectory()
+        let external = try makeDirectory()
         defer {
             try? FileManager.default.removeItem(at: directory)
-            try? FileManager.default.removeItem(at: externalDirectory)
+            try? FileManager.default.removeItem(at: external)
         }
-        for file in MLXRefinementModelFile.files {
-            try Data("fixture".utf8).write(to: externalDirectory.appendingPathComponent(file.filename))
-        }
-        let model = RefinementModelDescriptor.qwen3SmallMLX
-        try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent(model.filename),
-            withDestinationURL: externalDirectory)
+        let bundle = directory.appendingPathComponent("qwen3-0.6b-mlx-4bit")
+        try FileManager.default.createSymbolicLink(at: bundle, withDestinationURL: external)
         let service = WhisperModelDownloadService(modelsDirectoryURL: directory)
-        XCTAssertFalse(service.isRefinementModelPrepared(model))
-        XCTAssertTrue(service.installedModelFiles().isEmpty)
+        XCTAssertTrue(service.installedModelFiles().isEmpty, "Do not list external symlink targets")
+        try FileManager.default.removeItem(at: bundle)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        try Data([1, 2, 3]).write(to: bundle.appendingPathComponent("model.safetensors"))
+        let file = try XCTUnwrap(service.installedModelFiles().first)
+        XCTAssertFalse(file.isEnabled)
+        let freed = try await service.deleteModelFiles([file])
+        XCTAssertEqual(freed, 3)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: bundle.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: external.path))
+    }
+
+    func testStandardModelRequiresValidChecksum() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = RefinementModelDescriptor.qwen3Small
+        try Data("invalid fixture".utf8).write(to: directory.appendingPathComponent(model.filename))
+        let service = WhisperModelDownloadService(modelsDirectoryURL: directory)
+        XCTAssertTrue(service.isRefinementModelPrepared(model))
         let verified = await service.verifiedRefinementModelURL(for: model)
         XCTAssertNil(verified)
     }
 
-    func testCancelledMLXDownloadUsesCancellationInsteadOfFailure() async throws {
+    func testCancelledRefinementDownloadUsesCancellationInsteadOfFailure() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let started = XCTestExpectation(description: "Model download started")
@@ -72,15 +65,15 @@ final class RefinementStorageTests: XCTestCase {
         configuration.protocolClasses = [ModelDownloadCancellationFixture.self]
         let service = WhisperModelDownloadService(session: URLSession(configuration: configuration), modelsDirectoryURL: directory)
         let download = Task {
-            try await service.ensureRefinementModelAvailable(.qwen3SmallMLX) { _ in }
+            try await service.ensureRefinementModelAvailable(.qwen3Small) { _ in }
         }
         await fulfillment(of: [started], timeout: 5)
-        await service.cancelDownload(modelIdentifier: RefinementModelDescriptor.qwen3SmallMLX.modelIdentifier)
+        await service.cancelDownload(modelIdentifier: RefinementModelDescriptor.qwen3Small.modelIdentifier)
         do {
             _ = try await download.value
             XCTFail("A cancelled download must not finish successfully")
         } catch is CancellationError {
-            XCTAssertFalse(service.isRefinementModelPrepared(.qwen3SmallMLX))
+            XCTAssertFalse(service.isRefinementModelPrepared(.qwen3Small))
         }
     }
 

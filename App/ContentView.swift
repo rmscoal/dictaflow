@@ -73,7 +73,7 @@ struct ContentView: View {
                 appState.downloadRefinementModel(selectedRefinementModel)
             }
         } message: {
-            Text("Download \(selectedRefinementModel.approximateDiskSizeDescription) for \(selectedRefinementModel.usesMLX ? "experimental MLX" : "standard refinement"). After download, cleanup runs entirely on this Mac.")
+            Text("Download \(selectedRefinementModel.approximateDiskSizeDescription) for standard refinement. After download, cleanup runs entirely on this Mac.")
         }
         .alert(
             "Delete Unused Models?",
@@ -728,7 +728,7 @@ struct ContentView: View {
                         .padding(.vertical, 3)
                         .background(AppTheme.controlFill, in: Capsule())
                 }
-                Text("\(model.usesMLX ? "MLX · Experimental" : "Standard inference") · \(model.approximateDiskSizeDescription)")
+                Text("Standard inference · \(model.approximateDiskSizeDescription)")
                     .font(.system(size: 11))
                     .foregroundStyle(AppTheme.secondaryText)
                 Text("Clean punctuation, wording, and self-corrections privately on your Mac.")
@@ -804,23 +804,6 @@ struct ContentView: View {
                     .foregroundStyle(AppTheme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.vertical, 4)
-
-                FormSectionTitle("Experimental")
-                    .padding(.top, 7)
-                SettingsFormPanel {
-                    SettingsFormRow(
-                        title: "Use MLX",
-                        detail: "Compare native Apple Silicon inference. Uses a separate 347 MB model download."
-                    ) {
-                        Toggle("Use MLX (experimental)", isOn: Binding(
-                            get: { appState.refinementConfiguration.model.usesMLX },
-                            set: { appState.updateExperimentalMLXEnabled($0) }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .disabled(appState.refinementSettingsLocked || !appState.refinementDownloads.isEmpty)
-                    }
-                }
 
                 FormSectionTitle("System prompt")
                     .padding(.top, 7)

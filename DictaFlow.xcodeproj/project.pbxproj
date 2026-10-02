@@ -11,14 +11,6 @@
 		FBD100002D11000100000002 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		FBE942B32D0A000100000007 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */; };
 		FBE942B32D0A000100000008 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		DF300000000000000000A010 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000001 /* MLXLLM */; };
-		DF300000000000000000B010 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000001 /* MLXLLM */; };
-		DF300000000000000000A020 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000002 /* MLXLMCommon */; };
-		DF300000000000000000B020 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000002 /* MLXLMCommon */; };
-		DF300000000000000000A030 /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000003 /* MLXHuggingFace */; };
-		DF300000000000000000B030 /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000003 /* MLXHuggingFace */; };
-		DF300000000000000000A040 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000004 /* Tokenizers */; };
-		DF300000000000000000B040 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = DF30000000000000000000004 /* Tokenizers */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -98,10 +90,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DF300000000000000000A040 /* Tokenizers in Frameworks */,
-				DF300000000000000000A030 /* MLXHuggingFace in Frameworks */,
-				DF300000000000000000A020 /* MLXLMCommon in Frameworks */,
-				DF300000000000000000A010 /* MLXLLM in Frameworks */,
 				FBD100002D11000100000001 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -110,10 +98,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DF300000000000000000B040 /* Tokenizers in Frameworks */,
-				DF300000000000000000B030 /* MLXHuggingFace in Frameworks */,
-				DF300000000000000000B020 /* MLXLMCommon in Frameworks */,
-				DF300000000000000000B010 /* MLXLLM in Frameworks */,
 				FBE942B32D0A000100000007 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -168,12 +152,6 @@
 				FBE942B32D0A000100000004 /* Services */,
 			);
 			name = DictaFlow;
-			packageProductDependencies = (
-				DF30000000000000000000004 /* Tokenizers */,
-				DF30000000000000000000003 /* MLXHuggingFace */,
-				DF30000000000000000000002 /* MLXLMCommon */,
-				DF30000000000000000000001 /* MLXLLM */,
-			);
 			productName = DictaFlow;
 			productReference = FBD100002D11000100000004 /* DictaFlow.app */;
 			productType = "com.apple.product-type.application";
@@ -202,12 +180,6 @@
 				FBE942B32D0A000100000004 /* Services */,
 			);
 			name = "DictaFlow Dev";
-			packageProductDependencies = (
-				DF30000000000000000000004 /* Tokenizers */,
-				DF30000000000000000000003 /* MLXHuggingFace */,
-				DF30000000000000000000002 /* MLXLMCommon */,
-				DF30000000000000000000001 /* MLXLLM */,
-			);
 			productName = "DictaFlow Dev";
 			productReference = FB742D982F9A63D800AA0EED /* DictaFlow Dev.app */;
 			productType = "com.apple.product-type.application";
@@ -259,7 +231,6 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FB2958102F9A4FAA008AE621;
-			packageReferences = (DF3000000000000000000010, DF3000000000000000000011, );
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -367,18 +338,6 @@
 		};
 		DF40000000000000000000005 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		DF3000000000000000000010 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/ml-explore/mlx-swift-lm"; requirement = {kind = exactVersion; version = 3.31.3; }; };
-		DF3000000000000000000011 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/huggingface/swift-transformers"; requirement = {kind = exactVersion; version = 1.3.0; }; };
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		DF30000000000000000000001 = {isa = XCSwiftPackageProductDependency; package = DF3000000000000000000010; productName = MLXLLM; };
-		DF30000000000000000000002 = {isa = XCSwiftPackageProductDependency; package = DF3000000000000000000010; productName = MLXLMCommon; };
-		DF30000000000000000000003 = {isa = XCSwiftPackageProductDependency; package = DF3000000000000000000010; productName = MLXHuggingFace; };
-		DF30000000000000000000004 = {isa = XCSwiftPackageProductDependency; package = DF3000000000000000000011; productName = Tokenizers; };
-/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		FBD100002D1100010000000C /* Debug */ = {

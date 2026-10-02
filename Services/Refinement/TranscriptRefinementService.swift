@@ -79,17 +79,27 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         let task = Task {
             if oldProcess.isRunning {
                 oldProcess.terminate()
-                let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-                while oldProcess.isRunning && ContinuousClock.now < deadline {
-                    try? await Task.sleep(for: .milliseconds(50))
+                if !(await Self.waitForExit(of: oldProcess, timeout: .seconds(3))) {
+                    Darwin.kill(oldProcess.processIdentifier, SIGKILL)
+                    if !(await Self.waitForExit(of: oldProcess, timeout: .seconds(1))) {
+                        logger.error("Refinement runtime exit was not observed after forced shutdown.")
+                    }
                 }
-                if oldProcess.isRunning { Darwin.kill(oldProcess.processIdentifier, SIGKILL) }
-                await Task.detached { oldProcess.waitUntilExit() }.value
             }
         }
         shutdownTask = task
         await task.value
         shutdownTask = nil
+    }
+
+    // Foundation observes and reaps Process exits. Poll asynchronously instead of
+    // calling waitUntilExit(), which can stall on a background thread's run loop.
+    nonisolated private static func waitForExit(of process: Process, timeout: Duration) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while process.isRunning && ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return !process.isRunning
     }
 
     func refine(transcript: String, whisperTaskMode: WhisperTaskMode, modelURL: URL,

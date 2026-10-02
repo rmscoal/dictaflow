@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import DictaFlow_Dev
@@ -5,15 +6,14 @@ import XCTest
 @MainActor
 final class RefinementLifecycleTests: XCTestCase {
     func testLegacyPreferencesMigrateWithoutDisablingRefinement() throws {
-        for model in ["qwen25HalfB", "qwen25OneAndHalfB", "qwen25ThreeB", "smolLM2OnePointSevenB"] {
+        for model in ["qwen25HalfB", "qwen25OneAndHalfB", "qwen25ThreeB", "smolLM2OnePointSevenB", "qwen3SmallMLX"] {
             let data = Data("{\"isEnabled\":true,\"model\":\"\(model)\",\"mode\":\"smartCleanup\"}".utf8)
             let configuration = try JSONDecoder().decode(RefinementConfiguration.self, from: data)
             XCTAssertEqual(configuration.model, .qwen3Small)
             XCTAssertTrue(configuration.isEnabled)
             XCTAssertEqual(configuration.mode, .smartCleanup)
         }
-        let mlx = RefinementConfiguration(isEnabled: true, model: .qwen3SmallMLX, mode: .smartCleanup)
-        XCTAssertEqual(try JSONDecoder().decode(RefinementConfiguration.self, from: JSONEncoder().encode(mlx)), mlx)
+
     }
 
     func testUnsuccessfulHealthResponsesWaitAndConcurrentPreparationSharesServer() async throws {
@@ -74,6 +74,46 @@ final class RefinementLifecycleTests: XCTestCase {
         await service.stop()
     }
 
+    func testForcedShutdownIsBoundedAndConcurrentStopsAllowRestart() async throws {
+        let fixture = try makeRuntime(exitImmediately: false, ignoresTermination: true)
+        let directory = fixture.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        RefinementHTTPFixture.reset()
+        let service = LlamaCLITranscriptRefinementService(executableURL: fixture, urlSession: fixtureSession())
+        try await service.prepare(modelURL: fixture.appendingPathExtension("gguf"))
+        // The fixture writes its PID after installing the SIGTERM handler.
+        let pidURL = directory.appendingPathComponent("pid")
+        let readyDeadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !FileManager.default.fileExists(atPath: pidURL.path), ContinuousClock.now < readyDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let pid = try XCTUnwrap(Int32(String(contentsOf: pidURL, encoding: .utf8)))
+        let started = ContinuousClock.now
+        async let first: Void = service.stop()
+        async let second: Void = service.stop()
+        _ = await (first, second)
+        XCTAssertGreaterThanOrEqual(started.duration(to: .now), .seconds(3))
+        XCTAssertLessThan(started.duration(to: .now), .seconds(5))
+        XCTAssertEqual(Darwin.kill(pid, 0), -1, "The owned runtime must actually exit")
+        XCTAssertEqual(errno, ESRCH)
+
+        // Relaunch the same executable with normal termination behavior.
+        let script = try String(contentsOf: fixture, encoding: .utf8)
+        try script.replacingOccurrences(of: "signal.signal(signal.SIGTERM, signal.SIG_IGN)", with: "")
+            .write(to: fixture, atomically: false, encoding: .utf8)
+        try await service.prepare(modelURL: fixture.appendingPathExtension("gguf"))
+        let restartDeadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while (try? String(contentsOf: directory.appendingPathComponent("launches"), encoding: .utf8)
+            .split(separator: "\n").count) != 2, ContinuousClock.now < restartDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let stopStarted = ContinuousClock.now
+        await service.stop()
+        XCTAssertLessThan(stopStarted.duration(to: .now), .seconds(2))
+        let launches = try String(contentsOf: directory.appendingPathComponent("launches"), encoding: .utf8)
+        XCTAssertEqual(launches.split(separator: "\n").count, 2)
+    }
+
     func testSleepingServerIsWokenWithoutGeneratingOutput() async throws {
         let fixture = try makeRuntime(exitImmediately: false)
         defer { try? FileManager.default.removeItem(at: fixture.deletingLastPathComponent()) }
@@ -111,13 +151,15 @@ final class RefinementLifecycleTests: XCTestCase {
         return URLSession(configuration: configuration)
     }
 
-    private func makeRuntime(exitImmediately: Bool) throws -> URL {
+    private func makeRuntime(exitImmediately: Bool, ignoresTermination: Bool = false) throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("runtime.py")
         let script = """
         #!/usr/bin/python3
-        import pathlib, time
+        import os, pathlib, signal, time
+        \(ignoresTermination ? "signal.signal(signal.SIGTERM, signal.SIG_IGN)" : "")
+        pathlib.Path(__file__).with_name('pid').write_text(str(os.getpid()))
         with pathlib.Path(__file__).with_name('launches').open('a') as file:
             file.write('launch\\n')
         \(exitImmediately ? "raise SystemExit(1)" : "time.sleep(30)")

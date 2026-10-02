@@ -143,7 +143,7 @@ final class DictaFlowAppState: ObservableObject {
             hotkeyService: CarbonHotkeyService(),
             modelDownloadService: WhisperModelDownloadService(),
             whisperService: WhisperCPPService(),
-            transcriptRefinementService: LocalTranscriptRefinementService(),
+            transcriptRefinementService: LlamaCLITranscriptRefinementService(),
             refinementPromptStore: FileRefinementPromptStore(),
             textInsertionService: SystemTextInsertionService(),
             localNotificationService: UserLocalNotificationService(),
@@ -408,7 +408,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         if !isSelectedRefinementModelPrepared {
-            return "Download Qwen3 0.6B for \(refinementConfiguration.model.usesMLX ? "MLX" : "standard refinement"). Your original transcript is used until it is ready."
+            return "Download Qwen3 0.6B for standard refinement. Your original transcript is used until it is ready."
         }
         if refinementConfiguration.isEnabled {
             return "Loads when recording starts and sleeps after five minutes without use."
@@ -889,10 +889,6 @@ final class DictaFlowAppState: ObservableObject {
         persistRefinementConfiguration()
         refreshRefinementRuntimeAvailability()
         updateStatusMessage()
-    }
-
-    func updateExperimentalMLXEnabled(_ enabled: Bool) {
-        updateRefinementModel(enabled ? .qwen3SmallMLX : .qwen3Small)
     }
 
     private func stopRefinement() {
@@ -2057,11 +2053,7 @@ final class DictaFlowAppState: ObservableObject {
 
         activeRefinementDownloadTokens[model] = nil
         refinementDownloads[model] = nil
-        if model.usesMLX {
-            setPreservedStatusMessage("Cancelled the Qwen3 MLX download. Any verified files are kept; downloading again continues with the remaining files.")
-        } else {
-            setPreservedStatusMessage("Cancelled the \(model.displayName) download. The partial file was removed. Downloading again starts from the beginning.")
-        }
+        setPreservedStatusMessage("Cancelled the \(model.displayName) download. The partial file was removed. Downloading again starts from the beginning.")
         updateStatusMessage()
     }
 

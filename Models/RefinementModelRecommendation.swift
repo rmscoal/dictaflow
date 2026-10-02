@@ -48,9 +48,6 @@ struct RefinementModelRecommendation: Equatable, Sendable {
         hardwareProfile: MacHardwareProfile,
         isPrepared: Bool
     ) -> RefinementModelSupport {
-        #if !arch(arm64)
-        if model.usesMLX { return .unsupported("MLX refinement requires Apple Silicon.") }
-        #endif
         if hardwareProfile.physicalMemoryGB < model.minimumMemoryGB {
             return .unsupported("Needs at least \(model.minimumMemoryGB) GB memory.")
         }
