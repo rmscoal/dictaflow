@@ -3,6 +3,7 @@ import Foundation
 struct RecordingOverlayPresentation: Equatable {
     enum Phase: Equatable {
         case requestingPermission
+        case starting
         case recording
         case transcribing
         case refining

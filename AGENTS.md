@@ -25,7 +25,7 @@ DictaFlow is a native macOS-only Swift app for private local dictation. It recor
 xcodebuild -project DictaFlow.xcodeproj -scheme "DictaFlow Dev" -configuration Debug -derivedDataPath .build/DerivedData build
 ```
 
-- There is currently no test target. For behavior that touches permissions, hotkeys, text insertion, model storage, or app launch, also verify manually with an installed app from `/Applications/`; do not rely only on a DerivedData run.
+- `DictaFlowTests` covers refinement lifecycle and optional real-model inference; see `Tests/README.md`. For behavior that touches permissions, hotkeys, text insertion, model storage, or app launch, also verify manually with an installed app from `/Applications/`; do not rely only on a DerivedData run.
 - The Xcode build phase `Ensure Whisper XCFramework` builds `Vendor/whisper.cpp/build-apple/whisper.xcframework` via `Vendor/whisper.cpp/build-xcframework.sh` when needed.
 
 ## Implementation Rules
