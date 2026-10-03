@@ -32,15 +32,9 @@ It does not replace the upstream license texts.
 ## Refinement Models
 
 - Referenced from: `Models/RefinementModelDescriptor.swift`
-- Qwen2.5 0.5B Instruct GGUF: <https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF>
-- Qwen2.5 1.5B Instruct GGUF: <https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF>
-- Qwen2.5 3B Instruct GGUF: <https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF>
-- SmolLM2 1.7B Instruct GGUF: <https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF>
-- Licenses as listed by upstream on 2026-04-29:
-  - Qwen2.5 0.5B Instruct GGUF: Apache-2.0
-  - Qwen2.5 1.5B Instruct GGUF: Apache-2.0
-  - Qwen2.5 3B Instruct GGUF: Qwen Research License
-  - SmolLM2 1.7B Instruct GGUF: Apache-2.0
-- Notes: DictaFlow downloads these model files at runtime. The Qwen2.5 3B model
-  is not Apache-2.0; review the upstream Qwen Research License before enabling
-  it in a commercial context.
+- Qwen3 0.6B: <https://huggingface.co/Qwen/Qwen3-0.6B>, Apache-2.0
+- Standard 4-bit GGUF: <https://huggingface.co/unsloth/Qwen3-0.6B-GGUF>
+- Model artifacts are downloaded separately and verified against pinned checksums.
+- Legacy Qwen2.5 and SmolLM2 descriptors remain only to read saved preferences and
+  recognize existing downloads for storage cleanup. They are no longer offered
+  for inference. Their upstream model licenses continue to apply to those files.

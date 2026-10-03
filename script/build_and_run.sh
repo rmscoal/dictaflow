@@ -72,7 +72,34 @@ build_dev_app() {
 }
 
 install_dev_app() {
-  /usr/bin/ditto "$DEV_BUILT_APP" "$DEV_INSTALLED_APP"
+  # Replace the bundle so removed dependencies cannot survive an update.
+  # Keep the previous app recoverable if installation fails or needs rollback.
+  local backup_dir
+  backup_dir="$ROOT_DIR/.build/AppBackups/$(date +%Y%m%d-%H%M%S)-$$"
+  mkdir -p "$backup_dir"
+  if [[ -e "$DEV_INSTALLED_APP" ]]; then
+    mv "$DEV_INSTALLED_APP" "$backup_dir/$DEV_APP_NAME.app"
+  fi
+  if ! /usr/bin/ditto "$DEV_BUILT_APP" "$DEV_INSTALLED_APP"; then
+    if [[ -e "$DEV_INSTALLED_APP" ]]; then
+      mv "$DEV_INSTALLED_APP" "$backup_dir/Incomplete installation.app"
+    fi
+    if [[ -e "$backup_dir/$DEV_APP_NAME.app" ]]; then
+      mv "$backup_dir/$DEV_APP_NAME.app" "$DEV_INSTALLED_APP"
+    fi
+    prune_app_backups
+    return 1
+  fi
+  prune_app_backups
+}
+
+prune_app_backups() {
+  # Keep only the newest backups so repeated installs cannot fill the disk.
+  local backup_root="$ROOT_DIR/.build/AppBackups"
+  [[ -d "$backup_root" ]] || return 0
+  ls -t "$backup_root" | tail -n +4 | while IFS= read -r entry; do
+    rm -rf "$backup_root/$entry"
+  done
 }
 
 uninstall_dev_app() {

@@ -1,13 +1,18 @@
 import Foundation
 
 enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendable, LocalModelDescriptor {
+    case qwen3Small
+
+    // Retained for storage cleanup and decoding older preferences.
     case qwen25HalfB
     case qwen25OneAndHalfB
     case qwen25ThreeB
     case smolLM2OnePointSevenB
 
-    nonisolated static let recommendedDefault: RefinementModelDescriptor = .qwen25OneAndHalfB
-    nonisolated static let bestQualityDefault: RefinementModelDescriptor = .qwen25ThreeB
+    nonisolated static let allCases: [RefinementModelDescriptor] = [.qwen3Small]
+    nonisolated static let storedModels: [RefinementModelDescriptor] = allCases + [.qwen25HalfB, .qwen25OneAndHalfB, .qwen25ThreeB, .smolLM2OnePointSevenB]
+    nonisolated static let recommendedDefault: RefinementModelDescriptor = .qwen3Small
+    nonisolated static let bestQualityDefault: RefinementModelDescriptor = .qwen3Small
 
     nonisolated var modelIdentifier: String {
         "refinement.\(rawValue)"
@@ -15,6 +20,8 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
 
     nonisolated var displayName: String {
         switch self {
+        case .qwen3Small:
+            return "Qwen3 0.6B"
         case .qwen25HalfB:
             return "Qwen2.5 0.5B"
         case .qwen25OneAndHalfB:
@@ -32,6 +39,8 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
 
     nonisolated var filename: String {
         switch self {
+        case .qwen3Small:
+            return "Qwen3-0.6B-Q4_K_M.gguf"
         case .qwen25HalfB:
             return "qwen2.5-0.5b-instruct-q4_k_m.gguf"
         case .qwen25OneAndHalfB:
@@ -45,6 +54,8 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
 
     nonisolated var downloadURL: URL {
         switch self {
+        case .qwen3Small:
+            return URL(string: "https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/50968a4468ef4233ed78cd7c3de230dd1d61a56b/\(filename)")!
         case .qwen25HalfB:
             return URL(string: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/\(filename)")!
         case .qwen25OneAndHalfB:
@@ -58,6 +69,8 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
 
     nonisolated var checksum: ModelChecksum {
         switch self {
+        case .qwen3Small:
+            return .sha256("ac2d97712095a558e31573f62f466a3f9d93990898b0ec79d7c974c1780d524a")
         case .qwen25HalfB:
             return .sha256("74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db")
         case .qwen25OneAndHalfB:
@@ -71,6 +84,8 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
 
     nonisolated var approximateDiskSizeBytes: Int64 {
         switch self {
+        case .qwen3Small:
+            return 396_705_472
         case .qwen25HalfB:
             return 469_000_000
         case .qwen25OneAndHalfB:
@@ -88,6 +103,8 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
 
     nonisolated var approximateDiskSizeDescription: String {
         switch self {
+        case .qwen3Small:
+            return "397 MB"
         case .qwen25HalfB:
             return "469 MB"
         case .qwen25OneAndHalfB:
@@ -101,6 +118,8 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
 
     nonisolated var minimumMemoryGB: Int {
         switch self {
+        case .qwen3Small:
+            return 8
         case .qwen25HalfB:
             return 4
         case .qwen25OneAndHalfB, .smolLM2OnePointSevenB:
@@ -116,6 +135,8 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
 
     nonisolated var estimatedRuntimeMemoryDescription: String {
         switch self {
+        case .qwen3Small:
+            return "Compact 4-bit model"
         case .qwen25HalfB:
             return "~1 GB RAM"
         case .qwen25OneAndHalfB:
@@ -129,6 +150,8 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
 
     nonisolated var qualityRank: Int {
         switch self {
+        case .qwen3Small:
+            return 10
         case .qwen25HalfB:
             return 10
         case .smolLM2OnePointSevenB:
@@ -142,6 +165,8 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
 
     nonisolated var detailText: String {
         switch self {
+        case .qwen3Small:
+            return "Fast local cleanup for punctuation, wording, and self-corrections."
         case .qwen25HalfB:
             return "Fastest and smallest option. Good for quick punctuation and structure cleanup."
         case .qwen25OneAndHalfB:

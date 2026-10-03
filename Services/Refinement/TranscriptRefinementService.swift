@@ -1,689 +1,261 @@
 import Darwin
 import Foundation
+import OSLog
 
-protocol TranscriptRefinementServiceProtocol: AnyObject {
-    func isRuntimeAvailable() async -> Bool
+nonisolated protocol TranscriptRefinementServiceProtocol: AnyObject {
+    func isRuntimeAvailable(for model: RefinementModelDescriptor) async -> Bool
     func prepare(modelURL: URL) async throws
     func reloadModels() async
     func stop() async
-
-    func refine(
-        transcript: String,
-        whisperTaskMode: WhisperTaskMode,
-        modelURL: URL,
-        configuration: RefinementConfiguration,
-        promptTemplate: String
-    ) async throws -> TranscriptRefinementResult
+    func refine(transcript: String, whisperTaskMode: WhisperTaskMode, modelURL: URL,
+                configuration: RefinementConfiguration, promptTemplate: String) async throws -> TranscriptRefinementResult
 }
 
-enum TranscriptRefinementServiceError: LocalizedError {
+nonisolated enum TranscriptRefinementServiceError: LocalizedError {
     case missingRuntime
     case failedToRun(String)
     case timedOut
     case emptyOutput
-    case outputTooLarge
+    case incompleteOutput
 
     var errorDescription: String? {
         switch self {
-        case .missingRuntime:
-            return "DictaFlow could not find its local llama-server runtime for transcript refinement."
-        case .failedToRun(let details):
-            return "The local refinement model could not clean the transcript. \(details)"
-        case .timedOut:
-            return "The local refinement model took too long to respond."
-        case .emptyOutput:
-            return "The local refinement model returned an empty result."
-        case .outputTooLarge:
-            return "The local refinement model produced more output than DictaFlow can safely process."
+        case .missingRuntime: "The local refinement runtime is unavailable. Reinstall DictaFlow and try again."
+        case .failedToRun(let details): "The local model could not clean the transcript. \(details)"
+        case .timedOut: "The local refinement model took too long to respond."
+        case .emptyOutput: "The local refinement model returned an empty result."
+        case .incompleteOutput: "The refinement was incomplete. Your original transcript will be used."
         }
     }
 }
 
+/// One model needs only one server process. Idle sleep releases weights and KV cache.
 actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
-    nonisolated private static let outputCaptureLimitBytes = 1_000_000
-    nonisolated private static let errorCaptureLimitBytes = 256_000
-    nonisolated private static let promptDirectoryName = "DictaFlowRefinementPrompts"
-
     private let executableURL: URL?
     private let urlSession: URLSession
-    private var serverProcess: Process?
-    private var routerModelsDirectoryURL: URL?
-    private var serverBaseURL: URL?
+    private let idleSleepSeconds: Int
+    private var process: Process?
+    private var modelURL: URL?
+    private var baseURL: URL?
+    private var startupTask: Task<URL, Error>?
+    private var serverID = UUID()
+    private var shutdownTask: Task<Void, Never>?
+    private let logger = Logger(subsystem: "DictaFlow", category: "Refinement")
 
-    init(executableURL: URL? = nil, urlSession: URLSession = .shared) {
+    init(executableURL: URL? = nil, urlSession: URLSession = .shared, idleSleepSeconds: Int = 300) {
         self.executableURL = executableURL
         self.urlSession = urlSession
+        self.idleSleepSeconds = idleSleepSeconds
     }
 
-    func isRuntimeAvailable() async -> Bool {
-        do {
-            _ = try resolveRuntimeURL()
-            return true
-        } catch {
-            return false
+    func isRuntimeAvailable(for model: RefinementModelDescriptor) async -> Bool {
+        (try? resolveRuntimeURL()) != nil
+    }
+
+    func reloadModels() async {}
+
+    func prepare(modelURL: URL) async throws {
+        let url = try await ensureServer(modelURL: modelURL)
+        // /health does not wake sleeping models. A zero-output completion does.
+        var props = URLRequest(url: url.appendingPathComponent("props"))
+        props.timeoutInterval = 5
+        let (data, _) = try await urlSession.data(for: props)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        if json?["is_sleeping"] as? Bool == true {
+            _ = try await post(path: "completion", baseURL: url, payload: ["prompt": "", "n_predict": 0])
         }
+        try Task.checkCancellation()
     }
 
     func stop() async {
-        stopServer()
-    }
-
-    func prepare(modelURL: URL) async throws {
-        let baseURL = try await ensureRouter(modelsDirectory: modelURL.deletingLastPathComponent())
-        try await loadModel(id: Self.routerModelID(for: modelURL), baseURL: baseURL)
-    }
-
-    func reloadModels() async {
-        guard let serverProcess,
-              serverProcess.isRunning,
-              let serverBaseURL else {
-            return
+        if let shutdownTask { await shutdownTask.value; return }
+        serverID = UUID()
+        startupTask?.cancel()
+        startupTask = nil
+        guard let oldProcess = process else { return }
+        process = nil
+        modelURL = nil
+        baseURL = nil
+        let task = Task {
+            if oldProcess.isRunning {
+                oldProcess.terminate()
+                if !(await Self.waitForExit(of: oldProcess, timeout: .seconds(3))) {
+                    Darwin.kill(oldProcess.processIdentifier, SIGKILL)
+                    if !(await Self.waitForExit(of: oldProcess, timeout: .seconds(1))) {
+                        logger.error("Refinement runtime exit was not observed after forced shutdown.")
+                    }
+                }
+            }
         }
-
-        var components = URLComponents(
-            url: serverBaseURL.appendingPathComponent("models"),
-            resolvingAgainstBaseURL: false
-        )
-        components?.queryItems = [URLQueryItem(name: "reload", value: "1")]
-
-        guard let reloadURL = components?.url else {
-            return
-        }
-
-        var request = URLRequest(url: reloadURL)
-        request.timeoutInterval = 30
-        _ = try? await urlSession.data(for: request)
+        shutdownTask = task
+        await task.value
+        shutdownTask = nil
     }
 
-    func refine(
-        transcript: String,
-        whisperTaskMode: WhisperTaskMode,
-        modelURL: URL,
-        configuration: RefinementConfiguration,
-        promptTemplate: String
-    ) async throws -> TranscriptRefinementResult {
-        let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedTranscript.isEmpty else {
+    // Foundation observes and reaps Process exits. Poll asynchronously instead of
+    // calling waitUntilExit(), which can stall on a background thread's run loop.
+    nonisolated private static func waitForExit(of process: Process, timeout: Duration) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while process.isRunning && ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return !process.isRunning
+    }
+
+    func refine(transcript: String, whisperTaskMode: WhisperTaskMode, modelURL: URL,
+                configuration: RefinementConfiguration, promptTemplate: String) async throws -> TranscriptRefinementResult {
+        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw TranscriptRefinementServiceError.emptyOutput }
+        let url = try await ensureServer(modelURL: modelURL)
+        let started = ContinuousClock.now
+        let json = try await post(path: "v1/chat/completions", baseURL: url, payload: [
+            "messages": [
+                ["role": "system", "content": RefinementPromptTemplate.renderedInstructions(from: promptTemplate, whisperTaskMode: whisperTaskMode)],
+                ["role": "user", "content": text]
+            ],
+            "max_tokens": RefinementInference.maximumOutputTokens(for: text),
+            "temperature": 0.2, "top_p": 0.9, "top_k": 0, "min_p": 0,
+            "chat_template_kwargs": ["enable_thinking": false], "stream": false
+        ])
+        guard let choice = (json["choices"] as? [[String: Any]])?.first else {
             throw TranscriptRefinementServiceError.emptyOutput
         }
-
-        let instructions = Self.makeInstructions(
-            whisperTaskMode: whisperTaskMode,
-            configuration: configuration,
-            promptTemplate: promptTemplate
-        )
-        let maxTokens = Self.maxPredictionTokens(for: trimmedTranscript)
-        let output = try await runPromptOnServer(
-            modelURL: modelURL,
-            instructions: instructions,
-            transcript: trimmedTranscript,
-            maxTokens: maxTokens
-        )
-        let refinedText = Self.cleanedModelOutput(output)
-
-        guard !refinedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw TranscriptRefinementServiceError.emptyOutput
+        guard choice["finish_reason"] as? String == "stop" else {
+            throw TranscriptRefinementServiceError.incompleteOutput
         }
+        let content = (choice["message"] as? [String: Any])?["content"] as? String ?? ""
+        let result = try RefinementInference.result(content, original: transcript, configuration: configuration)
+        let usage = json["usage"] as? [String: Any]
+        logger.info("llama refinement duration=\(String(describing: started.duration(to: .now)), privacy: .public) outputTokens=\(usage?["completion_tokens"] as? Int ?? 0)")
+        return result
+    }
 
-        return TranscriptRefinementResult(
-            originalText: transcript,
-            refinedText: refinedText,
-            model: configuration.model,
-            mode: configuration.mode,
-            completedAt: Date()
-        )
+    private func ensureServer(modelURL: URL) async throws -> URL {
+        try Task.checkCancellation()
+        if self.modelURL == modelURL, let startupTask { return try await startupTask.value }
+        if self.modelURL == modelURL, process?.isRunning == true, let baseURL { return baseURL }
+        await stop()
+        try Task.checkCancellation()
+        if process != nil { return try await ensureServer(modelURL: modelURL) }
+        let runtime = try resolveRuntimeURL()
+        let port = try Self.availableLocalPort()
+        let url = URL(string: "http://127.0.0.1:\(port)")!
+        let newProcess = Process()
+        newProcess.executableURL = runtime
+        newProcess.arguments = [
+            "--model", modelURL.path, "--host", "127.0.0.1", "--port", "\(port)",
+            "--n-gpu-layers", "all", "--flash-attn", "auto",
+            "--threads", "\(max(2, ProcessInfo.processInfo.activeProcessorCount - 2))",
+            "--threads-batch", "\(max(2, ProcessInfo.processInfo.activeProcessorCount - 2))",
+            "--ctx-size", "4096", "--batch-size", "512", "--parallel", "1",
+            "--sleep-idle-seconds", "\(idleSleepSeconds)", "--no-context-shift",
+            "--chat-template-kwargs", "{\"enable_thinking\":false}", "--reasoning-budget", "0",
+            "--no-ui", "--no-webui", "--log-disable"
+        ]
+        newProcess.standardOutput = FileHandle.nullDevice
+        newProcess.standardError = FileHandle.nullDevice
+        try newProcess.run()
+        let id = UUID()
+        serverID = id
+        process = newProcess
+        self.modelURL = modelURL
+        baseURL = url
+        let task = Task { try await self.waitForReady(url: url, process: newProcess) }
+        startupTask = task
+        do {
+            let readyURL = try await task.value
+            try Task.checkCancellation()
+            guard serverID == id else { throw CancellationError() }
+            startupTask = nil
+            return readyURL
+        } catch {
+            if serverID == id { await stop() }
+            throw error
+        }
+    }
+
+    private func waitForReady(url: URL, process: Process) async throws -> URL {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(120))
+        while ContinuousClock.now < deadline {
+            try Task.checkCancellation()
+            guard process.isRunning else {
+                throw TranscriptRefinementServiceError.failedToRun("The runtime exited while loading the model.")
+            }
+            var request = URLRequest(url: url.appendingPathComponent("health"))
+            request.timeoutInterval = 2
+            do {
+                let (_, response) = try await urlSession.data(for: request)
+                if (response as? HTTPURLResponse)?.statusCode == 200 { return url }
+            } catch {
+                try Task.checkCancellation()
+            }
+            // Pause for both network errors and unsuccessful HTTP responses.
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        throw TranscriptRefinementServiceError.timedOut
+    }
+
+    private func post(path: String, baseURL: URL, payload: [String: Any]) async throws -> [String: Any] {
+        try Task.checkCancellation()
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, response) = try await urlSession.data(for: request)
+        try Task.checkCancellation()
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw TranscriptRefinementServiceError.failedToRun("The runtime rejected the request. The transcript may exceed its context limit.")
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw TranscriptRefinementServiceError.failedToRun("The runtime returned an invalid response.")
+        }
+        return json
     }
 
     private func resolveRuntimeURL() throws -> URL {
-        if let executableURL, FileManager.default.isExecutableFile(atPath: executableURL.path) {
-            return executableURL
-        }
-
-        if let bundledURL = Bundle.main.url(forAuxiliaryExecutable: "llama-server"),
-            FileManager.default.isExecutableFile(atPath: bundledURL.path) {
-            return bundledURL
-        }
-
-        if let bundledResourceURL = Bundle.main.url(forResource: "llama-server", withExtension: nil),
-            FileManager.default.isExecutableFile(atPath: bundledResourceURL.path) {
-            return bundledResourceURL
-        }
-
+        if let executableURL, FileManager.default.isExecutableFile(atPath: executableURL.path) { return executableURL }
+        if let url = Bundle.main.url(forAuxiliaryExecutable: "llama-server"), FileManager.default.isExecutableFile(atPath: url.path) { return url }
         #if DEBUG
-            let developmentPaths = [
-                "/opt/homebrew/bin/llama-server",
-                "/usr/local/bin/llama-server"
-            ]
-
-            if let path = developmentPaths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
-                return URL(fileURLWithPath: path)
-            }
+        for path in ["/opt/homebrew/bin/llama-server", "/usr/local/bin/llama-server"] where FileManager.default.isExecutableFile(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
         #endif
-
         throw TranscriptRefinementServiceError.missingRuntime
     }
 
-    private func runPromptOnServer(
-        modelURL: URL,
-        instructions: String,
-        transcript: String,
-        maxTokens: Int
-    ) async throws -> String {
-        let baseURL = try await ensureRouter(modelsDirectory: modelURL.deletingLastPathComponent())
-        let requestURL = baseURL
-            .appendingPathComponent("v1")
-            .appendingPathComponent("chat")
-            .appendingPathComponent("completions")
-        var request = URLRequest(url: requestURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 120
-
-        let payload: [String: Any] = [
-            "model": Self.routerModelID(for: modelURL),
-            "messages": [
-                ["role": "system", "content": instructions],
-                ["role": "user", "content": transcript]
-            ],
-            "max_tokens": maxTokens,
-            "temperature": 0.2,
-            "top_p": 0.9,
-            "stream": false
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-
-        let (data, response) = try await urlSession.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw TranscriptRefinementServiceError.failedToRun("The local llama-server returned an invalid response.")
-        }
-
-        guard httpResponse.statusCode == 200 else {
-            let responseText = String(data: data, encoding: .utf8) ?? "HTTP status \(httpResponse.statusCode)."
-            throw TranscriptRefinementServiceError.failedToRun(responseText)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw TranscriptRefinementServiceError.failedToRun("The local llama-server returned invalid JSON.")
-        }
-
-        if let choices = json["choices"] as? [[String: Any]],
-           let message = choices.first?["message"] as? [String: Any],
-           let content = message["content"] as? String {
-            return content
-        }
-
-        throw TranscriptRefinementServiceError.emptyOutput
-    }
-
-    private func ensureRouter(modelsDirectory: URL) async throws -> URL {
-        if let serverProcess,
-           serverProcess.isRunning,
-           routerModelsDirectoryURL == modelsDirectory,
-           let serverBaseURL {
-            return serverBaseURL
-        }
-
-        stopServer()
-
-        let runtimeURL = try resolveRuntimeURL()
-        let port = try Self.availableLocalPort()
-        let baseURL = URL(string: "http://127.0.0.1:\(port)")!
-        let process = Process()
-        process.executableURL = runtimeURL
-        process.arguments = [
-            "--models-dir", modelsDirectory.path,
-            "--models-max", "1",
-            "--host", "127.0.0.1",
-            "--port", "\(port)",
-            "--n-gpu-layers", "all",
-            "--flash-attn", "auto",
-            "--threads", "\(Self.optimalThreadCount())",
-            "--threads-batch", "\(Self.optimalThreadCount())",
-            "--ctx-size", "2048",
-            "--batch-size", "512",
-            "--parallel", "1",
-            "--no-ui",
-            "--no-webui",
-            "--log-disable"
-        ]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            throw TranscriptRefinementServiceError.failedToRun(error.localizedDescription)
-        }
-
-        serverProcess = process
-        routerModelsDirectoryURL = modelsDirectory
-        serverBaseURL = baseURL
-
-        try await waitForServerReady(baseURL: baseURL, process: process)
-        return baseURL
-    }
-
-    private func loadModel(id modelID: String, baseURL: URL) async throws {
-        await reloadModels()
-
-        var request = URLRequest(url: baseURL.appendingPathComponent("models/load"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 30
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["model": modelID])
-
-        let (_, response) = try await urlSession.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
-            throw TranscriptRefinementServiceError.failedToRun("The local llama-server could not load the refinement model.")
-        }
-
-        try await waitForModelLoaded(id: modelID, baseURL: baseURL)
-    }
-
-    private func waitForModelLoaded(id modelID: String, baseURL: URL) async throws {
-        let deadline = Date().addingTimeInterval(180)
-
-        while Date() < deadline {
-            let statuses = (try? await modelStatuses(baseURL: baseURL)) ?? [:]
-
-            switch statuses[modelID] {
-            case "loaded":
-                return
-            case "failed":
-                throw TranscriptRefinementServiceError.failedToRun("The local llama-server could not load the refinement model.")
-            default:
-                try await Task.sleep(nanoseconds: 1_000_000_000)
-            }
-        }
-
-        throw TranscriptRefinementServiceError.timedOut
-    }
-
-    private func modelStatuses(baseURL: URL) async throws -> [String: String] {
-        var request = URLRequest(url: baseURL.appendingPathComponent("models"))
-        request.timeoutInterval = 30
-
-        let (data, response) = try await urlSession.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
-            throw TranscriptRefinementServiceError.failedToRun("The local llama-server returned an invalid response.")
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let models = json["data"] as? [[String: Any]] else {
-            throw TranscriptRefinementServiceError.failedToRun("The local llama-server returned invalid JSON.")
-        }
-
-        var statuses: [String: String] = [:]
-        for model in models {
-            guard let id = model["id"] as? String,
-                  let status = model["status"] as? [String: Any],
-                  let value = status["value"] as? String else {
-                continue
-            }
-            statuses[id] = value
-        }
-        return statuses
-    }
-
-    nonisolated private static func routerModelID(for modelURL: URL) -> String {
-        modelURL.deletingPathExtension().lastPathComponent
-    }
-
-    private func waitForServerReady(baseURL: URL, process: Process) async throws {
-        let healthURL = baseURL.appendingPathComponent("health")
-        let deadline = Date().addingTimeInterval(120)
-
-        while Date() < deadline {
-            if !process.isRunning {
-                throw TranscriptRefinementServiceError.failedToRun("The local llama-server exited before it was ready.")
-            }
-
-            do {
-                let (_, response) = try await urlSession.data(from: healthURL)
-                if let httpResponse = response as? HTTPURLResponse,
-                   (200..<300).contains(httpResponse.statusCode) {
-                    return
-                }
-            } catch {
-                try await Task.sleep(nanoseconds: 250_000_000)
-            }
-        }
-
-        throw TranscriptRefinementServiceError.timedOut
-    }
-
-    private func stopServer() {
-        guard let serverProcess else {
-            return
-        }
-
-        if serverProcess.isRunning {
-            serverProcess.terminate()
-        }
-
-        self.serverProcess = nil
-        self.routerModelsDirectoryURL = nil
-        self.serverBaseURL = nil
-    }
-
-    private func runLlamaCLI(
-        runtimeURL: URL,
-        modelURL: URL,
-        prompt: String,
-        maxTokens: Int
-    ) async throws -> String {
-        try await Task.detached(priority: .userInitiated) {
-            let promptFileURL = try Self.writePromptToTemporaryFile(prompt)
-            defer {
-                try? FileManager.default.removeItem(at: promptFileURL)
-            }
-
-            let process = Process()
-            process.executableURL = runtimeURL
-            process.arguments = [
-                "-m", modelURL.path,
-                "--file", promptFileURL.path,
-                "--n-gpu-layers", "all",
-                "--flash-attn", "auto",
-                "--threads", "\(Self.optimalThreadCount())",
-                "--threads-batch", "\(Self.optimalThreadCount())",
-                "--ctx-size", "2048",
-                "--batch-size", "512",
-                "-n", "\(maxTokens)",
-                "--temp", "0.0",
-                "--top-p", "0.9",
-                "--no-display-prompt",
-                "--no-show-timings"
-            ]
-
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-
-            let outputCapture = LimitedPipeCapture(limit: Self.outputCaptureLimitBytes)
-            let errorCapture = LimitedPipeCapture(limit: Self.errorCaptureLimitBytes)
-
-            do {
-                try process.run()
-            } catch {
-                throw TranscriptRefinementServiceError.failedToRun(error.localizedDescription)
-            }
-
-            let outputTask = Task.detached(priority: .utility) {
-                outputCapture.read(from: outputPipe.fileHandleForReading)
-            }
-            let errorTask = Task.detached(priority: .utility) {
-                errorCapture.read(from: errorPipe.fileHandleForReading)
-            }
-
-            let didExit = await Self.waitForExit(process, timeoutNanoseconds: 180_000_000_000)
-            guard didExit else {
-                process.terminate()
-                let didTerminate = await Self.waitForExit(process, timeoutNanoseconds: 2_000_000_000)
-                if !didTerminate, process.isRunning {
-                    Darwin.kill(process.processIdentifier, SIGKILL)
-                    _ = await Self.waitForExit(process, timeoutNanoseconds: 1_000_000_000)
-                }
-                Self.closePipeReaders(outputPipe, errorPipe)
-                await outputTask.value
-                await errorTask.value
-                throw TranscriptRefinementServiceError.timedOut
-            }
-
-            await outputTask.value
-            await errorTask.value
-
-            let outputData = try outputCapture.capturedData()
-            _ = try errorCapture.capturedData()
-            let output = String(data: outputData, encoding: .utf8) ?? ""
-
-            guard process.terminationStatus == 0 else {
-                throw TranscriptRefinementServiceError.failedToRun("Exit status \(process.terminationStatus).")
-            }
-
-            return output
-        }.value
-    }
-
-    nonisolated private static func writePromptToTemporaryFile(_ prompt: String) throws -> URL {
-        let fileManager = FileManager.default
-        let directoryURL = fileManager.temporaryDirectory
-            .appendingPathComponent(promptDirectoryName, isDirectory: true)
-        try ensurePrivateTemporaryDirectory(at: directoryURL, using: fileManager)
-
-        let fileURL = directoryURL
-            .appendingPathComponent("prompt-\(UUID().uuidString.lowercased()).txt", isDirectory: false)
-        guard let promptData = prompt.data(using: .utf8),
-              fileManager.createFile(
-                atPath: fileURL.path,
-                contents: promptData,
-                attributes: [.posixPermissions: NSNumber(value: Int16(0o600))]
-              ) else {
-            throw TranscriptRefinementServiceError.failedToRun("Could not create a secure local prompt file.")
-        }
-
-        var excludedURL = fileURL
-        var resourceValues = URLResourceValues()
-        resourceValues.isExcludedFromBackup = true
-        try excludedURL.setResourceValues(resourceValues)
-        return fileURL
-    }
-
-    nonisolated private static func ensurePrivateTemporaryDirectory(at directoryURL: URL, using fileManager: FileManager) throws {
-        do {
-            try fileManager.createDirectory(
-                at: directoryURL,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: NSNumber(value: Int16(0o700))]
-            )
-
-            let resourceValues = try directoryURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            guard resourceValues.isDirectory == true, resourceValues.isSymbolicLink != true else {
-                throw TranscriptRefinementServiceError.failedToRun("The local prompt folder is not a private directory.")
-            }
-
-            try fileManager.setAttributes(
-                [.posixPermissions: NSNumber(value: Int16(0o700))],
-                ofItemAtPath: directoryURL.path
-            )
-        } catch let error as TranscriptRefinementServiceError {
-            throw error
-        } catch {
-            throw TranscriptRefinementServiceError.failedToRun("Could not create a secure local prompt folder.")
-        }
-    }
-
-    nonisolated private static func closePipeReaders(_ pipes: Pipe...) {
-        for pipe in pipes {
-            try? pipe.fileHandleForReading.close()
-        }
-    }
-
-    nonisolated private static func waitForExit(_ process: Process, timeoutNanoseconds: UInt64) async -> Bool {
-        await ProcessExitWaiter().wait(for: process, timeoutNanoseconds: timeoutNanoseconds)
-    }
-
-    nonisolated private static func optimalThreadCount() -> Int {
-        max(2, ProcessInfo.processInfo.activeProcessorCount - 2)
-    }
-
     nonisolated private static func availableLocalPort() throws -> Int {
-        let socketDescriptor = socket(AF_INET, SOCK_STREAM, 0)
-        guard socketDescriptor >= 0 else {
-            throw TranscriptRefinementServiceError.failedToRun("Could not create a local socket for llama-server.")
-        }
-
-        defer {
-            Darwin.close(socketDescriptor)
-        }
-
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw TranscriptRefinementServiceError.failedToRun("Could not open a local socket.") }
+        defer { Darwin.close(fd) }
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = in_port_t(0).bigEndian
         address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
-
-        let bindResult = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
-                Darwin.bind(socketDescriptor, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-
-        guard bindResult == 0 else {
-            throw TranscriptRefinementServiceError.failedToRun("Could not reserve a local port for llama-server.")
-        }
-
-        var resolvedAddress = sockaddr_in()
-        var resolvedAddressLength = socklen_t(MemoryLayout<sockaddr_in>.size)
-        let nameResult = withUnsafeMutablePointer(to: &resolvedAddress) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
-                Darwin.getsockname(socketDescriptor, sockaddrPointer, &resolvedAddressLength)
-            }
-        }
-
-        guard nameResult == 0 else {
-            throw TranscriptRefinementServiceError.failedToRun("Could not inspect the local port for llama-server.")
-        }
-
-        return Int(UInt16(bigEndian: resolvedAddress.sin_port))
-    }
-
-    nonisolated private static func makeInstructions(
-        whisperTaskMode: WhisperTaskMode,
-        configuration: RefinementConfiguration,
-        promptTemplate: String
-    ) -> String {
-        return RefinementPromptTemplate.renderedInstructions(
-            from: promptTemplate,
-            whisperTaskMode: whisperTaskMode
-        )
-    }
-
-    nonisolated private static func maxPredictionTokens(for transcript: String) -> Int {
-        min(1024, max(128, transcript.count / 3))
-    }
-
-    nonisolated private static func cleanedModelOutput(_ output: String) -> String {
-        var cleanedOutput = output
-        let wrappers = [
-            "<|im_end|>",
-            "<|endoftext|>",
-            "<|im_start|>assistant",
-            "<|im_start|>"
-        ]
-
-        for wrapper in wrappers {
-            cleanedOutput = cleanedOutput.replacingOccurrences(of: wrapper, with: "")
-        }
-
-        return cleanedOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        guard result == 0 else { throw TranscriptRefinementServiceError.failedToRun("Could not reserve a local port.") }
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let inspected = withUnsafeMutablePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }
+        guard inspected == 0 else { throw TranscriptRefinementServiceError.failedToRun("Could not inspect a local port.") }
+        return Int(UInt16(bigEndian: address.sin_port))
     }
 }
 
-private final class LimitedPipeCapture: @unchecked Sendable {
-    private let limit: Int
-    private let lock = NSLock()
-    nonisolated(unsafe) private var data = Data()
-    nonisolated(unsafe) private var didExceedLimit = false
-
-    nonisolated init(limit: Int) {
-        self.limit = limit
+/// Shared limits and output checks keep both backends' insertion behavior consistent.
+enum RefinementInference {
+    nonisolated static func maximumOutputTokens(for transcript: String) -> Int {
+        // CJK/Thai scripts use about one token per character. Do not assume Latin density.
+        min(1024, max(128, transcript.count + 64))
     }
 
-    nonisolated func read(from fileHandle: FileHandle) {
-        while true {
-            let chunk = fileHandle.readData(ofLength: 64 * 1024)
-            if chunk.isEmpty {
-                break
-            }
-
-            append(chunk)
+    nonisolated static func result(_ output: String, original: String, configuration: RefinementConfiguration) throws -> TranscriptRefinementResult {
+        let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw TranscriptRefinementServiceError.emptyOutput }
+        // Reasoning and template delimiters must never be inserted into another app.
+        guard !text.contains("<think>"), !text.contains("</think>"), !text.contains("<|im_") else {
+            throw TranscriptRefinementServiceError.incompleteOutput
         }
-    }
-
-    nonisolated func capturedData() throws -> Data {
-        lock.lock()
-        defer {
-            lock.unlock()
-        }
-
-        if didExceedLimit {
-            throw TranscriptRefinementServiceError.outputTooLarge
-        }
-
-        return data
-    }
-
-    nonisolated private func append(_ chunk: Data) {
-        lock.lock()
-        defer {
-            lock.unlock()
-        }
-
-        guard !didExceedLimit else {
-            return
-        }
-
-        if data.count + chunk.count <= limit {
-            data.append(chunk)
-            return
-        }
-
-        let remainingByteCount = max(0, limit - data.count)
-        if remainingByteCount > 0 {
-            data.append(chunk.prefix(remainingByteCount))
-        }
-        didExceedLimit = true
-    }
-}
-
-private final class ProcessExitWaiter: @unchecked Sendable {
-    private let lock = NSLock()
-    nonisolated(unsafe) private var didResume = false
-    nonisolated(unsafe) private var continuation: CheckedContinuation<Bool, Never>?
-
-    nonisolated func wait(for process: Process, timeoutNanoseconds: UInt64) async -> Bool {
-        await withCheckedContinuation { continuation in
-            lock.lock()
-            self.continuation = continuation
-            lock.unlock()
-
-            process.terminationHandler = { [waiter = self] process in
-                process.terminationHandler = nil
-                Task { @MainActor in
-                    waiter.resume(returning: true)
-                }
-            }
-
-            guard process.isRunning else {
-                process.terminationHandler = nil
-                resume(returning: true)
-                return
-            }
-
-            Task { [waiter = self] in
-                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-                process.terminationHandler = nil
-                waiter.resume(returning: false)
-            }
-        }
-    }
-
-    nonisolated private func resume(returning result: Bool) {
-        let continuationToResume: CheckedContinuation<Bool, Never>?
-
-        lock.lock()
-        if didResume {
-            lock.unlock()
-            return
-        }
-
-        didResume = true
-        continuationToResume = continuation
-        continuation = nil
-        lock.unlock()
-
-        continuationToResume?.resume(returning: result)
+        return TranscriptRefinementResult(originalText: original, refinedText: text, model: configuration.model,
+            mode: configuration.mode, completedAt: Date())
     }
 }

@@ -91,7 +91,7 @@ final class Boundaries: PermissionServiceProtocol, AudioRecorderServiceProtocol,
     }
     func prepare(modelURL: URL) async throws {}
     func unloadModel() async {}
-    func isRuntimeAvailable() async -> Bool { true }
+    func isRuntimeAvailable(for model: RefinementModelDescriptor) async -> Bool { true }
     func reloadModels() async {}
     func stop() async {}
     func refine(transcript: String, whisperTaskMode: WhisperTaskMode, modelURL: URL,

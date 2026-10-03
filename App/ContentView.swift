@@ -81,7 +81,7 @@ struct ContentView: View {
                 appState.downloadRefinementModel(selectedRefinementModel)
             }
         } message: {
-            Text("DictaFlow will download \(selectedRefinementModel.displayName) locally in the background. Your current model stays selected until you switch.")
+            Text("Download \(selectedRefinementModel.approximateDiskSizeDescription) for standard refinement. After download, cleanup runs entirely on this Mac.")
         }
         .alert(
             "Delete Unused Models?",
@@ -337,7 +337,7 @@ struct ContentView: View {
                 .foregroundStyle(Color.white)
                 .background(AppTheme.accent, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .shadow(color: AppTheme.accent.opacity(0.28), radius: 8, x: 0, y: 5)
-                .disabled(appState.isEditingGlobalShortcut || appState.transcriptionState.isBusy || appState.textInsertionState.isBusy)
+                .disabled(appState.isDictationActionDisabled)
             }
             .padding(.leading, 19)
             .padding(.vertical, 17)
@@ -466,43 +466,11 @@ struct ContentView: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     ModelPageSectionHeader(
-                        title: "Text refinement models",
+                        title: "Text refinement",
                         subtitle: "Local cleanup for punctuation and wording"
                     )
 
-                    SettingsFormPanel {
-                        ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
-                            let isPrepared = appState.isRefinementModelPrepared(model)
-                            let isActive = model == appState.refinementConfiguration.model && isPrepared
-
-                            ModelListRow(
-                                name: model.displayName,
-                                sizeText: "\(model.approximateDiskSizeDescription) · \(model.estimatedRuntimeMemoryDescription)",
-                                detailText: appState.refinementModelDetailText(for: model),
-                                isActive: isActive,
-                                needsPreparation: !isPrepared,
-                                isUnavailable: !appState.isRefinementModelSupported(model),
-                                isInteractionLocked: appState.refinementSettingsLocked || appState.isDownloadingRefinementModel(model),
-                                deleteAction: isPrepared && !isActive ? {
-                                    refinementModelPendingDeletion = model
-                                    isShowingRefinementModelDeletionConfirmation = true
-                                } : nil
-                            ) {
-                                selectedRefinementModel = model
-                                if appState.isDownloadingRefinementModel(model) {
-                                    return
-                                } else if !isPrepared {
-                                    isShowingRefinementModelPreparationConfirmation = true
-                                } else if !isActive {
-                                    appState.updateRefinementModel(model)
-                                }
-                            }
-
-                            if model != RefinementModelDescriptor.allCases.last {
-                                Divider().overlay(AppTheme.border)
-                            }
-                        }
-                    }
+                    refinementModelCard
 
                     ForEach(appState.visibleRefinementDownloadModels, id: \.self) { model in
                         let isActive = appState.isDownloadingRefinementModel(model)
@@ -813,6 +781,65 @@ struct ContentView: View {
         }
     }
 
+    private var refinementModelCard: some View {
+        let model = appState.refinementConfiguration.model
+        let ready = appState.isSelectedRefinementModelPrepared
+        let downloading = appState.isDownloadingRefinementModel(model)
+        return HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 19, weight: .medium))
+                .foregroundStyle(AppTheme.accent)
+                .frame(width: 42, height: 42)
+                .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 9))
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text("Qwen3 0.6B")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(ready ? "Downloaded" : "Download needed")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(ready ? AppTheme.accent : AppTheme.secondaryText)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(AppTheme.controlFill, in: Capsule())
+                }
+                Text("Standard inference · \(model.approximateDiskSizeDescription)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppTheme.secondaryText)
+                Text("Clean punctuation, wording, and self-corrections privately on your Mac.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppTheme.tertiaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            if downloading {
+                ProgressView().controlSize(.small)
+                    .accessibilityLabel("Downloading Qwen3")
+            } else if !ready {
+                Button(appState.refinementDownloadError(for: model) == nil ? "Download" : "Retry") {
+                    selectedRefinementModel = model
+                    isShowingRefinementModelPreparationConfirmation = true
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(AppTheme.accent)
+                .disabled(!appState.isSelectedRefinementModelSupported || !appState.isRefinementRuntimeAvailable)
+            } else {
+                Button("Remove…") {
+                    refinementModelPendingDeletion = model
+                    isShowingRefinementModelDeletionConfirmation = true
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(appState.refinementConfiguration.isEnabled || appState.refinementSettingsLocked)
+                .help("Turn off text refinement before removing this model.")
+            }
+        }
+        .padding(14)
+        .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(AppTheme.border, lineWidth: 1))
+    }
+
     private var refinementPage: some View {
         DetailPage {
             VStack(alignment: .leading, spacing: 7) {
@@ -829,27 +856,29 @@ struct ContentView: View {
                             .disabled(appState.refinementSettingsLocked)
                     }
 
-                    Divider().overlay(AppTheme.border)
-
-                    SettingsFormRow(
-                        title: "Refinement model",
-                        detail: "Only prepared local models can be selected"
-                    ) {
-                        RefinementModelPickerControl(
-                            selectedModel: appState.isSelectedRefinementModelPrepared
-                                ? appState.refinementConfiguration.model
-                                : nil,
-                            emptySelectionTitle: RefinementModelDescriptor.allCases.contains {
-                                appState.isRefinementModelSupported($0) && appState.isRefinementModelPrepared($0)
-                            } ? "Select a model" : "No model available",
-                            isEnabled: !appState.refinementSettingsLocked && appState.isRefinementRuntimeAvailable,
-                            isModelSelectable: {
-                                appState.isRefinementModelSupported($0) && appState.isRefinementModelPrepared($0)
-                            },
-                            selectModel: { appState.updateRefinementModel($0) }
-                        )
-                    }
                 }
+
+                FormSectionTitle("Local model")
+                    .padding(.top, 7)
+                refinementModelCard
+
+                if appState.isDownloadingRefinementModel(appState.refinementConfiguration.model) || appState.refinementDownloadError(for: appState.refinementConfiguration.model) != nil {
+                    let model = appState.refinementConfiguration.model
+                    ModelDownloadStatusPanel(
+                        title: "Qwen3 0.6B download",
+                        statusText: appState.refinementDownloadError(for: model) ?? appState.refinementDownloadStatusText(for: model),
+                        isActive: appState.isDownloadingRefinementModel(model),
+                        progress: appState.refinementDownloadProgress(for: model),
+                        hasFailed: appState.refinementDownloadError(for: model) != nil,
+                        cancelAction: { appState.cancelRefinementModelDownload(model) }
+                    )
+                }
+
+                Text("The model loads while you record, stays ready between dictations, and sleeps after five minutes without use.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 4)
 
                 FormSectionTitle("System prompt")
                     .padding(.top, 7)
@@ -869,9 +898,9 @@ struct ContentView: View {
 
                 HStack(spacing: 8) {
                     Text(shortRefinementStatusText)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(AppTheme.tertiaryText)
-                        .lineLimit(1)
+                        .font(.system(size: 11))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     Spacer(minLength: 8)
 
@@ -1604,90 +1633,6 @@ private struct SettingsFormRow<Control: View>: View {
         }
         .padding(.horizontal, 13)
         .frame(minHeight: 50)
-    }
-}
-
-private struct RefinementModelPickerControl: View {
-    let selectedModel: RefinementModelDescriptor?
-    let emptySelectionTitle: String
-    let isEnabled: Bool
-    let isModelSelectable: (RefinementModelDescriptor) -> Bool
-    let selectModel: (RefinementModelDescriptor) -> Void
-
-    @State private var isShowingOptions = false
-
-    var body: some View {
-        Button {
-            isShowingOptions.toggle()
-        } label: {
-            HStack(spacing: 8) {
-                Text(selectedModel?.displayName ?? emptySelectionTitle)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .lineLimit(1)
-
-                Spacer(minLength: 4)
-
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(AppTheme.secondaryText)
-            }
-            .padding(.horizontal, 10)
-            .frame(width: 160, height: 28)
-            .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(AppTheme.border, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled)
-        .popover(isPresented: $isShowingOptions, arrowEdge: .top) {
-            VStack(spacing: 2) {
-                ForEach(RefinementModelDescriptor.allCases, id: \.self) { model in
-                    let isSelectable = isModelSelectable(model)
-
-                    Button {
-                        isShowingOptions = false
-                        selectModel(model)
-                    } label: {
-                        HStack(alignment: .top, spacing: 9) {
-                            Image(systemName: "checkmark")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(AppTheme.primaryText)
-                                .frame(width: 13, height: 16)
-                                .opacity(model == selectedModel ? 1 : 0)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(model.displayName)
-                                    .font(.system(size: 12.5, weight: .semibold))
-                                    .foregroundStyle(AppTheme.primaryText)
-
-                                Text("\(model.approximateDiskSizeDescription) storage · \(model.estimatedRuntimeMemoryDescription)")
-                                    .font(.system(size: 10.5))
-                                    .foregroundStyle(AppTheme.secondaryText)
-                            }
-
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 7)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(
-                            model == selectedModel ? AppTheme.controlFill : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        )
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!isSelectable)
-                    .opacity(isSelectable ? 1 : 0.45)
-                }
-            }
-            .padding(7)
-            .frame(width: 250)
-            .background(AppTheme.tileFill)
-            .foregroundStyle(AppTheme.primaryText)
-        }
     }
 }
 

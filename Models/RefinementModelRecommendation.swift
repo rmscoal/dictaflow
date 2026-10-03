@@ -40,9 +40,7 @@ struct RefinementModelRecommendation: Equatable, Sendable {
         hardwareProfile: MacHardwareProfile,
         preparedModels: Set<RefinementModelDescriptor>
     ) -> RefinementModelDescriptor {
-        RefinementModelDescriptor.allCases
-            .filter { support(for: $0, hardwareProfile: hardwareProfile, isPrepared: preparedModels.contains($0)).isSupported }
-            .max { $0.qualityRank < $1.qualityRank } ?? .qwen25HalfB
+        .qwen3Small
     }
 
     private static func support(

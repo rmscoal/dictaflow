@@ -30,7 +30,13 @@ struct RefinementConfiguration: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.isEnabled = try container.decode(Bool.self, forKey: .isEnabled)
-        self.model = try container.decode(RefinementModelDescriptor.self, forKey: .model)
+        let savedModelName = try container.decode(String.self, forKey: .model)
+        let savedModel = RefinementModelDescriptor(rawValue: savedModelName)
+        if let savedModel, RefinementModelDescriptor.allCases.contains(savedModel) {
+            self.model = savedModel
+        } else {
+            self.model = .qwen3Small
+        }
         self.mode = try container.decode(RefinementMode.self, forKey: .mode)
     }
 }

@@ -110,6 +110,14 @@ Local refinement can fix punctuation, repeated wording, and rough sentence
 structure. It is optional. If refinement fails, DictaFlow uses the original
 Whisper transcript.
 
+The Refinement page uses one model, Qwen3 0.6B. It loads when recording starts,
+stays ready between dictations, and releases its weights after five minutes
+without use. Turning refinement off or quitting stops the runtime.
+
+Refinement uses the bundled llama-server engine. Older model preferences migrate
+to standard Qwen3, and old downloads remain available for removal from Storage.
+Until Qwen3 is downloaded, dictation uses the original transcript.
+
 ## Models and Local Data
 
 Models are downloaded when you prepare them in DictaFlow. Every download is
@@ -118,7 +126,7 @@ checksum-verified before use.
 | Model type | Available sizes |
 | --- | --- |
 | Whisper | Tiny 75 MB, Base 142 MB, Small 466 MB, Medium 1.5 GB |
-| Refinement | Qwen2.5 0.5B, Qwen2.5 1.5B, Qwen2.5 3B, SmolLM2 1.7B |
+| Refinement | Qwen3 0.6B: 397 MB |
 
 Models are stored in:
 
@@ -177,8 +185,8 @@ Useful commands:
 | `make reset-dev` | Reset Dev onboarding, Microphone, and Accessibility permissions |
 | `make verify` | Build, install, verify signing, and launch |
 
-The main Xcode scheme is `DictaFlow Dev`. There is currently no test target, so
-changes to permissions, hotkeys, insertion, model storage, or launch behavior
+The main Xcode scheme is `DictaFlow Dev`. `DictaFlowTests` covers refinement
+lifecycle and optional real-model inference. See [the verification guide](Tests/README.md). Changes to permissions, hotkeys, insertion, model storage, or launch behavior
 must also be checked with the installed app in `/Applications`.
 
 Contributions are welcome. Please keep DictaFlow local-first and read

@@ -69,6 +69,10 @@ enum ModelDownloadServiceError: LocalizedError {
 }
 
 actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
+    // Retained only so existing downloads can be removed explicitly from Storage.
+    nonisolated private static let retiredRefinementDirectory = "qwen3-0.6b-mlx-4bit"
+    nonisolated private static let retiredRefinementIdentifier = "refinement.qwen3SmallMLX"
+
     nonisolated let modelsDirectoryURL: URL
 
     private let fileManager: FileManager
@@ -85,11 +89,12 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
     init(
         fileManager: FileManager = .default,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        modelsDirectoryURL: URL? = nil
     ) {
         self.fileManager = fileManager
         self.session = session
-        self.modelsDirectoryURL = Self.makeModelsDirectoryURL(fileManager: fileManager)
+        self.modelsDirectoryURL = modelsDirectoryURL ?? Self.makeModelsDirectoryURL(fileManager: fileManager)
     }
 
     func ensureModelAvailable(
@@ -110,7 +115,7 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         _ model: RefinementModelDescriptor,
         progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
     ) async throws -> URL {
-        try await ensureLocalModelAvailable(
+        return try await ensureLocalModelAvailable(
             modelIdentifier: model.modelIdentifier,
             filename: model.filename,
             downloadURL: model.downloadURL,
@@ -188,9 +193,13 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
                 continue
             }
 
-            guard !isDirectory.boolValue else {
+            if file.modelIdentifier == Self.retiredRefinementIdentifier {
+                guard isDirectory.boolValue else { throw ModelDownloadServiceError.modelDeletionUnavailable }
+                deletedByteCount += Self.directoryByteCount(at: fileURL)
+                try fileManager.removeItem(at: fileURL)
                 continue
             }
+            guard !isDirectory.boolValue else { continue }
 
             deletedByteCount += Self.byteCount(at: fileURL, fileManager: fileManager)
             try fileManager.removeItem(at: fileURL)
@@ -372,11 +381,11 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
     }
 
     func verifiedRefinementModelURL(for model: RefinementModelDescriptor) async -> URL? {
-        verifiedModelURL(for: model)
+        return verifiedModelURL(for: model)
     }
 
-    private func verifiedModelURL<Model: LocalModelDescriptor>(for model: Model) -> URL? {
-        let modelURL = modelsDirectoryURL.appendingPathComponent(model.filename, isDirectory: false)
+    private func verifiedModelURL<Model: LocalModelDescriptor>(for model: Model, directory: URL? = nil) -> URL? {
+        let modelURL = (directory ?? modelsDirectoryURL).appendingPathComponent(model.filename, isDirectory: false)
         guard Self.isRegularModelFile(at: modelURL),
               let fingerprint = Self.fingerprint(at: modelURL, expectedChecksum: model.checksum) else {
             verifiedModelFingerprints[model.modelIdentifier] = nil
@@ -496,6 +505,7 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
                 progressHandler(.downloading(bytesWritten: bytesWritten, totalBytes: expectedLength))
             }
 
+            try Task.checkCancellation()
             try outputHandle.synchronize()
             try outputHandle.close()
 
@@ -513,6 +523,7 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
                 try fileManager.removeItem(at: destinationURL)
             }
 
+            try Task.checkCancellation()
             try fileManager.moveItem(at: temporaryURL, to: destinationURL)
             shouldKeepTemporaryFile = true
             progressHandler(.finished(destinationURL))
@@ -528,6 +539,9 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             return destinationURL
         } catch {
             activeDownloads[modelIdentifier] = nil
+            // URLSession reports cancellation as URLError.cancelled. Keep the
+            // app's cancellation path separate from genuine download failures.
+            if task.isCancelled { throw CancellationError() }
             throw error
         }
     }
@@ -560,6 +574,11 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         } catch {
             throw ModelDownloadServiceError.couldNotCreateModelsDirectory
         }
+    }
+
+    nonisolated private static func isRegularModelDirectory(at url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return false }
+        return values.isDirectory == true && values.isSymbolicLink != true
     }
 
     nonisolated private static func isRegularModelFile(at fileURL: URL) -> Bool {
@@ -707,8 +726,15 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
             localModelFile(for: $0, category: .whisper, in: directoryURL, fileManager: fileManager)
         }
 
-        let refinementFiles = RefinementModelDescriptor.allCases.compactMap {
+        var refinementFiles = RefinementModelDescriptor.storedModels.compactMap {
             localModelFile(for: $0, category: .refinement, in: directoryURL, fileManager: fileManager)
+        }
+        let retiredURL = directoryURL.appendingPathComponent(retiredRefinementDirectory, isDirectory: true)
+        if isRegularModelDirectory(at: retiredURL) {
+            refinementFiles.append(LocalModelFile(category: .refinement,
+                modelIdentifier: retiredRefinementIdentifier, displayName: "Qwen3 0.6B (retired MLX download)",
+                filename: retiredRefinementDirectory, fileURL: retiredURL,
+                byteCount: directoryByteCount(at: retiredURL), isEnabled: false))
         }
 
         let encoderFiles = WhisperModelDescriptor.allCases.compactMap {
@@ -797,7 +823,10 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
             return directoryURL.appendingPathComponent(model.filename, isDirectory: false)
         case .refinement:
-            guard let model = RefinementModelDescriptor.allCases.first(where: { $0.modelIdentifier == file.modelIdentifier }),
+            if file.modelIdentifier == retiredRefinementIdentifier, file.filename == retiredRefinementDirectory {
+                return directoryURL.appendingPathComponent(retiredRefinementDirectory, isDirectory: true)
+            }
+            guard let model = RefinementModelDescriptor.storedModels.first(where: { $0.modelIdentifier == file.modelIdentifier }),
                   model.filename == file.filename else {
                 return nil
             }

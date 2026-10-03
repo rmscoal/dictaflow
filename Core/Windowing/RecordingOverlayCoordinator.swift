@@ -192,6 +192,7 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
         case .transcribing, .refining:
             return NSSize(width: transcriptionAndRefinementPanelWidth, height: processingPanelHeight)
         case .requestingPermission,
+             .starting,
              .requestingAccessibilityPermission,
              .inserting:
             let titleWidth = ceil(

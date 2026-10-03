@@ -33,8 +33,9 @@ and previews are disabled during dictation; the mute switch remains available.
   because its model is unavailable/unsupported, or automatic insertion falls
   back to manual copy. Refinement errors still play when the raw transcript is
   used afterward. Intermediate insertion attempts do not play error cues when
-  another fallback completes. Disabled refinement, a server still starting,
-  empty transcripts, and recording/setup/cancellation problems do not play an
+  another fallback completes. Refinement waits for its preparation task; a
+  preparation failure plays the error cue before using the raw transcript.
+  Disabled refinement, empty transcripts, and recording/setup/cancellation problems do not play an
   error cue. Successful insertion is silent.
 
 Cues play sequentially to prevent overlap. Stop/error playback does not
