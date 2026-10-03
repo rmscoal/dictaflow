@@ -187,7 +187,7 @@ final class RecordingOverlayCoordinator: RecordingOverlayRouting {
 
     private func panelSize(for presentation: RecordingOverlayPresentation) -> NSSize {
         switch presentation.phase {
-        case .recording:
+        case .starting, .recording:
             return recordingPanelSize
         case .transcribing, .refining:
             return NSSize(width: transcriptionAndRefinementPanelWidth, height: processingPanelHeight)

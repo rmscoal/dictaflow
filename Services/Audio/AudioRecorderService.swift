@@ -5,9 +5,25 @@ import Foundation
 protocol AudioRecorderServiceProtocol: AnyObject {
     var isRecording: Bool { get }
     var currentPowerLevel: Double { get }
+    var recordingError: Error? { get }
+    func warmUp() async throws
+    func shutdown()
+    func prepareRecording() async throws
     func startRecording() async throws -> URL
     func stopRecording() async throws -> DictationCapture
-    func discardRecording() throws
+    func discardRecording() async throws
+}
+
+extension AudioRecorderServiceProtocol {
+    var recordingError: Error? { nil }
+    func warmUp() async throws {}
+}
+
+@MainActor
+protocol RecordingCuePlaybackProtocol: AnyObject {
+    var isRecording: Bool { get }
+    func playRecordingCue(_ buffer: SoundCuePlaybackBuffer, completion: @escaping @Sendable () -> Void) async throws
+    func stopRecordingCue()
 }
 
 enum AudioRecorderServiceError: LocalizedError {
@@ -15,6 +31,9 @@ enum AudioRecorderServiceError: LocalizedError {
     case notRecording
     case failedToPrepare
     case failedToStart
+    case voiceProcessingUnavailable
+    case audioDeviceChanged
+    case failedToWrite
     case temporaryDirectoryCreationFailed
     case temporaryFileProtectionFailed
     case temporaryFileDeletionFailed
@@ -29,6 +48,12 @@ enum AudioRecorderServiceError: LocalizedError {
             return "The audio recorder could not be prepared."
         case .failedToStart:
             return "The recorder failed to begin capturing microphone audio."
+        case .voiceProcessingUnavailable:
+            return "Echo cancellation could not start. Check your microphone and sound output in System Settings, then try again."
+        case .audioDeviceChanged:
+            return "The audio device changed or stopped. Check your microphone and sound output, then start a new recording."
+        case .failedToWrite:
+            return "The recording could not be saved completely. Check available disk space, then try again."
         case .temporaryDirectoryCreationFailed:
             return "DictaFlow could not create its temporary recording folder."
         case .temporaryFileProtectionFailed:
@@ -40,166 +65,48 @@ enum AudioRecorderServiceError: LocalizedError {
 }
 
 @MainActor
-final class SystemAudioRecorderService: NSObject, AudioRecorderServiceProtocol {
-    private var recorder: AVAudioRecorder?
-    private var activeRecordingURL: URL?
+final class SystemAudioRecorderService: AudioRecorderServiceProtocol, RecordingCuePlaybackProtocol {
+    private let worker = RecordingAudioEngine()
+    private(set) var isRecording = false
 
-    var isRecording: Bool {
-        recorder?.isRecording ?? false
+    var recordingError: Error? { worker.captureError }
+    var currentPowerLevel: Double { isRecording ? worker.currentPowerLevel : 0 }
+
+    func warmUp() async throws {
+        try await worker.perform { try $0.prepareEngine() }
     }
 
-    var currentPowerLevel: Double {
-        guard let recorder, recorder.isRecording else {
-            return 0
-        }
-
-        recorder.updateMeters()
-        let averagePower = Double(recorder.averagePower(forChannel: 0))
-        guard averagePower.isFinite else {
-            return 0
-        }
-
-        let normalizedPower = (averagePower + 55) / 55
-        return min(max(normalizedPower, 0), 1)
+    func prepareRecording() async throws {
+        try await worker.perform { try $0.prepareCapture() }
     }
 
     func startRecording() async throws -> URL {
-        guard !isRecording else {
-            throw AudioRecorderServiceError.alreadyRecording
-        }
-
-        let fileURL = try makeRecordingURL()
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: 44_100,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-
-        let recorder = try AVAudioRecorder(url: fileURL, settings: settings)
-        recorder.isMeteringEnabled = true
-
-        guard recorder.prepareToRecord() else {
-            try? FileManager.default.removeItem(at: fileURL)
-            throw AudioRecorderServiceError.failedToPrepare
-        }
-
-        guard recorder.record() else {
-            try? FileManager.default.removeItem(at: fileURL)
-            throw AudioRecorderServiceError.failedToStart
-        }
-
-        do {
-            try secureRecordingFile(at: fileURL)
-        } catch {
-            recorder.stop()
-            try? FileManager.default.removeItem(at: fileURL)
-            throw AudioRecorderServiceError.temporaryFileProtectionFailed
-        }
-
-        self.recorder = recorder
-        self.activeRecordingURL = fileURL
-        return fileURL
+        let url = try await worker.perform { try $0.startCapture() }
+        isRecording = true
+        return url
     }
 
     func stopRecording() async throws -> DictationCapture {
-        guard let recorder, recorder.isRecording, let fileURL else {
-            throw AudioRecorderServiceError.notRecording
-        }
-
-        recorder.stop()
-
-        let capture = DictationCapture(
-            fileURL: fileURL,
-            duration: measuredDuration(of: fileURL) ?? recorder.currentTime,
-            capturedAt: Date()
-        )
-
-        self.recorder = nil
-        self.activeRecordingURL = nil
-        return capture
+        defer { isRecording = false }
+        return try await worker.perform { try $0.finishCapture() }
     }
 
-    func discardRecording() throws {
-        guard let recorder, recorder.isRecording, let fileURL else {
-            throw AudioRecorderServiceError.notRecording
-        }
-
-        recorder.stop()
-        self.recorder = nil
-        self.activeRecordingURL = nil
-
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return
-        }
-
-        do {
-            try FileManager.default.removeItem(at: fileURL)
-        } catch {
-            throw AudioRecorderServiceError.temporaryFileDeletionFailed
-        }
+    func discardRecording() async throws {
+        defer { isRecording = false }
+        try await worker.perform { try $0.discardCapture() }
     }
 
-    private var fileURL: URL? {
-        activeRecordingURL
+    func playRecordingCue(_ buffer: SoundCuePlaybackBuffer, completion: @escaping @Sendable () -> Void) async throws {
+        guard isRecording else { throw SoundCueServiceError.playbackFailed }
+        try await worker.perform { try $0.playCue(buffer, completion: completion) }
     }
 
-    private func makeRecordingURL() throws -> URL {
-        let directoryURL = FileManager.default.temporaryDirectory.appendingPathComponent("DictaFlowRecordings", isDirectory: true)
-
-        try ensureRecordingDirectoryExists(at: directoryURL)
-
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
-        let timestamp = formatter.string(from: Date()).replacingOccurrences(of: ":", with: "-")
-        let filename = "capture-\(timestamp)-\(UUID().uuidString.lowercased()).m4a"
-        return directoryURL.appendingPathComponent(filename)
+    func stopRecordingCue() {
+        worker.stopCue()
     }
 
-    private func ensureRecordingDirectoryExists(at directoryURL: URL) throws {
-        do {
-            try FileManager.default.createDirectory(
-                at: directoryURL,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: NSNumber(value: Int16(0o700))]
-            )
-
-            let resourceValues = try directoryURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            guard resourceValues.isDirectory == true, resourceValues.isSymbolicLink != true else {
-                throw AudioRecorderServiceError.temporaryDirectoryCreationFailed
-            }
-
-            try FileManager.default.setAttributes(
-                [.posixPermissions: NSNumber(value: Int16(0o700))],
-                ofItemAtPath: directoryURL.path
-            )
-        } catch {
-            throw AudioRecorderServiceError.temporaryDirectoryCreationFailed
-        }
-    }
-
-    private func secureRecordingFile(at fileURL: URL) throws {
-        try FileManager.default.setAttributes(
-            [.posixPermissions: NSNumber(value: Int16(0o600))],
-            ofItemAtPath: fileURL.path
-        )
-
-        var excludedURL = fileURL
-        var resourceValues = URLResourceValues()
-        resourceValues.isExcludedFromBackup = true
-        try excludedURL.setResourceValues(resourceValues)
-    }
-
-    private func measuredDuration(of fileURL: URL) -> TimeInterval? {
-        guard let audioFile = try? AVAudioFile(forReading: fileURL) else {
-            return nil
-        }
-
-        let sampleRate = audioFile.processingFormat.sampleRate
-        guard sampleRate > 0 else {
-            return nil
-        }
-
-        return TimeInterval(audioFile.length) / sampleRate
+    func shutdown() {
+        worker.shutdown()
+        isRecording = false
     }
 }

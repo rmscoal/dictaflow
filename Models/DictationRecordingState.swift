@@ -3,6 +3,7 @@ import Foundation
 enum DictationRecordingState: Equatable {
     case idle
     case requestingPermission
+    case starting
     case recording(startedAt: Date, fileURL: URL)
     case stopping
 
