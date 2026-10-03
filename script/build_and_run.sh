@@ -87,8 +87,19 @@ install_dev_app() {
     if [[ -e "$backup_dir/$DEV_APP_NAME.app" ]]; then
       mv "$backup_dir/$DEV_APP_NAME.app" "$DEV_INSTALLED_APP"
     fi
+    prune_app_backups
     return 1
   fi
+  prune_app_backups
+}
+
+prune_app_backups() {
+  # Keep only the newest backups so repeated installs cannot fill the disk.
+  local backup_root="$ROOT_DIR/.build/AppBackups"
+  [[ -d "$backup_root" ]] || return 0
+  ls -t "$backup_root" | tail -n +4 | while IFS= read -r entry; do
+    rm -rf "$backup_root/$entry"
+  done
 }
 
 uninstall_dev_app() {

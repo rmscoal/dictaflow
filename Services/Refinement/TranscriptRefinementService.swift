@@ -244,7 +244,8 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
 /// Shared limits and output checks keep both backends' insertion behavior consistent.
 enum RefinementInference {
     nonisolated static func maximumOutputTokens(for transcript: String) -> Int {
-        min(1024, max(128, transcript.count / 3))
+        // CJK/Thai scripts use about one token per character. Do not assume Latin density.
+        min(1024, max(128, transcript.count + 64))
     }
 
     nonisolated static func result(_ output: String, original: String, configuration: RefinementConfiguration) throws -> TranscriptRefinementResult {

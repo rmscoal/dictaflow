@@ -145,6 +145,15 @@ final class RefinementLifecycleTests: XCTestCase {
         XCTAssertEqual(try RefinementInference.result("  Correct text.\n", original: "Original", configuration: .default).refinedText, "Correct text.")
     }
 
+    func testOutputBudgetCoversDenseScripts() {
+        XCTAssertEqual(RefinementInference.maximumOutputTokens(for: ""), 128)
+        XCTAssertEqual(RefinementInference.maximumOutputTokens(for: String(repeating: "a", count: 300)), 364)
+        // CJK scripts use about one token per character, so the budget must not
+        // assume Latin token density.
+        XCTAssertEqual(RefinementInference.maximumOutputTokens(for: String(repeating: "中", count: 600)), 664)
+        XCTAssertEqual(RefinementInference.maximumOutputTokens(for: String(repeating: "中", count: 5000)), 1024)
+    }
+
     private func fixtureSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [RefinementHTTPFixture.self]
