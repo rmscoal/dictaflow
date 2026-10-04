@@ -9,6 +9,8 @@ protocol SettingsStoreProtocol: AnyObject {
     var cachedAvailableUpdate: AppRelease? { get }
     var globalShortcut: GlobalShortcutDescriptor { get }
     var recordingPlaybackBehavior: RecordingPlaybackBehavior { get }
+    var soundCuesEnabled: Bool { get }
+    var soundCueStyle: SoundCueStyle { get }
     var whisperConfiguration: WhisperConfiguration { get }
     var refinementConfiguration: RefinementConfiguration { get }
     func saveAppAppearance(_ appearance: AppAppearance)
@@ -18,6 +20,8 @@ protocol SettingsStoreProtocol: AnyObject {
     func saveUpdateCheck(date: Date, availableUpdate: AppRelease?)
     func saveGlobalShortcut(_ shortcut: GlobalShortcutDescriptor)
     func saveRecordingPlaybackBehavior(_ behavior: RecordingPlaybackBehavior)
+    func saveSoundCuesEnabled(_ isEnabled: Bool)
+    func saveSoundCueStyle(_ style: SoundCueStyle)
     func saveWhisperConfiguration(_ configuration: WhisperConfiguration)
     func saveRefinementConfiguration(_ configuration: RefinementConfiguration)
 }
@@ -32,6 +36,8 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
         static let cachedAvailableUpdate = "updates.cachedAvailableRelease"
         static let globalShortcut = "hotkey.globalShortcut"
         static let recordingPlaybackBehavior = "audio.recordingPlaybackBehavior"
+        static let soundCuesEnabled = "audio.soundCuesEnabled"
+        static let soundCueStyle = "audio.soundCueStyle"
         static let whisperConfiguration = "whisper.configuration"
         static let refinementConfiguration = "refinement.configuration"
     }
@@ -118,6 +124,24 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
         }
 
         return (try? JSONDecoder().decode(RefinementConfiguration.self, from: data)) ?? .default
+    }
+
+    var soundCuesEnabled: Bool {
+        defaults.object(forKey: Keys.soundCuesEnabled) == nil
+            ? true
+            : defaults.bool(forKey: Keys.soundCuesEnabled)
+    }
+
+    var soundCueStyle: SoundCueStyle {
+        defaults.string(forKey: Keys.soundCueStyle).flatMap(SoundCueStyle.init(rawValue:)) ?? .softDigital
+    }
+
+    func saveSoundCuesEnabled(_ isEnabled: Bool) {
+        defaults.set(isEnabled, forKey: Keys.soundCuesEnabled)
+    }
+
+    func saveSoundCueStyle(_ style: SoundCueStyle) {
+        defaults.set(style.rawValue, forKey: Keys.soundCueStyle)
     }
 
     func markInitialWindowPresentationComplete() {

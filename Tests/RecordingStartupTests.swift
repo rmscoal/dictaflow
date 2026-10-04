@@ -80,7 +80,7 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(fixture.state.transcriptionState, .idle)
     }
 
-    func testRepeatedToggleDuringDuckingStartsOnlyOneRecorderAndCanStop() async throws {
+    func testRecordingStartsBeforeDuckingAndStopWaitsForVolumeRestoration() async throws {
         let fixture = try RecordingStartupFixture()
         defer { fixture.cleanup() }
         let ducking = expectation(description: "Ducking is waiting")
@@ -88,33 +88,54 @@ final class RecordingStartupTests: XCTestCase {
         fixture.state.toggleDictation()
         await fulfillment(of: [ducking], timeout: 2)
 
-        XCTAssertEqual(fixture.state.recordingState, .starting)
-        XCTAssertTrue(fixture.state.whisperSettingsLocked)
-        XCTAssertTrue(fixture.state.isDictationActionDisabled)
-        XCTAssertEqual(fixture.overlay.presentation?.phase, .starting)
-        fixture.state.toggleDictation()
-        try await Task.sleep(for: .milliseconds(30))
-        XCTAssertEqual(fixture.volume.beginCalls, 1)
-        XCTAssertEqual(fixture.recorder.startCalls, 0)
-
-        let recording = expectation(description: "Recording starts")
-        let observation = fixture.state.$recordingState.sink {
-            if $0.isRecording { recording.fulfill() }
-        }
-        fixture.volume.resume()
-        await fulfillment(of: [recording], timeout: 2)
-        observation.cancel()
-        XCTAssertEqual(fixture.recorder.startCalls, 1)
+        XCTAssertTrue(fixture.state.recordingState.isRecording)
         XCTAssertTrue(fixture.recorder.isRecording)
+        XCTAssertEqual(fixture.recorder.startCalls, 1)
         XCTAssertFalse(fixture.state.isDictationActionDisabled)
         XCTAssertEqual(fixture.overlay.presentation?.phase, .recording)
+        XCTAssertEqual(fixture.cues.played, [.startRecording])
 
-        let stopped = expectation(description: "The next toggle stops recording")
+        let stopped = expectation(description: "Capture stops while ducking is pending")
         fixture.recorder.onStop = { stopped.fulfill() }
         fixture.state.toggleDictation()
         await fulfillment(of: [stopped], timeout: 2)
-        XCTAssertEqual(fixture.recorder.stopCalls, 1)
         XCTAssertFalse(fixture.recorder.isRecording)
+        XCTAssertEqual(fixture.volume.restoreCalls, 0)
+
+        let restored = expectation(description: "Pending ducking finishes before restoration")
+        fixture.volume.onRestore = { restored.fulfill() }
+        fixture.volume.resume()
+        await fulfillment(of: [restored], timeout: 2)
+        XCTAssertFalse(fixture.volume.isDucked)
+        XCTAssertEqual(fixture.recorder.stopCalls, 1)
+    }
+
+    func testCancellationDuringPreparationHidesPillAndNeverStartsCapture() async throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        fixture.recorder.shouldWaitPreparation = true
+        let preparing = expectation(description: "Audio preparation is waiting")
+        fixture.recorder.onPrepare = { preparing.fulfill() }
+        fixture.state.toggleDictation()
+        await fulfillment(of: [preparing], timeout: 2)
+        XCTAssertEqual(fixture.state.recordingState, .starting)
+        XCTAssertTrue(fixture.overlay.presentation?.isCancellable == true)
+
+        let stopping = expectation(description: "Cancellation reserves cleanup")
+        let observation = fixture.state.$recordingState.sink {
+            if $0 == .stopping { stopping.fulfill() }
+        }
+        let cancellation = Task { await fixture.state.cancelRecording() }
+        await fulfillment(of: [stopping], timeout: 2)
+        observation.cancel()
+        XCTAssertNil(fixture.overlay.presentation)
+        fixture.recorder.resumePreparation()
+        await cancellation.value
+        XCTAssertEqual(fixture.state.recordingState, .idle)
+        XCTAssertEqual(fixture.recorder.startCalls, 0)
+        XCTAssertEqual(fixture.volume.beginCalls, 0)
+        XCTAssertTrue(fixture.cues.played.isEmpty)
+        XCTAssertNil(fixture.state.recordingFailureMessage)
     }
 
     func testRepeatedToggleWhileRecorderStartsDoesNotResetTheSession() async throws {
@@ -200,6 +221,7 @@ private final class RecordingStartupFixture {
     let volume = StartupVolumeService()
     let recorder: StartupRecorderService
     let overlay = StartupOverlayRouter()
+    let cues = StartupCueService()
     let state: DictaFlowAppState
 
     init(
@@ -222,6 +244,7 @@ private final class RecordingStartupFixture {
         state = DictaFlowAppState(
             settingsStore: settings, permissionService: permissions,
             audioRecorderService: recorder, audioOutputVolumeService: volume,
+            soundCueService: cues,
             hotkeyService: StartupHotkeyService(),
             modelDownloadService: usePipelineModels
                 ? PipelineModelDownloadService(modelsDirectoryURL: directory)
@@ -247,6 +270,9 @@ private final class RecordingStartupFixture {
 private final class StartupVolumeService: AudioOutputVolumeServiceProtocol {
     var shouldWait = true
     var beginCalls = 0
+    var restoreCalls = 0
+    var isDucked = false
+    var onRestore: (() -> Void)?
     var onBegin: (() -> Void)?
     private var continuation: CheckedContinuation<Void, Never>?
     func beginDucking() async throws {
@@ -254,9 +280,14 @@ private final class StartupVolumeService: AudioOutputVolumeServiceProtocol {
         if shouldWait {
             await withCheckedContinuation { continuation = $0; onBegin?() }
         }
+        isDucked = true
     }
     func resume() { continuation?.resume(); continuation = nil }
-    func restoreDucking() async throws {}
+    func restoreDucking() async throws {
+        restoreCalls += 1
+        isDucked = false
+        onRestore?()
+    }
     nonisolated func restoreDuckingForTermination() throws {}
 }
 
@@ -269,10 +300,20 @@ private final class StartupRecorderService: AudioRecorderServiceProtocol {
     var stopCalls = 0
     var shouldWait = false
     var failNextStart = false
+    var shouldWaitPreparation = false
+    var onPrepare: (() -> Void)?
+    private var preparationContinuation: CheckedContinuation<Void, Never>?
     var onStart: (() -> Void)?
     var onStop: (() -> Void)?
     private var continuation: CheckedContinuation<Void, Never>?
     init(fileURL: URL) { self.fileURL = fileURL }
+    func prepareRecording() async throws {
+        if shouldWaitPreparation {
+            await withCheckedContinuation { preparationContinuation = $0; onPrepare?() }
+        }
+    }
+    func resumePreparation() { preparationContinuation?.resume(); preparationContinuation = nil }
+    func shutdown() { isRecording = false }
     func startRecording() async throws -> URL {
         startCalls += 1
         guard !isRecording else { throw AudioRecorderServiceError.alreadyRecording }
@@ -293,6 +334,9 @@ private final class StartupRecorderService: AudioRecorderServiceProtocol {
     }
     func discardRecording() throws {
         isRecording = false
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            throw AudioRecorderServiceError.notRecording
+        }
         try FileManager.default.removeItem(at: fileURL)
     }
 }
@@ -337,7 +381,7 @@ private final class StartupPromptStore: RefinementPromptStoreProtocol {
 private final class StartupInsertionService: TextInsertionServiceProtocol {
     func insertText(_ text: String, targetApplication: InsertionTargetApplication?, allowAccessibilityFeatures: Bool) async -> TextInsertionResult {
         XCTFail("No insertion is expected")
-        return TextInsertionResult(text: text, method: .copyPanel, targetApplicationName: nil, completedAt: Date())
+        return TextInsertionResult(text: text, method: .copyPanel, targetApplicationName: nil, completedAt: Date(), isInsertionConfirmed: false)
     }
     func copyTextToPasteboard(_ text: String) { XCTFail("No clipboard writes are expected") }
 }
@@ -410,4 +454,11 @@ private final class PipelineModelDownloadService: ModelDownloadServiceProtocol {
     func ensureRefinementModelAvailable(_ model: RefinementModelDescriptor, progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void) async throws -> URL {
         modelsDirectoryURL.appendingPathComponent(model.filename)
     }
+}
+
+@MainActor
+private final class StartupCueService: SoundCueServiceProtocol {
+    var played: [SoundCue] = []
+    func play(_ cue: SoundCue, style: SoundCueStyle) async throws { played.append(cue) }
+    func stop() {}
 }
