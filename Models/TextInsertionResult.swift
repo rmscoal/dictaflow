@@ -5,12 +5,14 @@ struct TextInsertionResult: Equatable {
     let method: TextInsertionMethod
     let targetApplicationName: String?
     let completedAt: Date
+    let isInsertionConfirmed: Bool
 
     var summaryText: String {
         let targetText = targetApplicationName ?? "the target app"
         switch method {
         case .accessibilityDirect, .clipboardPaste, .simulatedTyping:
-            return "Inserted into \(targetText) via \(method.title) at \(completedAt.formatted(date: .omitted, time: .standard))."
+            let action = isInsertionConfirmed ? "Inserted into" : "Sent to"
+            return "\(action) \(targetText) via \(method.title) at \(completedAt.formatted(date: .omitted, time: .standard))."
         case .copyPanel:
             return "Copied for manual paste into \(targetText) at \(completedAt.formatted(date: .omitted, time: .standard))."
         }

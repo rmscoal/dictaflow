@@ -42,17 +42,20 @@ final class SystemTextInsertionService: TextInsertionServiceProtocol {
                     text: trimmedText,
                     method: .accessibilityDirect,
                     targetApplicationName: targetApplicationName,
-                    completedAt: Date()
+                    completedAt: Date(),
+                    isInsertionConfirmed: true
                 )
             }
 
-            switch await insertViaPaste(trimmedText, targetApplication: targetApplication) {
+            let pasteOutcome = await insertViaPaste(trimmedText, targetApplication: targetApplication)
+            switch pasteOutcome {
             case .confirmed, .posted:
                 return TextInsertionResult(
                     text: trimmedText,
                     method: .clipboardPaste,
                     targetApplicationName: targetApplicationName,
-                    completedAt: Date()
+                    completedAt: Date(),
+                    isInsertionConfirmed: pasteOutcome == .confirmed
                 )
             case .notPosted:
                 break
@@ -63,7 +66,8 @@ final class SystemTextInsertionService: TextInsertionServiceProtocol {
                     text: trimmedText,
                     method: .simulatedTyping,
                     targetApplicationName: targetApplicationName,
-                    completedAt: Date()
+                    completedAt: Date(),
+                    isInsertionConfirmed: false
                 )
             }
         }
@@ -75,7 +79,8 @@ final class SystemTextInsertionService: TextInsertionServiceProtocol {
             text: trimmedText,
             method: .copyPanel,
             targetApplicationName: targetApplicationName,
-            completedAt: Date()
+            completedAt: Date(),
+            isInsertionConfirmed: false
         )
     }
 

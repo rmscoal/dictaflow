@@ -64,6 +64,7 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var lastTranscription: WhisperTranscriptionResult?
     @Published private(set) var lastTextInsertion: TextInsertionResult?
     @Published private(set) var statusMessage: String
+    @Published private(set) var recordingFailureMessage: String?
     private var recordingAudioLevel: Double {
         didSet {
             updateRecordingOverlay()
@@ -72,6 +73,9 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isHotkeyRegistered = false
     @Published private(set) var globalShortcut: GlobalShortcutDescriptor
     @Published private(set) var recordingPlaybackBehavior: RecordingPlaybackBehavior
+    @Published private(set) var soundCuesEnabled: Bool
+    @Published private(set) var soundCueStyle: SoundCueStyle
+    @Published private(set) var soundCuePlaybackMessage: String?
     @Published private(set) var isEditingGlobalShortcut = false
     @Published private(set) var globalShortcutEditingMessage: String?
     @Published private(set) var isDeletingModel = false
@@ -99,6 +103,7 @@ final class DictaFlowAppState: ObservableObject {
     private let permissionService: PermissionServiceProtocol
     private let audioRecorderService: AudioRecorderServiceProtocol
     private let audioOutputVolumeService: AudioOutputVolumeServiceProtocol
+    private let soundCueService: SoundCueServiceProtocol
     private let hotkeyService: HotkeyServiceProtocol
     private let modelDownloadService: ModelDownloadServiceProtocol
     private let whisperService: WhisperServiceProtocol
@@ -117,6 +122,9 @@ final class DictaFlowAppState: ObservableObject {
     private weak var recordingOverlayRouter: RecordingOverlayRouting?
     private var workspaceObservers = Set<AnyCancellable>()
     private var recordingMeterTimer: Timer?
+    private var soundCuePlaybackGeneration = 0
+    private var recordingStartFeedbackTask: Task<Void, Never>?
+    private var dictationToggleTask: Task<Void, Never>?
     private var whisperIdleEvictionTimer: Timer?
     private var refinementPreparationTask: Task<URL, Error>?
     private var refinementShutdownTask: Task<Void, Never>?
@@ -135,11 +143,13 @@ final class DictaFlowAppState: ObservableObject {
     private var activeWhisperEncoderDownloadTokens: [WhisperModelDescriptor: UUID] = [:]
 
     convenience init() {
+        let audioRecorder = SystemAudioRecorderService()
         self.init(
             settingsStore: UserDefaultsSettingsStore(),
             permissionService: SystemPermissionService(),
-            audioRecorderService: SystemAudioRecorderService(),
+            audioRecorderService: audioRecorder,
             audioOutputVolumeService: SystemAudioOutputVolumeService(),
+            soundCueService: SoundCueService(recordingPlayback: audioRecorder),
             hotkeyService: CarbonHotkeyService(),
             modelDownloadService: WhisperModelDownloadService(),
             whisperService: WhisperCPPService(),
@@ -156,6 +166,7 @@ final class DictaFlowAppState: ObservableObject {
         permissionService: PermissionServiceProtocol,
         audioRecorderService: AudioRecorderServiceProtocol,
         audioOutputVolumeService: AudioOutputVolumeServiceProtocol,
+        soundCueService: SoundCueServiceProtocol,
         hotkeyService: HotkeyServiceProtocol,
         modelDownloadService: ModelDownloadServiceProtocol,
         whisperService: WhisperServiceProtocol,
@@ -173,6 +184,7 @@ final class DictaFlowAppState: ObservableObject {
         self.permissionService = permissionService
         self.audioRecorderService = audioRecorderService
         self.audioOutputVolumeService = audioOutputVolumeService
+        self.soundCueService = soundCueService
         self.hotkeyService = hotkeyService
         self.modelDownloadService = modelDownloadService
         self.whisperService = whisperService
@@ -205,6 +217,8 @@ final class DictaFlowAppState: ObservableObject {
         self.recordingAudioLevel = 0
         self.globalShortcut = settingsStore.globalShortcut
         self.recordingPlaybackBehavior = settingsStore.recordingPlaybackBehavior
+        self.soundCuesEnabled = settingsStore.soundCuesEnabled
+        self.soundCueStyle = settingsStore.soundCueStyle
         self.globalShortcutEditingMessage = nil
         self.isRefinementRuntimeAvailable = false
         self.isRefinementServerPreparing = false
@@ -708,6 +722,7 @@ final class DictaFlowAppState: ObservableObject {
         removeIncompleteModelDownloads()
         refreshInstalledLocalModelFiles()
         refreshMicrophonePermissionStatus()
+        prepareRecordingAudioIfPermitted()
         refreshAccessibilityPermissionStatus()
         registerGlobalHotkey()
         refreshRefinementRuntimeAvailability()
@@ -813,6 +828,57 @@ final class DictaFlowAppState: ObservableObject {
         recordingPlaybackBehavior = behavior
         settingsStore.saveRecordingPlaybackBehavior(behavior)
         updateStatusMessage()
+    }
+
+    func updateSoundCuesEnabled(_ isEnabled: Bool) {
+        soundCuesEnabled = isEnabled
+        settingsStore.saveSoundCuesEnabled(isEnabled)
+        soundCuePlaybackMessage = nil
+        if isEnabled, !whisperSettingsLocked { try? soundCueService.prepare(style: soundCueStyle) }
+        if !isEnabled {
+            stopSoundCues()
+        }
+    }
+
+    func updateSoundCueStyle(_ style: SoundCueStyle) {
+        guard !whisperSettingsLocked, soundCueStyle != style else { return }
+        stopSoundCues()
+        soundCueStyle = style
+        settingsStore.saveSoundCueStyle(style)
+        soundCuePlaybackMessage = nil
+        if soundCuesEnabled { try? soundCueService.prepare(style: style) }
+    }
+
+    func previewSoundCue(_ cue: SoundCue) {
+        guard soundCuesEnabled, !whisperSettingsLocked else { return }
+        stopSoundCues()
+        soundCuePlaybackMessage = nil
+        playSoundCue(cue)
+    }
+
+    private func stopSoundCues() {
+        soundCuePlaybackGeneration += 1
+        soundCueService.stop()
+    }
+
+    private func playSoundCue(_ cue: SoundCue) {
+        let generation = soundCuePlaybackGeneration
+        Task { @MainActor [weak self] in
+            guard let self, generation == soundCuePlaybackGeneration else { return }
+            await playSoundCueAndWait(cue, generation: generation)
+        }
+    }
+
+    private func playSoundCueAndWait(_ cue: SoundCue, generation: Int) async {
+        guard soundCuesEnabled, generation == soundCuePlaybackGeneration else { return }
+        do {
+            try await soundCueService.play(cue, style: soundCueStyle)
+        } catch {
+            guard generation == soundCuePlaybackGeneration else { return }
+            logger.error("Could not play a sound cue: \(error.localizedDescription, privacy: .public)")
+            soundCuePlaybackMessage = (error as? SoundCueServiceError)?.localizedDescription
+                ?? "Could not play sound cues. Check your Mac's sound output or turn off sound cues here."
+        }
     }
 
     func updateInputLanguage(_ inputLanguage: WhisperInputLanguage) {
@@ -943,6 +1009,16 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
+    private func prepareRecordingAudioIfPermitted() {
+        guard microphonePermissionState == .granted else { return }
+        if soundCuesEnabled { try? soundCueService.prepare(style: soundCueStyle) }
+        Task { [weak self] in
+            guard let self else { return }
+            do { try await audioRecorderService.warmUp() }
+            catch { logger.error("Audio preparation failed: \(error.localizedDescription, privacy: .public)") }
+        }
+    }
+
     func refreshAccessibilityPermissionStatus() {
         accessibilityPermissionState = resolvedAccessibilityPermissionState()
         updateStatusMessage()
@@ -965,6 +1041,7 @@ final class DictaFlowAppState: ObservableObject {
             await MainActor.run {
                 self.microphonePermissionState = permissionState
                 self.isRequestingMicrophonePermission = false
+                self.prepareRecordingAudioIfPermitted()
                 self.updateStatusMessage()
             }
         }
@@ -1400,7 +1477,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func toggleDictation() {
-        guard !isEditingGlobalShortcut else {
+        guard !isEditingGlobalShortcut, dictationToggleTask == nil else {
             return
         }
 
@@ -1412,21 +1489,35 @@ final class DictaFlowAppState: ObservableObject {
             isOnboardingPracticeSession = true
         }
 
-        Task { @MainActor [weak self] in
-            await self?.performDictationToggle()
+        dictationToggleTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await performDictationToggle()
+            dictationToggleTask = nil
         }
     }
 
     func cancelRecording() async {
+        if recordingState == .starting {
+            let startup = dictationToggleTask
+            startup?.cancel()
+            recordingState = .stopping
+            setRecordingOverlaySessionActive(false)
+            updateStatusMessage()
+            await startup?.value
+            return
+        }
         guard recordingState.isRecording else {
             return
         }
 
+        recordingState = .stopping
+        let startFeedbackTask = cancelRecordingStartFeedback()
         stopRecordingMetering()
 
         do {
-            try audioRecorderService.discardRecording()
-            await restoreRecordingPlaybackAdjustment()
+            try await audioRecorderService.discardRecording()
+            await finishRecordingFeedback(startFeedbackTask)
+            playSoundCue(.stopRecording)
             recordingState = .idle
             pendingInsertionTargetApplication = nil
             isOnboardingPracticeSession = false
@@ -1434,7 +1525,7 @@ final class DictaFlowAppState: ObservableObject {
             setPreservedStatusMessage("Recording cancelled.")
             updateStatusMessage()
         } catch {
-            await restoreRecordingPlaybackAdjustment()
+            await finishRecordingFeedback(startFeedbackTask)
             recordingState = .idle
             pendingInsertionTargetApplication = nil
             isOnboardingPracticeSession = false
@@ -1688,7 +1779,11 @@ final class DictaFlowAppState: ObservableObject {
 
     func prepareForTermination() {
         isTerminating = true
+        dictationToggleTask?.cancel()
+        cancelRecordingStartFeedback()
+        stopSoundCues()
         stopRecordingMetering()
+        audioRecorderService.shutdown()
         cancelWhisperIdleTimer()
         restoreRecordingPlaybackAdjustmentForTermination()
         recordingOverlayRouter?.updateOverlay(nil, cancelAction: {})
@@ -2167,7 +2262,11 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func beginRecordingFlow() async {
+        let requestedAt = ProcessInfo.processInfo.systemUptime
+        recordingFailureMessage = nil
         clearPreservedStatusMessage()
+        cancelRecordingStartFeedback()
+        stopSoundCues()
 
         guard isWhisperModelPrepared(whisperConfiguration.model) else {
             isOnboardingPracticeSession = false
@@ -2185,6 +2284,7 @@ final class DictaFlowAppState: ObservableObject {
         recordingState = microphonePermissionState == .granted ? .starting : .requestingPermission
         setRecordingOverlaySessionActive(true)
         updateStatusMessage()
+        logger.info("Recording start acknowledged in \((ProcessInfo.processInfo.systemUptime - requestedAt) * 1_000, privacy: .public) ms")
 
         let permissionState = await permissionService.requestMicrophonePermissionIfNeeded()
         microphonePermissionState = permissionState
@@ -2201,48 +2301,92 @@ final class DictaFlowAppState: ObservableObject {
         do {
             recordingState = .starting
             updateStatusMessage()
-            await beginRecordingPlaybackAdjustment()
+            try Task.checkCancellation()
+            try await audioRecorderService.prepareRecording()
+            try Task.checkCancellation()
             let fileURL = try await audioRecorderService.startRecording()
+            try Task.checkCancellation()
             recordingState = .recording(startedAt: Date(), fileURL: fileURL)
             setRecordingOverlaySessionActive(true)
             startRecordingMetering()
+            beginRecordingStartFeedback()
+            logger.info("Recording ready in \((ProcessInfo.processInfo.systemUptime - requestedAt) * 1_000, privacy: .public) ms")
             resetWhisperIdleTimer()
             prewarmWhisperModel()
             prewarmRefinementModel()
             updateStatusMessage()
         } catch {
+            do {
+                try await audioRecorderService.discardRecording()
+            } catch AudioRecorderServiceError.notRecording {
+                // Preparation may fail before creating a recorder.
+            } catch {
+                logger.error("Could not discard prepared recording: \(error.localizedDescription, privacy: .public)")
+            }
             await restoreRecordingPlaybackAdjustment()
             stopRecordingMetering()
             recordingState = .idle
             isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
-            setPreservedStatusMessage("Could not start recording. \(error.localizedDescription)")
-            showMainWindow()
+            pendingInsertionTargetApplication = nil
+            if error is CancellationError {
+                setPreservedStatusMessage("Recording cancelled.")
+                updateStatusMessage()
+                return
+            }
+            reportRecordingFailure("Could not start recording. \(error.localizedDescription)")
         }
     }
 
     private func finishRecordingFlow() async {
         recordingState = .stopping
+        let startFeedbackTask = cancelRecordingStartFeedback()
         stopRecordingMetering()
         updateStatusMessage()
 
         do {
             let capture = try await audioRecorderService.stopRecording()
-            await restoreRecordingPlaybackAdjustment()
+            await finishRecordingFeedback(startFeedbackTask)
+            playSoundCue(.stopRecording)
             lastCapture = capture
             microphonePermissionState = permissionService.currentMicrophonePermissionStatus()
             recordingState = .idle
             updateStatusMessage()
             await transcribe(capture: capture)
         } catch {
-            await restoreRecordingPlaybackAdjustment()
+            await finishRecordingFeedback(startFeedbackTask)
             stopRecordingMetering()
             recordingState = .idle
             isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
-            setPreservedStatusMessage("Could not stop recording cleanly. \(error.localizedDescription)")
-            showMainWindow()
+            reportRecordingFailure("Could not stop recording cleanly. \(error.localizedDescription)")
         }
+    }
+
+    private func beginRecordingStartFeedback() {
+        let generation = soundCuePlaybackGeneration
+        recordingStartFeedbackTask = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            await playSoundCueAndWait(.startRecording, generation: generation)
+            guard !Task.isCancelled, recordingState.isRecording else { return }
+            await beginRecordingPlaybackAdjustment()
+        }
+    }
+
+    @discardableResult
+    private func cancelRecordingStartFeedback() -> Task<Void, Never>? {
+        let task = recordingStartFeedbackTask
+        recordingStartFeedbackTask = nil
+        task?.cancel()
+        return task
+    }
+
+    private func finishRecordingFeedback(_ startFeedbackTask: Task<Void, Never>?) async {
+        stopSoundCues()
+        // A cancelled task may still have a volume change in flight. Wait for
+        // it before restoring volume so a late change cannot lower it again.
+        await startFeedbackTask?.value
+        await restoreRecordingPlaybackAdjustment()
     }
 
     private func beginRecordingPlaybackAdjustment() async {
@@ -2285,12 +2429,45 @@ final class DictaFlowAppState: ObservableObject {
                     return
                 }
 
+                if let error = self.audioRecorderService.recordingError {
+                    await self.handleRecordingFailure(error)
+                    return
+                }
                 self.recordingAudioLevel = self.audioRecorderService.currentPowerLevel
             }
         }
         timer.tolerance = 0.02
         RunLoop.main.add(timer, forMode: .common)
         recordingMeterTimer = timer
+    }
+
+    private func handleRecordingFailure(_ error: Error) async {
+        guard recordingState.isRecording else { return }
+        recordingState = .stopping
+        let feedbackTask = cancelRecordingStartFeedback()
+        stopRecordingMetering()
+        do {
+            try await audioRecorderService.discardRecording()
+        } catch {
+            logger.error("Could not discard interrupted recording: \(error.localizedDescription)")
+        }
+        await finishRecordingFeedback(feedbackTask)
+        recordingState = .idle
+        pendingInsertionTargetApplication = nil
+        isOnboardingPracticeSession = false
+        setRecordingOverlaySessionActive(false)
+        reportRecordingFailure("Recording stopped. \(error.localizedDescription)")
+    }
+
+    func dismissRecordingFailure() {
+        recordingFailureMessage = nil
+    }
+
+    private func reportRecordingFailure(_ message: String) {
+        logger.error("\(message, privacy: .public)")
+        recordingFailureMessage = message
+        setPreservedStatusMessage(message)
+        showMainWindow()
     }
 
     private func stopRecordingMetering(resetLevel: Bool = true) {
@@ -2382,18 +2559,18 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         switch recordingState {
-        case .starting:
-            return RecordingOverlayPresentation(
-                phase: .starting,
-                title: "Starting Recording",
-                detail: "Preparing local audio",
-                audioLevel: 0
-            )
         case .requestingPermission:
             return RecordingOverlayPresentation(
                 phase: .requestingPermission,
                 title: "Microphone Access",
                 detail: "Waiting for permission",
+                audioLevel: 0
+            )
+        case .starting:
+            return RecordingOverlayPresentation(
+                phase: .starting,
+                title: "Starting…",
+                detail: "Preparing microphone",
                 audioLevel: 0
             )
         case .recording:
@@ -2465,8 +2642,12 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         let model = whisperConfiguration.model
+        transcriptionState = .transcribing(model)
+        updateStatusMessage()
 
         guard let modelURL = await modelDownloadService.verifiedWhisperModelURL(for: model) else {
+            playSoundCue(.error)
+            transcriptionState = .idle
             isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("\(model.displayName) is not prepared. Open Models and prepare it before recording.")
@@ -2477,9 +2658,6 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         do {
-            transcriptionState = .transcribing(model)
-            updateStatusMessage()
-
             let transcription = try await whisperService.transcribe(
                 audioFileURL: capture.fileURL,
                 modelURL: modelURL,
@@ -2515,6 +2693,7 @@ final class DictaFlowAppState: ObservableObject {
             isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)")
+            playSoundCue(.error)
             showMainWindow()
             resetWhisperIdleTimer()
         }
@@ -2559,6 +2738,7 @@ final class DictaFlowAppState: ObservableObject {
             var skippedTranscription = transcription
             skippedTranscription.refinementStatus = .skipped(reason: "Download Qwen3 0.6B from the Refinement page.")
             lastTranscription = skippedTranscription
+            playSoundCue(.error)
             return skippedTranscription
         }
 
@@ -2568,6 +2748,7 @@ final class DictaFlowAppState: ObservableObject {
             skippedTranscription.refinementStatus = .skipped(reason: message)
             lastTranscription = skippedTranscription
             setPreservedStatusMessage("Could not refine the transcript locally, so DictaFlow will use the raw Whisper text. \(message)")
+            playSoundCue(.error)
             showMainWindow()
             updateStatusMessage()
             return skippedTranscription
@@ -2615,6 +2796,7 @@ final class DictaFlowAppState: ObservableObject {
             )
             lastTranscription = failedTranscription
             setPreservedStatusMessage(message)
+            playSoundCue(.error)
             localNotificationService.show(
                 title: "DictaFlow refinement failed",
                 body: "Using the raw Whisper transcript instead."
@@ -2664,6 +2846,10 @@ final class DictaFlowAppState: ObservableObject {
             setPreservedStatusMessage("Accessibility access is required for automatic insertion. The latest transcript was copied to the clipboard.")
         } else {
             clearPreservedStatusMessage()
+        }
+
+        if insertionResult.method == .copyPanel {
+            playSoundCue(.error)
         }
 
         updateStatusMessage()
@@ -2850,11 +3036,11 @@ final class DictaFlowAppState: ObservableObject {
 
     private func updateStatusMessage() {
         switch recordingState {
-        case .starting:
-            statusMessage = "Preparing local audio before recording starts."
-            return
         case .requestingPermission:
             statusMessage = "DictaFlow is requesting microphone access before starting local dictation."
+            return
+        case .starting:
+            statusMessage = "Preparing the microphone before recording."
             return
         case .recording:
             statusMessage = "Recording locally to a temporary file. Press \(hotkeyDisplayText) again to stop."
