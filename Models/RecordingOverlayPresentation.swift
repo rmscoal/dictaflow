@@ -17,6 +17,6 @@ struct RecordingOverlayPresentation: Equatable {
     let audioLevel: Double
 
     var isCancellable: Bool {
-        phase == .recording
+        phase == .recording || phase == .starting
     }
 }

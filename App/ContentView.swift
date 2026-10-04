@@ -42,6 +42,14 @@ struct ContentView: View {
         }
         .frame(minWidth: AppLayout.windowMinWidth, minHeight: AppLayout.windowMinHeight)
         .foregroundStyle(AppTheme.primaryText)
+        .alert("Recording failed", isPresented: Binding(
+            get: { appState.recordingFailureMessage != nil },
+            set: { if !$0 { appState.dismissRecordingFailure() } }
+        )) {
+            Button("OK", role: .cancel) { appState.dismissRecordingFailure() }
+        } message: {
+            Text(appState.recordingFailureMessage ?? "Check your microphone and sound output, then try again.")
+        }
         .alert(
             "Download \(selectedModel.displayName) Model?",
             isPresented: $isShowingModelPreparationConfirmation
@@ -698,6 +706,73 @@ struct ContentView: View {
                     }
                 }
 
+                FormSectionTitle("Sound cues")
+                    .padding(.top, 7)
+
+                SettingsFormPanel {
+                    SettingsFormRow(
+                        title: "Play sound cues",
+                        detail: "Start, stop, and processing errors"
+                    ) {
+                        Toggle("Play sound cues", isOn: soundCuesEnabledBinding)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+
+                    Divider().overlay(AppTheme.border)
+
+                    SettingsFormRow(
+                        title: "Sound style",
+                        detail: "Choose the tone of your feedback"
+                    ) {
+                        Picker("Sound style", selection: soundCueStyleBinding) {
+                            ForEach(SoundCueStyle.allCases) { style in
+                                Text(style.title).tag(style)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 142)
+                        .disabled(!appState.soundCuesEnabled || appState.whisperSettingsLocked)
+                    }
+
+                    Divider().overlay(AppTheme.border)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Preview")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(AppTheme.primaryText)
+                        HStack(spacing: 8) {
+                            ForEach(SoundCue.allCases) { cue in
+                                Button {
+                                    appState.previewSoundCue(cue)
+                                } label: {
+                                    Label(cue.title, systemImage: "play.fill")
+                                }
+                                .accessibilityLabel("Preview \(cue.title.lowercased()) sound")
+                            }
+                        }
+                        .controlSize(.small)
+                        .disabled(!appState.soundCuesEnabled || appState.whisperSettingsLocked)
+
+                        Text(appState.soundCuesEnabled
+                             ? "Recording starts immediately. For best results, speak after the start sound."
+                             : "Speak once recording starts. No sound cue will play.")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if let message = appState.soundCuePlaybackMessage {
+                            Text(message)
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(AppTheme.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(13)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
                 FormSectionTitle("Custom vocabulary")
                     .padding(.top, 7)
 
@@ -1111,6 +1186,20 @@ struct ContentView: View {
         Binding(
             get: { appState.recordingPlaybackBehavior },
             set: { appState.updateRecordingPlaybackBehavior($0) }
+        )
+    }
+
+    private var soundCuesEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { appState.soundCuesEnabled },
+            set: { appState.updateSoundCuesEnabled($0) }
+        )
+    }
+
+    private var soundCueStyleBinding: Binding<SoundCueStyle> {
+        Binding(
+            get: { appState.soundCueStyle },
+            set: { appState.updateSoundCueStyle($0) }
         )
     }
 

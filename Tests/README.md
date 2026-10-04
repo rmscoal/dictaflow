@@ -6,10 +6,11 @@ startup, waking a sleeping server, rejection of incomplete output, verified
 model storage, and download cancellation.
 
 `RecordingStartupTests` exercises the real app coordinator with isolated
-settings and synthetic recorder services. It checks repeated toggles during
-audio ducking and recorder startup, stopping after startup, permission denial,
-and retry after a failed start. These tests never record microphone audio or
-write to the user's clipboard.
+settings, silent cue playback, and synthetic recorder services. It checks
+capture starting before volume lowering, restoration after an in-flight volume
+change, cancellation during preparation, repeated toggles during recorder
+startup, permission denial, and retry after a failed start. These tests never
+record microphone audio, play sound cues, or write to the user's clipboard.
 
 Run it with Xcode's Test action or:
 
