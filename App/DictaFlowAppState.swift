@@ -1951,7 +1951,7 @@ final class DictaFlowAppState: ObservableObject {
 
             var configuration = whisperConfiguration
             configuration.model = model
-            _ = try await whisperService.transcribe(
+            try await whisperService.warmUpEncoder(
                 audioFileURL: silenceURL,
                 modelURL: modelURL,
                 configuration: configuration
@@ -2553,6 +2553,13 @@ final class DictaFlowAppState: ObservableObject {
             return transcription
         }
 
+        guard !transcription.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            var skippedTranscription = transcription
+            skippedTranscription.refinementStatus = .skipped(reason: "No speech was detected.")
+            lastTranscription = skippedTranscription
+            return skippedTranscription
+        }
+
         let model = refinementConfiguration.model
 
         guard isSelectedRefinementModelPrepared else {
@@ -2631,7 +2638,7 @@ final class DictaFlowAppState: ObservableObject {
             transcriptionState = .idle
             pendingInsertionTargetApplication = nil
             setRecordingOverlaySessionActive(false)
-            setPreservedStatusMessage("Whisper returned an empty transcript, so there was nothing to insert.")
+            setPreservedStatusMessage("No speech was detected, so there was nothing to insert.")
             showMainWindow()
             resetWhisperIdleTimer()
             return

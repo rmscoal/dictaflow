@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OSLog
 import whisper
@@ -8,13 +9,21 @@ protocol WhisperServiceProtocol: AnyObject {
         modelURL: URL,
         configuration: WhisperConfiguration
     ) async throws -> WhisperTranscriptionResult
+    func warmUpEncoder(
+        audioFileURL: URL,
+        modelURL: URL,
+        configuration: WhisperConfiguration
+    ) async throws
     func prepare(modelURL: URL) async throws
     func unloadModel() async
 }
 
-enum WhisperServiceError: LocalizedError {
+enum WhisperServiceError: LocalizedError, Equatable {
     case failedToInitializeContext
     case transcriptionFailed
+    case missingVADModel
+    case invalidVADModel
+    case speechDetectionFailed
 
     var errorDescription: String? {
         switch self {
@@ -22,20 +31,34 @@ enum WhisperServiceError: LocalizedError {
             return "DictaFlow could not initialize Whisper with the selected local model."
         case .transcriptionFailed:
             return "Whisper could not transcribe the recorded audio."
+        case .missingVADModel:
+            return "The bundled speech detection model is missing. Reinstall DictaFlow and try again."
+        case .invalidVADModel:
+            return "The bundled speech detection model could not be verified. Reinstall DictaFlow and try again."
+        case .speechDetectionFailed:
+            return "Speech detection could not process the recording. Restart DictaFlow and try again."
         }
     }
 }
 
 actor WhisperCPPService: WhisperServiceProtocol {
+    nonisolated static let vadModelName = "ggml-silero-v6.2.0"
+    nonisolated static let vadModelSHA256 = "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "DictaFlow",
         category: "Whisper"
     )
     private let audioDecodingService: AudioDecodingServiceProtocol
+    private let vadModelURL: URL?
+    private var hasVerifiedVADModel = false
     private var cachedContext: (modelURL: URL, context: WhisperContextBox)?
 
-    nonisolated init(audioDecodingService: AudioDecodingServiceProtocol = AVAudioDecodingService()) {
+    nonisolated init(
+        audioDecodingService: AudioDecodingServiceProtocol = AVAudioDecodingService(),
+        vadModelURL: URL? = Bundle.main.url(forResource: WhisperCPPService.vadModelName, withExtension: "bin")
+    ) {
         self.audioDecodingService = audioDecodingService
+        self.vadModelURL = vadModelURL
     }
 
     func transcribe(
@@ -43,37 +66,76 @@ actor WhisperCPPService: WhisperServiceProtocol {
         modelURL: URL,
         configuration: WhisperConfiguration
     ) async throws -> WhisperTranscriptionResult {
+        let vadModelURL = try verifiedVADModelURL()
+        return try await decodeAndTranscribe(
+            audioFileURL: audioFileURL,
+            modelURL: modelURL,
+            configuration: configuration,
+            vadModelURL: vadModelURL
+        )
+    }
+
+    // Silent audio must reach Whisper to compile the Neural Engine encoder.
+    // Only this dedicated warmup path bypasses speech detection.
+    func warmUpEncoder(
+        audioFileURL: URL,
+        modelURL: URL,
+        configuration: WhisperConfiguration
+    ) async throws {
+        _ = try await decodeAndTranscribe(
+            audioFileURL: audioFileURL,
+            modelURL: modelURL,
+            configuration: configuration,
+            vadModelURL: nil
+        )
+    }
+
+    private func decodeAndTranscribe(
+        audioFileURL: URL,
+        modelURL: URL,
+        configuration: WhisperConfiguration,
+        vadModelURL: URL?
+    ) async throws -> WhisperTranscriptionResult {
         let samples = try await audioDecodingService.decodePCMFloatSamples(from: audioFileURL)
         logDecodedAudioStats(samples)
         let context = try context(for: modelURL)
         let languageCode = configuration.inputLanguage.whisperCode ?? "auto"
         let initialPrompt = configuration.initialPrompt
+        let vadModelPath = vadModelURL?.path
 
         return try languageCode.withCString { languagePointer in
-            if let initialPrompt {
-                return try initialPrompt.withCString { promptPointer in
+            try (initialPrompt ?? "").withCString { promptPointer in
+                try (vadModelPath ?? "").withCString { vadModelPointer in
                     try runTranscription(
                         context: context,
                         samples: samples,
                         configuration: configuration,
                         languagePointer: languagePointer,
-                        promptPointer: promptPointer
+                        promptPointer: initialPrompt == nil ? nil : promptPointer,
+                        vadModelPointer: vadModelPath == nil ? nil : vadModelPointer
                     )
                 }
             }
-
-            return try runTranscription(
-                context: context,
-                samples: samples,
-                configuration: configuration,
-                languagePointer: languagePointer,
-                promptPointer: nil
-            )
         }
     }
 
     func prepare(modelURL: URL) async throws {
+        _ = try verifiedVADModelURL()
         _ = try context(for: modelURL)
+    }
+
+    func verifiedVADModelURL() throws -> URL {
+        guard let vadModelURL, FileManager.default.fileExists(atPath: vadModelURL.path) else {
+            throw WhisperServiceError.missingVADModel
+        }
+        guard !hasVerifiedVADModel else { return vadModelURL }
+
+        guard let data = try? Data(contentsOf: vadModelURL),
+              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == Self.vadModelSHA256 else {
+            throw WhisperServiceError.invalidVADModel
+        }
+        hasVerifiedVADModel = true
+        return vadModelURL
     }
 
     func unloadModel() {
@@ -111,7 +173,8 @@ actor WhisperCPPService: WhisperServiceProtocol {
         samples: [Float],
         configuration: WhisperConfiguration,
         languagePointer: UnsafePointer<CChar>?,
-        promptPointer: UnsafePointer<CChar>?
+        promptPointer: UnsafePointer<CChar>?,
+        vadModelPointer: UnsafePointer<CChar>?
     ) throws -> WhisperTranscriptionResult {
         var parameters = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
         parameters.print_realtime = false
@@ -129,6 +192,11 @@ actor WhisperCPPService: WhisperServiceProtocol {
         parameters.no_context = true
         parameters.no_timestamps = false
         parameters.single_segment = false
+        parameters.vad = vadModelPointer != nil
+        parameters.vad_model_path = vadModelPointer
+        // The vendored 250 ms minimum drops brief words such as "No" and "Look".
+        // Keep the other VAD defaults, including speech padding and overlap.
+        parameters.vad_params.min_speech_duration_ms = 100
 
         whisper_reset_timings(context.pointer)
 
@@ -137,6 +205,9 @@ actor WhisperCPPService: WhisperServiceProtocol {
         }
 
         guard status == 0 else {
+            if parameters.vad, status == -1 {
+                throw WhisperServiceError.speechDetectionFailed
+            }
             throw WhisperServiceError.transcriptionFailed
         }
 
@@ -150,7 +221,7 @@ actor WhisperCPPService: WhisperServiceProtocol {
 
         let languageCode: String?
         let detectedLanguageIdentifier = whisper_full_lang_id(context.pointer)
-        if detectedLanguageIdentifier >= 0, let detectedLanguageCString = whisper_lang_str(detectedLanguageIdentifier) {
+        if segmentCount > 0, detectedLanguageIdentifier >= 0, let detectedLanguageCString = whisper_lang_str(detectedLanguageIdentifier) {
             languageCode = String(cString: detectedLanguageCString)
         } else {
             languageCode = nil
@@ -163,8 +234,8 @@ actor WhisperCPPService: WhisperServiceProtocol {
 
         return WhisperTranscriptionResult(
             text: transcriptText,
-            segments: segments,
-            detectedLanguageCode: languageCode,
+            segments: transcriptText.isEmpty ? [] : segments,
+            detectedLanguageCode: transcriptText.isEmpty ? nil : languageCode,
             model: configuration.model,
             taskMode: configuration.taskMode,
             completedAt: Date()

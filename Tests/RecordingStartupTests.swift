@@ -5,6 +5,81 @@ import XCTest
 
 @MainActor
 final class RecordingStartupTests: XCTestCase {
+    func testEmptyTranscriptSkipsRefinementAndInsertion() async throws {
+        let whisper = PipelineWhisperService()
+        let refinement = PipelineRefinementService()
+        let fixture = try RecordingStartupFixture(whisper: whisper, refinement: refinement, usePipelineModels: true)
+        defer { fixture.cleanup() }
+        fixture.volume.shouldWait = false
+
+        let recording = expectation(description: "Recording starts")
+        let recordingObservation = fixture.state.$recordingState.sink {
+            if $0.isRecording { recording.fulfill() }
+        }
+        fixture.state.toggleDictation()
+        await fulfillment(of: [recording], timeout: 2)
+        recordingObservation.cancel()
+
+        let completed = expectation(description: "No-speech result completes without insertion")
+        let completedObservation = fixture.state.$statusMessage.sink {
+            if $0 == "No speech was detected, so there was nothing to insert." { completed.fulfill() }
+        }
+        fixture.state.toggleDictation()
+        await fulfillment(of: [completed], timeout: 2)
+        completedObservation.cancel()
+        let refinementCalls = await refinement.refineCalls
+        XCTAssertEqual(refinementCalls, 0)
+        XCTAssertEqual(fixture.state.lastTranscription?.refinementStatus, .skipped(reason: "No speech was detected."))
+        XCTAssertNil(fixture.state.lastTextInsertion)
+        XCTAssertNil(fixture.overlay.presentation)
+        XCTAssertEqual(fixture.state.transcriptionState, .idle)
+        // StartupInsertionService also fails on any insertion or clipboard write.
+    }
+
+    func testEncoderDownloadUsesDedicatedWarmupInsteadOfTranscription() async throws {
+        let warmed = expectation(description: "Encoder warmup is called")
+        let whisper = PipelineWhisperService(onWarmup: { warmed.fulfill() })
+        let fixture = try RecordingStartupFixture(whisper: whisper, usePipelineModels: true)
+        defer { fixture.cleanup() }
+        fixture.state.downloadWhisperEncoder(fixture.state.whisperConfiguration.model)
+        await fulfillment(of: [warmed], timeout: 2)
+        let transcriptionCalls = await whisper.transcribeCalls
+        XCTAssertEqual(transcriptionCalls, 0)
+    }
+
+    func testEmptyTranscriptPreservesOnboardingNoSpeechResult() async throws {
+        let refinement = PipelineRefinementService()
+        let fixture = try RecordingStartupFixture(whisper: PipelineWhisperService(), refinement: refinement, usePipelineModels: true)
+        defer { fixture.cleanup() }
+        fixture.volume.shouldWait = false
+        fixture.permissions.accessibilityGranted = true
+        fixture.state.handleApplicationLaunch()
+        fixture.state.advanceOnboarding() // Welcome to permissions.
+        fixture.state.advanceOnboarding() // Permissions to model preparation.
+        fixture.state.advanceOnboarding() // Prepared model to shortcut practice.
+        XCTAssertEqual(fixture.state.onboardingPresentation?.step, .shortcut)
+
+        let recording = expectation(description: "Practice recording starts")
+        let recordingObservation = fixture.state.$recordingState.sink {
+            if $0.isRecording { recording.fulfill() }
+        }
+        fixture.state.toggleDictation()
+        await fulfillment(of: [recording], timeout: 2)
+        recordingObservation.cancel()
+        let completed = expectation(description: "Practice returns no speech")
+        let completedObservation = fixture.state.$onboardingPracticeResult.sink {
+            if $0 == .noSpeech { completed.fulfill() }
+        }
+        fixture.state.toggleDictation()
+        await fulfillment(of: [completed], timeout: 2)
+        completedObservation.cancel()
+        let refinementCalls = await refinement.refineCalls
+        XCTAssertEqual(refinementCalls, 0)
+        XCTAssertNil(fixture.state.lastTextInsertion)
+        XCTAssertNil(fixture.overlay.presentation)
+        XCTAssertEqual(fixture.state.transcriptionState, .idle)
+    }
+
     func testRepeatedToggleDuringDuckingStartsOnlyOneRecorderAndCanStop() async throws {
         let fixture = try RecordingStartupFixture()
         defer { fixture.cleanup() }
@@ -127,22 +202,32 @@ private final class RecordingStartupFixture {
     let overlay = StartupOverlayRouter()
     let state: DictaFlowAppState
 
-    init(permission: MicrophonePermissionState = .granted) throws {
+    init(
+        permission: MicrophonePermissionState = .granted,
+        whisper: WhisperServiceProtocol = WhisperCPPService(),
+        refinement: TranscriptRefinementServiceProtocol = LlamaCLITranscriptRefinementService(),
+        usePipelineModels: Bool = false
+    ) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let settings = UserDefaultsSettingsStore(defaults: try XCTUnwrap(UserDefaults(suiteName: suiteName)))
+        settings.saveAutomaticallyChecksForUpdates(false)
         settings.saveRecordingPlaybackBehavior(.lowerSystemVolume)
-        settings.saveRefinementConfiguration(.default)
+        var refinementConfiguration = RefinementConfiguration.default
+        refinementConfiguration.isEnabled = usePipelineModels
+        settings.saveRefinementConfiguration(refinementConfiguration)
         try Data("synthetic model".utf8).write(to: directory.appendingPathComponent(settings.whisperConfiguration.model.filename))
         permissions = StartupPermissionService(permission: permission)
         recorder = StartupRecorderService(fileURL: directory.appendingPathComponent("capture.m4a"))
         state = DictaFlowAppState(
             settingsStore: settings, permissionService: permissions,
             audioRecorderService: recorder, audioOutputVolumeService: volume,
-            hotkeyService: CarbonHotkeyService(),
-            modelDownloadService: WhisperModelDownloadService(modelsDirectoryURL: directory),
-            whisperService: WhisperCPPService(),
-            transcriptRefinementService: LlamaCLITranscriptRefinementService(),
+            hotkeyService: StartupHotkeyService(),
+            modelDownloadService: usePipelineModels
+                ? PipelineModelDownloadService(modelsDirectoryURL: directory)
+                : WhisperModelDownloadService(modelsDirectoryURL: directory),
+            whisperService: whisper,
+            transcriptRefinementService: refinement,
             refinementPromptStore: StartupPromptStore(directory: directory),
             textInsertionService: StartupInsertionService(),
             localNotificationService: StartupNotificationService(),
@@ -215,13 +300,20 @@ private final class StartupRecorderService: AudioRecorderServiceProtocol {
 @MainActor
 private final class StartupPermissionService: PermissionServiceProtocol {
     var permission: MicrophonePermissionState
+    var accessibilityGranted = false
     init(permission: MicrophonePermissionState) { self.permission = permission }
     func currentMicrophonePermissionStatus() -> MicrophonePermissionState { permission }
     func requestMicrophonePermissionIfNeeded() async -> MicrophonePermissionState { permission }
-    func isAccessibilityPermissionGranted() -> Bool { false }
+    func isAccessibilityPermissionGranted() -> Bool { accessibilityGranted }
     func requestAccessibilityPermission() -> Bool { XCTFail("No insertion is expected"); return false }
     func openMicrophoneSettings() {}
     func openAccessibilitySettings() {}
+}
+
+@MainActor
+private final class StartupHotkeyService: HotkeyServiceProtocol {
+    func registerToggleHotkey(_ shortcut: GlobalShortcutDescriptor, handler: @escaping () -> Void) throws {}
+    func unregisterToggleHotkey() {}
 }
 
 @MainActor
@@ -254,4 +346,68 @@ private final class StartupInsertionService: TextInsertionServiceProtocol {
 private final class StartupNotificationService: LocalNotificationServiceProtocol {
     func requestAuthorizationIfNeeded() {}
     func show(title: String, body: String) {}
+}
+
+private actor PipelineWhisperService: WhisperServiceProtocol {
+    var transcribeCalls = 0
+    let onWarmup: @Sendable () -> Void
+    init(onWarmup: @escaping @Sendable () -> Void = {}) { self.onWarmup = onWarmup }
+    func prepare(modelURL: URL) async throws {}
+    func unloadModel() async {}
+    func warmUpEncoder(audioFileURL: URL, modelURL: URL, configuration: WhisperConfiguration) async throws {
+        onWarmup()
+    }
+    func transcribe(audioFileURL: URL, modelURL: URL, configuration: WhisperConfiguration) async throws -> WhisperTranscriptionResult {
+        transcribeCalls += 1
+        return WhisperTranscriptionResult(text: " \n", segments: [], detectedLanguageCode: nil,
+            model: configuration.model, taskMode: configuration.taskMode, completedAt: Date())
+    }
+}
+
+private actor PipelineRefinementService: TranscriptRefinementServiceProtocol {
+    var refineCalls = 0
+    func isRuntimeAvailable(for model: RefinementModelDescriptor) async -> Bool { true }
+    func prepare(modelURL: URL) async throws {}
+    func reloadModels() async {}
+    func stop() async {}
+    func refine(transcript: String, whisperTaskMode: WhisperTaskMode, modelURL: URL,
+                configuration: RefinementConfiguration, promptTemplate: String) async throws -> TranscriptRefinementResult {
+        refineCalls += 1
+        XCTFail("An empty raw transcript must never reach refinement")
+        return TranscriptRefinementResult(originalText: transcript, refinedText: "Invented text",
+            model: configuration.model, mode: configuration.mode, completedAt: Date())
+    }
+}
+
+/// Synthetic prepared models let coordinator tests reach inference without weights or downloads.
+@MainActor
+private final class PipelineModelDownloadService: ModelDownloadServiceProtocol {
+    let modelsDirectoryURL: URL
+    init(modelsDirectoryURL: URL) { self.modelsDirectoryURL = modelsDirectoryURL }
+    func installedModelFiles() -> [LocalModelFile] { [] }
+    func deleteModelFiles(_ files: [LocalModelFile]) async throws -> Int64 { 0 }
+    func cancelDownload(modelIdentifier: String) {}
+    func removeIncompleteDownloads() -> Int64 { 0 }
+    func isWhisperModelPrepared(_ model: WhisperModelDescriptor) -> Bool { true }
+    func verifiedWhisperModelURL(for model: WhisperModelDescriptor) async -> URL? {
+        modelsDirectoryURL.appendingPathComponent(model.filename)
+    }
+    func ensureModelAvailable(_ model: WhisperModelDescriptor, progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void) async throws -> URL {
+        modelsDirectoryURL.appendingPathComponent(model.filename)
+    }
+    func isWhisperEncoderPrepared(_ model: WhisperModelDescriptor) -> Bool { true }
+    func isWhisperEncoderDownloaded(_ model: WhisperModelDescriptor) -> Bool { false }
+    func setWhisperEncoderEnabled(_ enabled: Bool, for model: WhisperModelDescriptor) async throws {}
+    func removeOrphanedEncoders() -> Int64 { 0 }
+    func ensureWhisperEncoderAvailable(_ model: WhisperModelDescriptor, progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void) async throws -> URL {
+        modelsDirectoryURL.appendingPathComponent(model.encoderDirectoryName)
+    }
+    func deleteWhisperEncoder(_ model: WhisperModelDescriptor) async throws -> Int64 { 0 }
+    func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool { true }
+    func verifiedRefinementModelURL(for model: RefinementModelDescriptor) async -> URL? {
+        modelsDirectoryURL.appendingPathComponent(model.filename)
+    }
+    func ensureRefinementModelAvailable(_ model: RefinementModelDescriptor, progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void) async throws -> URL {
+        modelsDirectoryURL.appendingPathComponent(model.filename)
+    }
 }

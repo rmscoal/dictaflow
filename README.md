@@ -92,7 +92,7 @@ Public releases are signed and notarized for macOS.
 | Step | What happens |
 | --- | --- |
 | **Record** | DictaFlow creates a temporary local `.m4a` recording. |
-| **Transcribe** | `whisper.cpp` converts speech to text on your Mac. |
+| **Transcribe** | Bundled speech detection filters non-speech audio before `whisper.cpp` converts speech to text on your Mac. |
 | **Refine** | If enabled, a local language model cleans the text. |
 | **Insert** | DictaFlow returns the text to the previously focused app. |
 
