@@ -361,6 +361,7 @@ private nonisolated func isBareEscapeKeyEvent(_ event: CGEvent) -> Bool {
 @MainActor
 private final class RecordingOverlayViewModel: ObservableObject {
     @Published private(set) var presentation: RecordingOverlayPresentation
+    @Published private(set) var waveformHistory = RecordingWaveformHistory()
     private var cancelAction: (() -> Void)?
 
     init(
@@ -369,12 +370,14 @@ private final class RecordingOverlayViewModel: ObservableObject {
     ) {
         self.presentation = presentation
         self.cancelAction = cancelAction
+        updateWaveformHistory(for: presentation)
     }
 
     func update(
         presentation: RecordingOverlayPresentation,
         cancelAction: @escaping () -> Void
     ) {
+        updateWaveformHistory(for: presentation)
         if self.presentation != presentation {
             self.presentation = presentation
         }
@@ -387,6 +390,21 @@ private final class RecordingOverlayViewModel: ObservableObject {
 
     func clearCancelAction() {
         cancelAction = nil
+        waveformHistory = RecordingWaveformHistory()
+    }
+
+    private func updateWaveformHistory(for presentation: RecordingOverlayPresentation) {
+        guard presentation.phase == .recording else {
+            if waveformHistory.lastSampleTime != nil {
+                waveformHistory = RecordingWaveformHistory()
+            }
+            return
+        }
+
+        var history = waveformHistory
+        if history.append(level: presentation.audioLevel, at: ProcessInfo.processInfo.systemUptime) {
+            waveformHistory = history
+        }
     }
 }
 
@@ -418,7 +436,10 @@ private struct RecordingOverlayView: View {
             recordingText
                 .fixedSize(horizontal: true, vertical: false)
 
-            OverlayWaveformView(audioLevel: presentation.audioLevel)
+            OverlayWaveformView(
+                history: viewModel.waveformHistory,
+                isRecording: presentation.phase == .recording
+            )
                 .frame(minWidth: 74, maxWidth: .infinity)
                 .frame(height: 22)
 
@@ -520,29 +541,30 @@ private struct RefinementStarView: View {
 }
 
 private struct OverlayWaveformView: View {
-    let audioLevel: Double
+    let history: RecordingWaveformHistory
+    let isRecording: Bool
 
     var body: some View {
-        TimelineView(.animation) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isRecording)) { _ in
+            let time = ProcessInfo.processInfo.systemUptime
             Canvas { context, size in
-                drawWaveform(in: context, size: size, time: timeline.date.timeIntervalSinceReferenceDate)
+                drawWaveform(in: context, size: size, time: time)
             }
         }
+        .clipped()
+        .accessibilityHidden(true)
     }
 
     private func drawWaveform(in context: GraphicsContext, size: CGSize, time: TimeInterval) {
-        let barCount = 18
+        let barCount = RecordingWaveformHistory.visibleBarCount
         let spacing: CGFloat = 3
-        let barWidth = (size.width - CGFloat(barCount - 1) * spacing) / CGFloat(barCount)
-        let clampedLevel = min(max(audioLevel, 0), 1)
-        let animationPhase = time * 8
+        let barWidth = max(1, (size.width - CGFloat(barCount - 1) * spacing) / CGFloat(barCount))
+        let stride = barWidth + spacing
+        let offset = CGFloat(history.scrollProgress(at: time)) * stride
 
-        for index in 0..<barCount {
-            let x = CGFloat(index) * (barWidth + spacing)
-            let movement = abs(sin(animationPhase + Double(index) * 0.68))
-            let level = max(0.08, clampedLevel)
-            let heightScale = 0.18 + level * (0.24 + movement * 0.72)
-            let barHeight = max(4, size.height * min(heightScale, 1))
+        for (index, level) in history.levels.enumerated() {
+            let x = CGFloat(index) * stride - offset
+            let barHeight = min(size.height, 4 + CGFloat(level) * max(0, size.height - 4))
             let rect = CGRect(
                 x: x,
                 y: (size.height - barHeight) / 2,
@@ -550,8 +572,7 @@ private struct OverlayWaveformView: View {
                 height: barHeight
             )
             let path = Path(roundedRect: rect, cornerRadius: barWidth / 2)
-            let opacity = 0.34 + movement * 0.5
-            context.fill(path, with: .color(OverlayTheme.primaryText.opacity(opacity)))
+            context.fill(path, with: .color(OverlayTheme.primaryText.opacity(0.8)))
         }
     }
 }
