@@ -29,6 +29,18 @@ It does not replace the upstream license texts.
 - Notes: DictaFlow downloads these model files at runtime and stores them in the
   user's Application Support model cache.
 
+## Silero Voice Activity Detection Model
+
+- Bundled file: `Resources/ggml-silero-v6.2.0.bin` (885,098 bytes)
+- Source: <https://huggingface.co/ggml-org/whisper-vad/tree/9ffd54a1e1ee413ddf265af9913beaf518d1639b>
+- SHA-256: `2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987`
+- Upstream: <https://github.com/snakers4/silero-vad/tree/v6.2>
+- License: MIT, Copyright (c) 2020-present Silero Team
+- License file: `Resources/ThirdParty/silero-vad-LICENSE`, included in both app builds
+- Notes: Speech detection runs locally before Whisper transcription and
+  translation. The model is bundled, checksum-verified before use, and does not
+  require a separate download.
+
 ## Refinement Models
 
 - Referenced from: `Models/RefinementModelDescriptor.swift`
