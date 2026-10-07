@@ -563,6 +563,7 @@ private struct OverlayWaveformView: View {
         let offset = CGFloat(history.scrollProgress(at: time)) * stride
 
         for (index, level) in history.levels.enumerated() {
+            guard let level else { continue }
             let x = CGFloat(index) * stride - offset
             let barHeight = min(size.height, 4 + CGFloat(level) * max(0, size.height - 4))
             let rect = CGRect(

@@ -6,7 +6,8 @@ struct RecordingWaveformHistory {
     static let sampleInterval: TimeInterval = 0.1
 
     // One extra bar enters from beyond the right edge as the oldest exits left.
-    private(set) var levels = Array(repeating: 0.0, count: visibleBarCount + 1)
+    // nil marks a missed sample; zero still represents recorded silence.
+    private(set) var levels = Array<Double?>(repeating: 0.0, count: visibleBarCount + 1)
     private(set) var lastSampleTime: TimeInterval?
 
     mutating func append(level: Double, at time: TimeInterval) -> Bool {
@@ -24,7 +25,7 @@ struct RecordingWaveformHistory {
         // Leave gaps empty rather than inventing past levels after a UI stall.
         let sampleCount = Int(min(elapsedIntervals, Double(levels.count)))
         levels.removeFirst(sampleCount)
-        levels.append(contentsOf: repeatElement(0, count: sampleCount - 1))
+        levels.append(contentsOf: repeatElement(nil, count: sampleCount - 1))
         levels.append(normalizedLevel)
         self.lastSampleTime = lastSampleTime + elapsedIntervals * Self.sampleInterval
         return true
