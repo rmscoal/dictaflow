@@ -20,6 +20,7 @@ nonisolated protocol HistoryStoreProtocol: Sendable {
     func detail(_ id: UUID) async throws -> HistoryDetail
     func delete(_ id: UUID) async throws
     func deleteAll() async throws
+    func countRecordingsExpiring(retention: HistoryRetention, now: Date) async throws -> Int
     func setRetention(_ retention: HistoryRetention) async throws
     func cleanup(now: Date) async throws
 }
@@ -270,9 +271,14 @@ actor SQLiteHistoryStore: HistoryStoreProtocol {
         return id
     }
 
+    private func status(_ value: String) throws -> HistoryAttemptStatus {
+        guard let status = HistoryAttemptStatus(rawValue: value) else { throw HistoryStoreError.invalidRecording }
+        return status
+    }
+
     private func entry(_ row: Row) throws -> HistoryEntry {
         guard let id = UUID(uuidString: row["id"]) else { throw HistoryStoreError.invalidRecording }
-        return HistoryEntry(id: id, capturedAt: Date(timeIntervalSince1970: row["capturedAt"]), duration: row["duration"], expiresAt: Date(timeIntervalSince1970: row["expiresAt"]), preview: row["preview"], status: row["status"], audioAvailable: row["audioAvailable"])
+        return HistoryEntry(id: id, capturedAt: Date(timeIntervalSince1970: row["capturedAt"]), duration: row["duration"], expiresAt: Date(timeIntervalSince1970: row["expiresAt"]), preview: row["preview"], status: try status(row["status"]), audioAvailable: row["audioAvailable"])
     }
 
     func entries(search: String, limit: Int, offset: Int) throws -> [HistoryEntry] {
@@ -291,10 +297,10 @@ actor SQLiteHistoryStore: HistoryStoreProtocol {
         try open().read { db in
             guard let row = try Row.fetchOne(db, sql: Self.summarySQL + " WHERE r.id = ? AND r.state = 'ready'", arguments: [id.uuidString]) else { throw HistoryStoreError.unavailable }
             let transcriptions = try Row.fetchAll(db, sql: "SELECT * FROM transcription_results WHERE recordingID = ? ORDER BY startedAt DESC, id DESC", arguments: [id.uuidString]).map { row in
-                HistoryTranscription(id: try identifier(row["id"]), startedAt: Date(timeIntervalSince1970: row["startedAt"]), status: row["status"], configuration: try JSONDecoder().decode(WhisperConfiguration.self, from: row["configuration"]), result: try (row["result"] as Data?).map { try JSONDecoder().decode(WhisperTranscriptionResult.self, from: $0) }, errorMessage: row["error"])
+                HistoryTranscription(id: try identifier(row["id"]), startedAt: Date(timeIntervalSince1970: row["startedAt"]), status: try status(row["status"]), configuration: try JSONDecoder().decode(WhisperConfiguration.self, from: row["configuration"]), result: try (row["result"] as Data?).map { try JSONDecoder().decode(WhisperTranscriptionResult.self, from: $0) }, errorMessage: row["error"])
             }
             let refinements = try Row.fetchAll(db, sql: "SELECT f.* FROM refinement_results f JOIN transcription_results t ON t.id = f.transcriptionID WHERE t.recordingID = ? ORDER BY f.startedAt DESC, f.id DESC", arguments: [id.uuidString]).map { row in
-                HistoryRefinement(id: try identifier(row["id"]), transcriptionID: try identifier(row["transcriptionID"]), startedAt: Date(timeIntervalSince1970: row["startedAt"]), status: row["status"], configuration: try JSONDecoder().decode(RefinementConfiguration.self, from: row["configuration"]), prompt: row["prompt"], result: try (row["result"] as Data?).map { try JSONDecoder().decode(TranscriptRefinementResult.self, from: $0) }, errorMessage: row["error"])
+                HistoryRefinement(id: try identifier(row["id"]), transcriptionID: try identifier(row["transcriptionID"]), startedAt: Date(timeIntervalSince1970: row["startedAt"]), status: try status(row["status"]), configuration: try JSONDecoder().decode(RefinementConfiguration.self, from: row["configuration"]), prompt: row["prompt"], result: try (row["result"] as Data?).map { try JSONDecoder().decode(TranscriptRefinementResult.self, from: $0) }, errorMessage: row["error"])
             }
             return HistoryDetail(entry: try entry(row), transcriptions: transcriptions, refinements: refinements)
         }
@@ -317,6 +323,14 @@ actor SQLiteHistoryStore: HistoryStoreProtocol {
             try fileManager.removeItem(at: url)
         }
         try open().write { try $0.execute(sql: "DELETE FROM recordings WHERE id = ?", arguments: [id.uuidString]) }
+    }
+
+    func countRecordingsExpiring(retention: HistoryRetention, now: Date) throws -> Int {
+        guard retention != .off else { return 0 }
+        let cutoff = now.addingTimeInterval(-Double(retention.rawValue) * 86400)
+        return try open().read {
+            try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM recordings WHERE state = 'ready' AND capturedAt <= ?", arguments: [cutoff.timeIntervalSince1970]) ?? 0
+        }
     }
 
     func setRetention(_ retention: HistoryRetention) throws {

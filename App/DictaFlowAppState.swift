@@ -1572,17 +1572,25 @@ final class DictaFlowAppState: ObservableObject {
         return transcriptionState.isTranscribing ? "Transcribing audio…" : "Opening recording…"
     }
 
-    func updateHistoryRetention(_ retention: HistoryRetention) async {
-        guard canProcessHistory, let historyStore else { return }
+    /// Returns an affected recording count when deletion needs confirmation,
+    /// leaving retention and stored history unchanged until the user confirms.
+    @discardableResult
+    func updateHistoryRetention(_ retention: HistoryRetention, confirmedDeletion: Bool = false) async -> Int? {
+        guard canProcessHistory, let historyStore else { return nil }
         isHistoryProcessing = true
         defer { isHistoryProcessing = false }
         await history.stopPlayback()
         do {
+            if !confirmedDeletion {
+                let count = try await historyStore.countRecordingsExpiring(retention: retention, now: Date())
+                if count > 0 { return count }
+            }
             try await historyStore.setRetention(retention)
             historyRetention = retention
             settingsStore.saveHistoryRetention(retention)
             await history.cleanup()
         } catch { history.report(error) }
+        return nil
     }
 
     func retryHistoryTranscription(model: WhisperModelDescriptor? = nil) {

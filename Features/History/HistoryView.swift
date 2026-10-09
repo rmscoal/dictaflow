@@ -7,6 +7,7 @@ struct HistoryView: View {
     @State private var confirmsDelete = false
     @State private var confirmsDeleteAll = false
     @State private var pendingRetention: HistoryRetention?
+    @State private var pendingDeletionCount = 0
 
     private var canMutate: Bool { appState.canProcessHistory && !model.isMutating }
 
@@ -38,12 +39,14 @@ struct HistoryView: View {
         } message: { Text("This deletes all saved recording audio and results. This cannot be undone.") }
         .alert("Shorten History Retention?", isPresented: Binding(get: { pendingRetention != nil }, set: { if !$0 { pendingRetention = nil } })) {
             Button("Cancel", role: .cancel) { pendingRetention = nil }
-            Button("Change and Delete Older History", role: .destructive) {
+            Button("Change and Delete \(pendingDeletionCount) \(pendingDeletionCount == 1 ? "Recording" : "Recordings")", role: .destructive) {
                 let retention = pendingRetention
                 pendingRetention = nil
-                if let retention { Task { await appState.updateHistoryRetention(retention) } }
+                if let retention { Task { await appState.updateHistoryRetention(retention, confirmedDeletion: true) } }
             }
-        } message: { Text("Recordings older than 7 days and all their results will be deleted. This cannot be undone.") }
+        } message: {
+            Text("\(pendingDeletionCount) \(pendingDeletionCount == 1 ? "recording is" : "recordings are") older than \(pendingRetention?.rawValue ?? 7) days. Changing retention will delete \(pendingDeletionCount == 1 ? "this recording" : "these recordings") and all saved results. This cannot be undone.")
+        }
     }
 
     private var emptyDescription: String {
@@ -174,8 +177,13 @@ struct HistoryView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("History Settings").font(.headline)
             Picker("Keep history", selection: Binding(get: { appState.historyRetention }, set: { value in
-                if value == .sevenDays && appState.historyRetention == .fourteenDays { pendingRetention = value }
-                else { Task { await appState.updateHistoryRetention(value) } }
+                Task {
+                    if let count = await appState.updateHistoryRetention(value) {
+                        pendingDeletionCount = count
+                        showsSettings = false
+                        pendingRetention = value
+                    }
+                }
             })) {
                 ForEach(HistoryRetention.allCases) { Text($0.title).tag($0) }
             }
@@ -203,11 +211,11 @@ struct HistoryView: View {
     private func entryStatus(_ entry: HistoryEntry) -> String {
         if !entry.audioAvailable { return "Audio unavailable" }
         switch entry.status {
-        case "failed": return "Transcription failed"
-        case "interrupted": return "Processing interrupted"
-        case "running": return "Transcribing"
-        case "unprocessed": return "Ready to transcribe"
-        default: return "No speech detected"
+        case .failed: return "Transcription failed"
+        case .interrupted: return "Processing interrupted"
+        case .running: return "Transcribing"
+        case .unprocessed: return "Ready to transcribe"
+        case .succeeded: return "No speech detected"
         }
     }
 }
@@ -448,11 +456,12 @@ private func formatDuration(_ duration: TimeInterval) -> String {
     return String(format: "%d:%02d", seconds / 60, seconds % 60)
 }
 
-private func resultStatusTitle(_ status: String) -> String {
+private func resultStatusTitle(_ status: HistoryAttemptStatus) -> String {
     switch status {
-    case "succeeded": "Completed"
-    case "failed": "Failed"
-    case "interrupted": "Interrupted"
-    default: "Processing"
+    case .succeeded: "Completed"
+    case .failed: "Failed"
+    case .interrupted: "Interrupted"
+    case .running: "Processing"
+    case .unprocessed: "Not processed"
     }
 }

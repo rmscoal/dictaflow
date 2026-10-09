@@ -9,6 +9,10 @@ nonisolated enum HistoryRetention: Int, CaseIterable, Identifiable {
     var title: String { self == .off ? "Off" : "\(rawValue) days" }
 }
 
+nonisolated enum HistoryAttemptStatus: String {
+    case running, succeeded, failed, interrupted, unprocessed
+}
+
 nonisolated struct HistoryCapture {
     let id: UUID
     let fileURL: URL
@@ -20,7 +24,7 @@ nonisolated struct HistoryEntry: Identifiable, Equatable {
     let duration: TimeInterval
     let expiresAt: Date
     let preview: String
-    let status: String
+    let status: HistoryAttemptStatus
     let audioAvailable: Bool
 
     var title: String {
@@ -32,7 +36,7 @@ nonisolated struct HistoryEntry: Identifiable, Equatable {
 nonisolated struct HistoryTranscription: Identifiable {
     let id: UUID
     let startedAt: Date
-    let status: String
+    let status: HistoryAttemptStatus
     let configuration: WhisperConfiguration
     let result: WhisperTranscriptionResult?
     let errorMessage: String?
@@ -42,7 +46,7 @@ nonisolated struct HistoryRefinement: Identifiable {
     let id: UUID
     let transcriptionID: UUID
     let startedAt: Date
-    let status: String
+    let status: HistoryAttemptStatus
     let configuration: RefinementConfiguration
     let prompt: String
     let result: TranscriptRefinementResult?

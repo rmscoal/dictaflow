@@ -33,6 +33,9 @@ label. Audio loading, transcription, model preparation, and refinement must show
 clear progress. Escape during recording must leave no saved entry. History defaults to
 7 days; Off stops new saves and 14 days extends retention from the original
 recording date. Audio and every result share that expiry.
+Changing retention should apply immediately when no recordings exceed the new
+limit. Otherwise, confirmation must show the affected count; cancelling must
+leave retention and saved recordings unchanged. This also applies after Off.
 
 Run it with Xcode's Test action or:
 

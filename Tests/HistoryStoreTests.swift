@@ -93,6 +93,9 @@ final class HistoryStoreTests: XCTestCase {
         await model.refresh(loadMore: true)
         XCTAssertEqual(model.entries.count, 105)
         XCTAssertFalse(model.hasMore)
+
+        let expiring = try await store.countRecordingsExpiring(retention: .sevenDays, now: Date().addingTimeInterval(8 * 86400))
+        XCTAssertEqual(expiring, 105, "Retention checks must include every row, beyond the first loaded page")
         await model.select(oldest.id)
 
         let retry = try await store.startTranscription(oldest.id, configuration: .default)
@@ -231,6 +234,49 @@ final class HistoryStoreTests: XCTestCase {
         try await reopened.initialize()
         let detail = try await reopened.detail(capture.id)
         XCTAssertEqual(detail.transcriptions.first?.result?.text, "saved raw")
-        XCTAssertEqual(detail.refinements.first?.status, "interrupted")
+        XCTAssertEqual(detail.refinements.first?.status, .interrupted)
+    }
+
+    func testOffPreservesFourteenDayExpiryUntilSevenDaysIsApplied() async throws {
+        let capture = try await recording()
+        await store.releaseAudio(capture.id)
+        try await store.setRetention(.fourteenDays)
+        let extended = try await store.detail(capture.id)
+        try await store.setRetention(.off)
+        try await store.cleanup(now: extended.entry.capturedAt.addingTimeInterval(8 * 86400))
+        let retained = try await store.detail(capture.id)
+        XCTAssertEqual(retained.entry.expiresAt, extended.entry.expiresAt)
+        let now = retained.entry.capturedAt.addingTimeInterval(8 * 86400)
+        let offCount = try await store.countRecordingsExpiring(retention: .off, now: now)
+        let fourteenDayCount = try await store.countRecordingsExpiring(retention: .fourteenDays, now: now)
+        let sevenDayCount = try await store.countRecordingsExpiring(retention: .sevenDays, now: now)
+        XCTAssertEqual(offCount, 0)
+        XCTAssertEqual(fourteenDayCount, 0)
+        XCTAssertEqual(sevenDayCount, 1)
+
+        try await store.setRetention(.sevenDays)
+        let shortened = try await store.detail(capture.id)
+        XCTAssertEqual(shortened.entry.expiresAt.timeIntervalSince(shortened.entry.capturedAt), 7 * 86400, accuracy: 0.01)
+        try await store.cleanup(now: shortened.entry.capturedAt.addingTimeInterval(8 * 86400))
+        let entries = try await store.entries(search: "", limit: 50, offset: 0)
+        XCTAssertTrue(entries.isEmpty)
+    }
+
+    func testAttemptStatusesRoundTripThroughStorage() async throws {
+        let capture = try await recording()
+        let unprocessed = try await store.detail(capture.id)
+        XCTAssertEqual(unprocessed.entry.status, .unprocessed)
+        let attempt = try await store.startTranscription(capture.id, configuration: .default)
+        let running = try await store.detail(capture.id)
+        XCTAssertEqual(running.entry.status, .running)
+        XCTAssertEqual(running.transcriptions.first?.status, .running)
+        try await store.finishTranscription(attempt, result: result("saved"), error: nil)
+        let succeeded = try await store.detail(capture.id)
+        XCTAssertEqual(succeeded.entry.status, .succeeded)
+        XCTAssertEqual(succeeded.transcriptions.first?.status, .succeeded)
+        let refinement = try await store.startRefinement(attempt, configuration: .default, prompt: "prompt")
+        try await store.finishRefinement(refinement, result: nil, error: "Synthetic failure")
+        let failed = try await store.detail(capture.id)
+        XCTAssertEqual(failed.refinements.first?.status, .failed)
     }
 }

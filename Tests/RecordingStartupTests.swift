@@ -1,10 +1,53 @@
 import Combine
 import Foundation
+import GRDB
 import XCTest
 @testable import DictaFlow_Dev
 
 @MainActor
 final class RecordingStartupTests: XCTestCase {
+    func testRetentionChangeOnlyRequiresConfirmationForAffectedRecordings() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryRetention-\(UUID())")
+        let store = SQLiteHistoryStore(root: root)
+        let fixture = try RecordingStartupFixture(historyStore: store)
+        defer { fixture.cleanup(); try? FileManager.default.removeItem(at: root) }
+        var ids: [UUID] = []
+        for _ in 0..<2 {
+            let capture = try await store.prepareCapture(retention: .fourteenDays)
+            try Data().write(to: capture.fileURL)
+            try await store.markFinishing(capture.id)
+            _ = try await store.finishCapture(capture.id, capture: DictationCapture(fileURL: capture.fileURL, duration: 1, capturedAt: Date()))
+            await store.releaseAudio(capture.id)
+            ids.append(capture.id)
+        }
+        await fixture.state.updateHistoryRetention(.off)
+        let noDeletion = await fixture.state.updateHistoryRetention(.sevenDays)
+        XCTAssertNil(noDeletion, "Off to seven days applies immediately when no recordings are affected")
+        XCTAssertEqual(fixture.state.historyRetention, .sevenDays)
+
+        await fixture.state.updateHistoryRetention(.fourteenDays)
+        await fixture.state.updateHistoryRetention(.off)
+        // Backdate only an isolated fixture recording to reproduce an older
+        // recording retained under fourteen days while history is off.
+        let database = try DatabaseQueue(path: root.appendingPathComponent("history.sqlite").path)
+        let olderID = ids[0].uuidString
+        try await database.write {
+            try $0.execute(sql: "UPDATE recordings SET capturedAt = ?, expiresAt = ? WHERE id = ?", arguments: [Date().addingTimeInterval(-9 * 86400).timeIntervalSince1970, Date().addingTimeInterval(5 * 86400).timeIntervalSince1970, olderID])
+        }
+        let before = try await store.detail(ids[0])
+        let needsConfirmation = await fixture.state.updateHistoryRetention(.sevenDays)
+        XCTAssertEqual(needsConfirmation, 1)
+        XCTAssertEqual(fixture.state.historyRetention, .off)
+        let unchanged = try await store.detail(ids[0])
+        XCTAssertEqual(unchanged.entry.expiresAt, before.entry.expiresAt, "Checking must not change expiry or delete history")
+        XCTAssertFalse(fixture.state.isHistoryProcessing)
+
+        await fixture.state.updateHistoryRetention(.sevenDays, confirmedDeletion: true)
+        XCTAssertEqual(fixture.state.historyRetention, .sevenDays)
+        let remaining = try await store.entries(search: "", limit: 50, offset: 0)
+        XCTAssertEqual(remaining.map(\.id), [ids[1]], "Confirmation only deletes recordings beyond the new retention")
+    }
+
     func testHistoryRetryFailurePreservesOriginalAndShowsError() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryPipeline-\(UUID())")
         let store = SQLiteHistoryStore(root: root)
@@ -41,7 +84,7 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(fixture.state.history.displayedText, "Preserved original")
         let detail = try await store.detail(capture.id)
         XCTAssertEqual(detail.transcriptions.count, 3)
-        XCTAssertEqual(detail.transcriptions.filter { $0.status == "failed" }.count, 1)
+        XCTAssertEqual(detail.transcriptions.filter { $0.status == .failed }.count, 1)
         XCTAssertEqual(detail.transcriptions.first { $0.id == original }?.result?.text, "Preserved original")
     }
 
@@ -155,7 +198,7 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertTrue(fixture.state.history.errorMessage?.contains("Synthetic refinement failure") == true)
         let detail = try await store.detail(capture.id)
         XCTAssertEqual(detail.refinements.count, 3)
-        XCTAssertEqual(detail.refinements.filter { $0.status == "failed" }.count, 1)
+        XCTAssertEqual(detail.refinements.filter { $0.status == .failed }.count, 1)
     }
 
     func testEscapeDiscardsManagedHistoryAudio() async throws {
