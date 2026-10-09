@@ -9,6 +9,7 @@ protocol AudioRecorderServiceProtocol: AnyObject {
     func warmUp() async throws
     func shutdown()
     func prepareRecording() async throws
+    func prepareRecording(at url: URL) async throws
     func startRecording() async throws -> URL
     func stopRecording() async throws -> DictationCapture
     func discardRecording() async throws
@@ -16,6 +17,7 @@ protocol AudioRecorderServiceProtocol: AnyObject {
 
 extension AudioRecorderServiceProtocol {
     var recordingError: Error? { nil }
+    func prepareRecording(at url: URL) async throws { try await prepareRecording() }
     func warmUp() async throws {}
 }
 
@@ -78,6 +80,10 @@ final class SystemAudioRecorderService: AudioRecorderServiceProtocol, RecordingC
 
     func prepareRecording() async throws {
         try await worker.perform { try $0.prepareCapture() }
+    }
+
+    func prepareRecording(at url: URL) async throws {
+        try await worker.perform { try $0.prepareCapture(at: url) }
     }
 
     func startRecording() async throws -> URL {

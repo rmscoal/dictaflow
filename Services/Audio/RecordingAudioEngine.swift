@@ -84,12 +84,12 @@ final class RecordingAudioEngine: @unchecked Sendable {
         }
     }
 
-    func prepareCapture() throws {
+    func prepareCapture(at destination: URL? = nil) throws {
         dispatchPrecondition(condition: .onQueue(queue))
         guard fileURL == nil else { throw AudioRecorderServiceError.alreadyRecording }
         try prepareEngine()
         guard let format else { throw AudioRecorderServiceError.failedToPrepare }
-        let url = try makeRecordingURL()
+        let url = try destination ?? makeRecordingURL()
         do {
             let file = try AVAudioFile(forWriting: url, settings: [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,

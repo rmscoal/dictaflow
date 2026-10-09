@@ -139,7 +139,7 @@ struct ContentView: View {
         case .refinement:
             refinementPage
         case .history:
-            historyPage
+            HistoryView(appState: appState, model: appState.history)
         case .shortcutAndAudio:
             shortcutAndAudioPage
         case .appearance:
@@ -1009,84 +1009,6 @@ struct ContentView: View {
         }
     }
 
-    private var historyPage: some View {
-        DetailPage {
-            VStack(alignment: .leading, spacing: AppLayout.sectionSpacing) {
-                GlassTile {
-                    VStack(alignment: .leading, spacing: 12) {
-                        TileHeader(title: "Last Transcript", systemImage: "text.bubble")
-
-                        if let lastTranscription = appState.lastTranscription {
-                            HStack {
-                                Text(lastTranscription.taskMode.title)
-                                    .font(.system(size: 15, weight: .semibold))
-
-                                Spacer()
-
-                                Text(lastTranscription.completedAt.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(AppTheme.secondaryText)
-                            }
-
-                            RefinementStatusBadge(
-                                title: refinementStatusTitle(for: lastTranscription),
-                                detail: refinementStatusDetail(for: lastTranscription),
-                                color: refinementStatusColor(for: lastTranscription)
-                            )
-
-                            TranscriptTextBlock(
-                                title: "Whisper Original",
-                                text: lastTranscription.text.isEmpty ? "Empty transcript" : lastTranscription.text,
-                                prominence: .primary
-                            )
-
-                            TranscriptTextBlock(
-                                title: "LLM Refinement Result",
-                                text: refinementOutputText(for: lastTranscription),
-                                prominence: lastTranscription.refinement == nil ? .secondary : .primary
-                            )
-
-                            HStack(spacing: 10) {
-                                Button {
-                                    appState.insertLastTranscription()
-                                } label: {
-                                    Label("Insert Again", systemImage: "arrow.uturn.forward")
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(AppTheme.accent)
-                                .disabled(!appState.canInsertLastTranscription)
-
-                                Button {
-                                    appState.copyLastTranscription()
-                                } label: {
-                                    Label("Copy", systemImage: "doc.on.doc")
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(!appState.canCopyLastTranscription)
-                            }
-                        } else {
-                            Text("No transcript yet.")
-                                .font(.system(size: 15))
-                                .foregroundStyle(AppTheme.secondaryText)
-                        }
-                    }
-                }
-
-                if let lastCapture = appState.lastCapture {
-                    GlassTile {
-                        VStack(alignment: .leading, spacing: 8) {
-                            TileHeader(title: "Last Capture", systemImage: "waveform")
-
-                            Text(lastCapture.durationText)
-                                .font(.system(size: 15))
-                                .foregroundStyle(AppTheme.secondaryText)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     private var pageTitle: String {
         switch appState.mainWindowPage {
         case .overview: "Overview"
@@ -1106,7 +1028,7 @@ struct ContentView: View {
         case .overview: "Ready for private, local dictation"
         case .dictation: "Choose how speech becomes text."
         case .refinement: "Clean transcripts locally before insertion."
-        case .history: "Review and reuse your latest transcript."
+        case .history: "Replay recordings, review results, and retry locally."
         case .shortcutAndAudio: "Control recording access and audio behavior."
         case .appearance: "Choose how DictaFlow looks."
         case .models: "Manage local Whisper and refinement models."
@@ -1236,59 +1158,7 @@ struct ContentView: View {
         isShowingUnusedModelDeletionConfirmation = true
     }
 
-    private func refinementStatusTitle(for transcription: WhisperTranscriptionResult) -> String {
-        switch transcription.refinementStatus {
-        case .disabled:
-            return "LLM refinement: Off"
-        case .skipped:
-            return "LLM refinement: Skipped"
-        case .succeeded(let model, _, _):
-            return "LLM refinement: Used \(model.displayName)"
-        case .failed(let model, _, _):
-            return "LLM refinement: Failed with \(model.displayName)"
-        }
-    }
 
-    private func refinementStatusDetail(for transcription: WhisperTranscriptionResult) -> String {
-        switch transcription.refinementStatus {
-        case .disabled:
-            return "This transcription used raw Whisper text because refinement was off."
-        case .skipped(let reason):
-            return "No LLM output was produced. \(reason)"
-        case .succeeded(_, let mode, let completedAt):
-            return "Mode: \(mode.title). Completed at \(completedAt.formatted(date: .omitted, time: .standard))."
-        case .failed(_, let errorMessage, let completedAt):
-            return "No LLM output was produced. Failed at \(completedAt.formatted(date: .omitted, time: .standard)): \(errorMessage)"
-        }
-    }
-
-    private func refinementStatusColor(for transcription: WhisperTranscriptionResult) -> Color {
-        switch transcription.refinementStatus {
-        case .succeeded:
-            return AppTheme.accent
-        case .failed:
-            return AppTheme.warning.opacity(0.9)
-        case .disabled, .skipped:
-            return AppTheme.secondaryText
-        }
-    }
-
-    private func refinementOutputText(for transcription: WhisperTranscriptionResult) -> String {
-        if let refinement = transcription.refinement {
-            return refinement.refinedText.isEmpty ? "Empty refined transcript" : refinement.refinedText
-        }
-
-        switch transcription.refinementStatus {
-        case .disabled:
-            return "No LLM output. Refinement was off for this transcription."
-        case .skipped:
-            return "No LLM output. Refinement was skipped."
-        case .failed:
-            return "No LLM output. Refinement failed, so DictaFlow inserted the raw Whisper transcript."
-        case .succeeded:
-            return "Empty refined transcript"
-        }
-    }
 }
 
 private enum AppLayout {
@@ -1727,57 +1597,6 @@ private struct TileHeader: View {
         Label(title, systemImage: systemImage)
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(AppTheme.secondaryText)
-    }
-}
-
-private enum TranscriptTextProminence {
-    case primary
-    case secondary
-}
-
-private struct TranscriptTextBlock: View {
-    let title: String
-    let text: String
-    let prominence: TranscriptTextProminence
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(AppTheme.secondaryText)
-
-            Text(text)
-                .font(.system(size: prominence == .primary ? 15 : 13))
-                .foregroundStyle(prominence == .primary ? AppTheme.primaryText : AppTheme.secondaryText)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
-private struct RefinementStatusBadge: View {
-    let title: String
-    let detail: String
-    let color: Color
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundStyle(color)
-
-            Text(detail)
-                .font(.system(size: 12))
-                .foregroundStyle(AppTheme.secondaryText)
-                .textSelection(.enabled)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(color.opacity(0.22), lineWidth: 0.75)
-        )
     }
 }
 

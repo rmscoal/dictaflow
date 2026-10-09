@@ -95,6 +95,14 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var updateCheckMessage: String?
     @Published private(set) var automaticallyChecksForUpdates: Bool
 
+    let history: HistoryViewModel
+    let historyStore: HistoryStoreProtocol?
+    @Published private(set) var historyRetention: HistoryRetention
+    @Published private(set) var isHistoryProcessing = false
+    @Published private(set) var processingHistoryID: UUID?
+    private var activeHistoryCapture: HistoryCapture?
+    private var historyRetryTask: Task<Void, Never>?
+
     let launchExperience: AppLaunchExperience
     @Published private(set) var whisperConfiguration: WhisperConfiguration
     @Published private(set) var refinementConfiguration: RefinementConfiguration
@@ -157,7 +165,8 @@ final class DictaFlowAppState: ObservableObject {
             refinementPromptStore: FileRefinementPromptStore(),
             textInsertionService: SystemTextInsertionService(),
             localNotificationService: UserLocalNotificationService(),
-            appUpdateService: GitHubReleaseUpdateService()
+            appUpdateService: GitHubReleaseUpdateService(),
+            historyStore: SQLiteHistoryStore()
         )
     }
 
@@ -174,11 +183,15 @@ final class DictaFlowAppState: ObservableObject {
         refinementPromptStore: RefinementPromptStoreProtocol,
         textInsertionService: TextInsertionServiceProtocol,
         localNotificationService: LocalNotificationServiceProtocol,
-        appUpdateService: AppUpdateChecking
+        appUpdateService: AppUpdateChecking,
+        historyStore: HistoryStoreProtocol? = nil
     ) {
         let initialRefinementConfiguration = settingsStore.refinementConfiguration
         let initialPromptText = refinementPromptStore.promptTemplate()
 
+        self.historyStore = historyStore
+        self.history = HistoryViewModel(store: historyStore)
+        self.historyRetention = settingsStore.historyRetention
         self.appAppearance = settingsStore.appAppearance
         self.settingsStore = settingsStore
         self.permissionService = permissionService
@@ -309,7 +322,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     var isDictationActionDisabled: Bool {
-        if isEditingGlobalShortcut || transcriptionState.isBusy || textInsertionState.isBusy {
+        if isEditingGlobalShortcut || transcriptionState.isBusy || textInsertionState.isBusy || isHistoryProcessing || history.isMutating {
             return true
         }
         switch recordingState {
@@ -470,6 +483,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     var whisperSettingsLocked: Bool {
+        if isHistoryProcessing || history.isMutating { return true }
         if isDeletingModel {
             return true
         }
@@ -719,6 +733,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func handleApplicationLaunch() {
+        history.start()
         removeIncompleteModelDownloads()
         refreshInstalledLocalModelFiles()
         refreshMicrophonePermissionStatus()
@@ -1141,8 +1156,8 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func prewarmRefinementModel() {
-        guard !isTerminating, refinementConfiguration.isEnabled, isSelectedRefinementModelPrepared,
+    private func prewarmRefinementModel(forceEnabled: Bool = false) {
+        guard !isTerminating, (refinementConfiguration.isEnabled || forceEnabled), isSelectedRefinementModelPrepared,
               refinementPreparationTask == nil else { return }
         let model = refinementConfiguration.model
         let id = UUID()
@@ -1516,6 +1531,7 @@ final class DictaFlowAppState: ObservableObject {
 
         do {
             try await audioRecorderService.discardRecording()
+            await discardHistoryCapture()
             await finishRecordingFeedback(startFeedbackTask)
             playSoundCue(.stopRecording)
             recordingState = .idle
@@ -1525,6 +1541,7 @@ final class DictaFlowAppState: ObservableObject {
             setPreservedStatusMessage("Recording cancelled.")
             updateStatusMessage()
         } catch {
+            await discardHistoryCapture()
             await finishRecordingFeedback(startFeedbackTask)
             recordingState = .idle
             pendingInsertionTargetApplication = nil
@@ -1533,6 +1550,147 @@ final class DictaFlowAppState: ObservableObject {
             setPreservedStatusMessage("Could not cancel recording cleanly. \(error.localizedDescription)")
             showMainWindow()
             updateStatusMessage()
+        }
+    }
+
+    private func discardHistoryCapture() async {
+        guard let capture = activeHistoryCapture else { return }
+        activeHistoryCapture = nil
+        do { try await historyStore?.discardCapture(capture.id) }
+        catch { history.report(error) }
+    }
+
+    var canProcessHistory: Bool {
+        recordingState == .idle && !transcriptionState.isBusy && !textInsertionState.isBusy
+            && !isHistoryProcessing && !history.isMutating && dictationToggleTask == nil
+    }
+
+    var historyProcessingStatusText: String {
+        if transcriptionState.isRefining {
+            return isRefinementServerPreparing ? "Preparing refinement model…" : "Refining text…"
+        }
+        return transcriptionState.isTranscribing ? "Transcribing audio…" : "Opening recording…"
+    }
+
+    /// Returns an affected recording count when deletion needs confirmation,
+    /// leaving retention and stored history unchanged until the user confirms.
+    @discardableResult
+    func updateHistoryRetention(_ retention: HistoryRetention, confirmedDeletion: Bool = false) async -> Int? {
+        guard canProcessHistory, let historyStore else { return nil }
+        isHistoryProcessing = true
+        defer { isHistoryProcessing = false }
+        await history.stopPlayback()
+        do {
+            if !confirmedDeletion {
+                let count = try await historyStore.countRecordingsExpiring(retention: retention, now: Date())
+                if count > 0 { return count }
+            }
+            try await historyStore.setRetention(retention)
+            historyRetention = retention
+            settingsStore.saveHistoryRetention(retention)
+            await history.cleanup()
+        } catch { history.report(error) }
+        return nil
+    }
+
+    func retryHistoryTranscription(model: WhisperModelDescriptor? = nil) {
+        guard canProcessHistory, let id = history.selectedID, let historyStore else { return }
+        let previousText = history.displayedText
+        history.retryMessages[id] = nil
+        history.errorMessage = nil
+        let previousLatestAttemptID = history.detail?.transcriptions.first?.id
+        var configuration = whisperConfiguration
+        if let model { configuration.model = model }
+        processingHistoryID = id
+        isHistoryProcessing = true
+        historyRetryTask = Task { [weak self] in
+            guard let self else { return }
+            await history.stopPlayback()
+            var acquired = false
+            do {
+                let url = try await historyStore.acquireAudio(id)
+                acquired = true
+                let entry = try await historyStore.detail(id).entry
+                await transcribe(capture: DictationCapture(fileURL: url, duration: entry.duration, capturedAt: entry.capturedAt), historyID: id, insertResult: false, configuration: configuration)
+                await historyStore.releaseAudio(id)
+                acquired = false
+                let updated = try await historyStore.detail(id)
+                if let latest = updated.transcriptions.first, latest.id != previousLatestAttemptID, let result = latest.result {
+                    let refined = updated.refinements.first { $0.transcriptionID == latest.id && $0.result != nil }?.result?.refinedText
+                    let newText = (refined ?? result.text).trimmingCharacters(in: .whitespacesAndNewlines)
+                    let unchanged = newText == (previousText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    history.retryMessages[id] = unchanged ? "Retry complete. Text unchanged." : "Retry complete. Text updated."
+                } else {
+                    history.retryMessages[id] = "Retry did not complete. Previous results are kept."
+                }
+                await history.refresh()
+                if history.selectedID == id,
+                   let latest = history.detail?.transcriptions.first,
+                   latest.id != previousLatestAttemptID, latest.result != nil {
+                    await history.select(id)
+                }
+            } catch {
+                history.report(error)
+                history.retryMessages[id] = "Retry failed. Previous results are kept."
+                if acquired { await historyStore.releaseAudio(id) }
+            }
+            processingHistoryID = nil
+            isHistoryProcessing = false
+            historyRetryTask = nil
+        }
+    }
+
+    func retryHistoryRefinement() {
+        guard canProcessHistory, let id = history.selectedID,
+              let attempt = history.transcription, let result = attempt.result, let historyStore else { return }
+        history.retryMessages[id] = nil
+        history.errorMessage = nil
+        let previousLatestRefinementID = history.refinements.first?.id
+        processingHistoryID = id
+        isHistoryProcessing = true
+        historyRetryTask = Task { [weak self] in
+            guard let self else { return }
+            await history.stopPlayback()
+            var acquired = false
+            do {
+                try await historyStore.acquireRecording(id)
+                acquired = true
+                _ = await refinedTranscriptionIfNeeded(result, historyTranscriptionID: attempt.id, forceEnabled: true)
+                transcriptionState = .idle
+                await historyStore.releaseAudio(id)
+                acquired = false
+                await history.refresh()
+                if history.selectedID == id, history.selectedTranscriptionID == attempt.id,
+                   let latest = history.refinements.first,
+                   latest.id != previousLatestRefinementID, latest.result != nil {
+                    history.selectTranscription()
+                    history.retryMessages[id] = "Refinement complete. New result saved."
+                }
+                resetWhisperIdleTimer()
+            } catch {
+                history.report(error)
+                if acquired { await historyStore.releaseAudio(id) }
+            }
+            processingHistoryID = nil
+            isHistoryProcessing = false
+            historyRetryTask = nil
+        }
+    }
+
+    func copyHistoryText(_ text: String) {
+        textInsertionService.copyTextToPasteboard(text)
+    }
+
+    func insertHistoryText() {
+        guard canProcessHistory, let result = history.transcription?.result else { return }
+        var selected = result
+        selected.refinement = history.showsOriginal ? nil : history.refinement?.result
+        isHistoryProcessing = true
+        historyRetryTask = Task { [weak self] in
+            guard let self else { return }
+            await insert(transcription: selected, targetApplication: captureCurrentInsertionTargetApplication())
+            isHistoryProcessing = false
+            historyRetryTask = nil
         }
     }
 
@@ -1779,6 +1937,8 @@ final class DictaFlowAppState: ObservableObject {
 
     func prepareForTermination() {
         isTerminating = true
+        historyRetryTask?.cancel()
+        history.shutdown()
         dictationToggleTask?.cancel()
         cancelRecordingStartFeedback()
         stopSoundCues()
@@ -2247,7 +2407,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func performDictationToggle() async {
-        if transcriptionState.isBusy || textInsertionState.isBusy {
+        if transcriptionState.isBusy || textInsertionState.isBusy || isHistoryProcessing || history.isMutating {
             return
         }
 
@@ -2302,7 +2462,18 @@ final class DictaFlowAppState: ObservableObject {
             recordingState = .starting
             updateStatusMessage()
             try Task.checkCancellation()
-            try await audioRecorderService.prepareRecording()
+            await history.stopPlayback()
+            if historyRetention != .off, !isOnboardingPracticeSession, let historyStore {
+                do {
+                    activeHistoryCapture = try await historyStore.prepareCapture(retention: historyRetention)
+                } catch { history.report(error) }
+            }
+            try Task.checkCancellation()
+            if let activeHistoryCapture {
+                try await audioRecorderService.prepareRecording(at: activeHistoryCapture.fileURL)
+            } else {
+                try await audioRecorderService.prepareRecording()
+            }
             try Task.checkCancellation()
             let fileURL = try await audioRecorderService.startRecording()
             try Task.checkCancellation()
@@ -2323,6 +2494,7 @@ final class DictaFlowAppState: ObservableObject {
             } catch {
                 logger.error("Could not discard prepared recording: \(error.localizedDescription, privacy: .public)")
             }
+            await discardHistoryCapture()
             await restoreRecordingPlaybackAdjustment()
             stopRecordingMetering()
             recordingState = .idle
@@ -2345,15 +2517,35 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
 
         do {
-            let capture = try await audioRecorderService.stopRecording()
+            if let id = activeHistoryCapture?.id {
+                do { try await historyStore?.markFinishing(id) }
+                catch { history.report(error) }
+            }
+            var capture = try await audioRecorderService.stopRecording()
+            let historyID = activeHistoryCapture?.id
+            if let historyID, let historyStore {
+                do {
+                    let url = try await historyStore.finishCapture(historyID, capture: capture)
+                    capture = DictationCapture(fileURL: url, duration: capture.duration, capturedAt: capture.capturedAt)
+                } catch {
+                    history.report(error)
+                    if let url = try? await historyStore.captureURL(historyID) {
+                        capture = DictationCapture(fileURL: url, duration: capture.duration, capturedAt: capture.capturedAt)
+                    }
+                }
+            }
+            activeHistoryCapture = nil
             await finishRecordingFeedback(startFeedbackTask)
             playSoundCue(.stopRecording)
             lastCapture = capture
             microphonePermissionState = permissionService.currentMicrophonePermissionStatus()
             recordingState = .idle
             updateStatusMessage()
-            await transcribe(capture: capture)
+            await transcribe(capture: capture, historyID: historyID)
+            if let historyID { await historyStore?.releaseAudio(historyID) }
+            await history.refresh()
         } catch {
+            await discardHistoryCapture()
             await finishRecordingFeedback(startFeedbackTask)
             stopRecordingMetering()
             recordingState = .idle
@@ -2451,6 +2643,7 @@ final class DictaFlowAppState: ObservableObject {
         } catch {
             logger.error("Could not discard interrupted recording: \(error.localizedDescription)")
         }
+        await discardHistoryCapture()
         await finishRecordingFeedback(feedbackTask)
         recordingState = .idle
         pendingInsertionTargetApplication = nil
@@ -2635,17 +2828,27 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func transcribe(capture: DictationCapture) async {
+    private func transcribe(capture: DictationCapture, historyID: UUID? = nil, insertResult: Bool = true, configuration override: WhisperConfiguration? = nil) async {
+        let configuration = override ?? whisperConfiguration
+        var historyAttempt: UUID?
+        if let historyID, let historyStore {
+            do { historyAttempt = try await historyStore.startTranscription(historyID, configuration: configuration) }
+            catch { history.report(error) }
+        }
         var shouldSurfaceCleanupFailure = false
         defer {
             removeTemporaryCapture(capture, shouldSurfaceFailure: shouldSurfaceCleanupFailure)
         }
 
-        let model = whisperConfiguration.model
+        let model = configuration.model
         transcriptionState = .transcribing(model)
         updateStatusMessage()
 
         guard let modelURL = await modelDownloadService.verifiedWhisperModelURL(for: model) else {
+            if let historyAttempt {
+                do { try await historyStore?.finishTranscription(historyAttempt, result: nil, error: "The selected Whisper model is not prepared.") }
+                catch { history.report(error) }
+            }
             playSoundCue(.error)
             transcriptionState = .idle
             isOnboardingPracticeSession = false
@@ -2661,12 +2864,16 @@ final class DictaFlowAppState: ObservableObject {
             let transcription = try await whisperService.transcribe(
                 audioFileURL: capture.fileURL,
                 modelURL: modelURL,
-                configuration: whisperConfiguration
+                configuration: configuration
             )
 
+            if let attempt = historyAttempt {
+                do { try await historyStore?.finishTranscription(attempt, result: transcription, error: nil) }
+                catch { history.report(error); historyAttempt = nil }
+            }
             lastTranscription = transcription
             clearPreservedStatusMessage()
-            let insertionTranscription = await refinedTranscriptionIfNeeded(transcription)
+            let insertionTranscription = await refinedTranscriptionIfNeeded(transcription, historyTranscriptionID: historyAttempt)
             guard !isTerminating else { return }
 
             if isOnboardingPracticeSession {
@@ -2686,15 +2893,27 @@ final class DictaFlowAppState: ObservableObject {
                 return
             }
 
-            await insert(transcription: insertionTranscription, targetApplication: pendingInsertionTargetApplication)
+            if insertResult {
+                await insert(transcription: insertionTranscription, targetApplication: pendingInsertionTargetApplication)
+            } else {
+                transcriptionState = .idle
+                setRecordingOverlaySessionActive(false)
+                setPreservedStatusMessage("New transcription saved to history. Review it before inserting.")
+                resetWhisperIdleTimer()
+            }
             shouldSurfaceCleanupFailure = true
         } catch {
+            if let historyAttempt {
+                do { try await historyStore?.finishTranscription(historyAttempt, result: nil, error: error.localizedDescription) }
+                catch { history.report(error) }
+            }
             transcriptionState = .idle
             isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
             setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)")
+            if !insertResult { history.report(error) }
             playSoundCue(.error)
-            showMainWindow()
+            showMainWindowPage(insertResult ? .overview : .history)
             resetWhisperIdleTimer()
         }
     }
@@ -2727,8 +2946,8 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func refinedTranscriptionIfNeeded(_ transcription: WhisperTranscriptionResult) async -> WhisperTranscriptionResult {
-        guard !isTerminating, refinementConfiguration.isEnabled else {
+    private func refinedTranscriptionIfNeeded(_ transcription: WhisperTranscriptionResult, historyTranscriptionID: UUID? = nil, forceEnabled: Bool = false) async -> WhisperTranscriptionResult {
+        guard !isTerminating, refinementConfiguration.isEnabled || forceEnabled else {
             return transcription
         }
 
@@ -2764,11 +2983,20 @@ final class DictaFlowAppState: ObservableObject {
         transcriptionState = .refining(model)
         updateStatusMessage()
 
-        let configuration = refinementConfiguration
+        var configuration = refinementConfiguration
+        if forceEnabled { configuration.isEnabled = true }
         let prompt = refinementPromptText
-        prewarmRefinementModel()
+        prewarmRefinementModel(forceEnabled: forceEnabled)
+        // Persistence yields to the preparation task. Keep its result even if
+        // preparation finishes and clears the coordinator's in-flight handle.
+        let preparation = refinementPreparationTask
+        var historyAttempt: UUID?
+        if let historyTranscriptionID, let historyStore {
+            do { historyAttempt = try await historyStore.startRefinement(historyTranscriptionID, configuration: configuration, prompt: prompt) }
+            catch { history.report(error) }
+        }
         do {
-            guard let preparation = refinementPreparationTask else {
+            guard let preparation else {
                 throw TranscriptRefinementServiceError.failedToRun("Download Qwen3 0.6B from the Refinement page.")
             }
             let modelURL = try await preparation.value
@@ -2781,6 +3009,10 @@ final class DictaFlowAppState: ObservableObject {
                 promptTemplate: prompt
             )
 
+            if let historyAttempt {
+                do { try await historyStore?.finishRefinement(historyAttempt, result: refinement, error: nil) }
+                catch { history.report(error) }
+            }
             var refinedTranscription = transcription
             refinedTranscription.refinement = refinement
             refinedTranscription.refinementStatus = .succeeded(
@@ -2793,7 +3025,12 @@ final class DictaFlowAppState: ObservableObject {
             updateStatusMessage()
             return refinedTranscription
         } catch {
+            if let historyAttempt {
+                do { try await historyStore?.finishRefinement(historyAttempt, result: nil, error: error.localizedDescription) }
+                catch { history.report(error) }
+            }
             guard !isTerminating else { return transcription }
+            if forceEnabled { history.report(error) }
             let message = "Could not refine the transcript locally, so DictaFlow will use the raw Whisper text. \(error.localizedDescription)"
             var failedTranscription = transcription
             failedTranscription.refinementStatus = .failed(
@@ -2808,7 +3045,7 @@ final class DictaFlowAppState: ObservableObject {
                 title: "DictaFlow refinement failed",
                 body: "Using the raw Whisper transcript instead."
             )
-            showMainWindow()
+            showMainWindowPage(forceEnabled ? .history : .overview)
             updateStatusMessage()
             return failedTranscription
         }

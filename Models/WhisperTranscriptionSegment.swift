@@ -1,6 +1,6 @@
 import Foundation
 
-struct WhisperTranscriptionSegment: Equatable, Identifiable {
+nonisolated struct WhisperTranscriptionSegment: Codable, Equatable, Identifiable {
     let text: String
     let startTime: TimeInterval
     let endTime: TimeInterval

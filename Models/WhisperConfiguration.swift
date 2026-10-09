@@ -1,6 +1,6 @@
 import Foundation
 
-struct WhisperConfiguration: Codable, Equatable {
+nonisolated struct WhisperConfiguration: Codable, Equatable {
     var model: WhisperModelDescriptor
     var inputLanguage: WhisperInputLanguage
     var taskMode: WhisperTaskMode
@@ -141,7 +141,7 @@ enum CustomVocabularyKeywordError: Equatable {
     }
 }
 
-struct CustomVocabularyValidation: Equatable {
+nonisolated struct CustomVocabularyValidation: Equatable {
     let terms: [String]
     let multiWordEntryCount: Int
     let overflowEntryCount: Int

@@ -1,6 +1,6 @@
 import Foundation
 
-enum TranscriptRefinementStatus: Equatable {
+nonisolated enum TranscriptRefinementStatus: Codable, Equatable {
     case disabled
     case skipped(reason: String)
     case succeeded(model: RefinementModelDescriptor, mode: RefinementMode, completedAt: Date)

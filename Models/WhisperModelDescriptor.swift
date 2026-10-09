@@ -8,7 +8,7 @@ enum WhisperModelDescriptor: String, CaseIterable, Codable, Hashable, Sendable, 
     case largeV3Turbo = "large-v3-turbo"
     case largeV3 = "large-v3"
 
-    static let recommendedDefault: WhisperModelDescriptor = .small
+    nonisolated static let recommendedDefault: WhisperModelDescriptor = .small
 
     nonisolated var modelIdentifier: String {
         "whisper.\(rawValue)"
