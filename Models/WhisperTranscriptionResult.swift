@@ -1,6 +1,6 @@
 import Foundation
 
-struct WhisperTranscriptionResult: Equatable {
+nonisolated struct WhisperTranscriptionResult: Codable, Equatable {
     let text: String
     let segments: [WhisperTranscriptionSegment]
     let detectedLanguageCode: String?

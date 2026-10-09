@@ -1,6 +1,6 @@
 import Foundation
 
-struct TranscriptRefinementResult: Equatable {
+nonisolated struct TranscriptRefinementResult: Codable, Equatable {
     let originalText: String
     let refinedText: String
     let model: RefinementModelDescriptor

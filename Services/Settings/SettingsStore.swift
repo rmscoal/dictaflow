@@ -1,6 +1,8 @@
 import Foundation
 
 protocol SettingsStoreProtocol: AnyObject {
+    var historyRetention: HistoryRetention { get }
+    func saveHistoryRetention(_ retention: HistoryRetention)
     var appAppearance: AppAppearance { get }
     var shouldShowMainWindowOnLaunch: Bool { get }
     var hasRequestedAccessibilityPermission: Bool { get }
@@ -28,6 +30,7 @@ protocol SettingsStoreProtocol: AnyObject {
 
 final class UserDefaultsSettingsStore: SettingsStoreProtocol {
     private enum Keys {
+        static let historyRetention = "history.retentionDays"
         static let appAppearance = "app.appearance"
         static let hasPresentedInitialWindow = "app.hasPresentedInitialWindow"
         static let hasRequestedAccessibilityPermission = "permissions.hasRequestedAccessibilityPermission"
@@ -46,6 +49,15 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+    }
+
+    var historyRetention: HistoryRetention {
+        guard defaults.object(forKey: Keys.historyRetention) != nil else { return .sevenDays }
+        return HistoryRetention(rawValue: defaults.integer(forKey: Keys.historyRetention)) ?? .sevenDays
+    }
+
+    func saveHistoryRetention(_ retention: HistoryRetention) {
+        defaults.set(retention.rawValue, forKey: Keys.historyRetention)
     }
 
     var appAppearance: AppAppearance {

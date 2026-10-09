@@ -12,6 +12,28 @@ change, cancellation during preparation, repeated toggles during recorder
 startup, permission denial, and retry after a failed start. These tests never
 record microphone audio, play sound cues, or write to the user's clipboard.
 
+`HistoryStoreTests` uses isolated SQLite databases and synthetic audio. It checks
+append-only retries, refinement parents, searching earlier results, cancellation,
+restart recovery, retention, active-file protection, cascading deletion, and late
+completion after deletion. Coordinator checks also cover managed recording
+cleanup, retries without automatic insertion, and keeping an older Whisper
+result selected after refining it again.
+
+For manual history checks, use the installed Dev app. Finish a short recording,
+click its card to expand it, replay and seek it, and retry transcription. Confirm the model, task, language, and refinement setting
+in the retry popover; Cancel must not start processing. Check that a completed
+retry shows an attempt number and whether its text changed. Open
+Previous Results from the recording's actions menu to select an earlier attempt;
+its refinement must stay attached to that transcription. Selecting another card
+or collapsing the current one must stop playback. Refreshing should preserve a
+selected older attempt and leave collapsed cards closed. Check no-speech and failure states, and both delete confirmation
+dialogs. Check narrow windows and light/dark appearance: confirmation popovers
+should open toward the card, and the Original/Refined switch must not wrap its
+label. Audio loading, transcription, model preparation, and refinement must show
+clear progress. Escape during recording must leave no saved entry. History defaults to
+7 days; Off stops new saves and 14 days extends retention from the original
+recording date. Audio and every result share that expiry.
+
 Run it with Xcode's Test action or:
 
 ```sh

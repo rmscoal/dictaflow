@@ -1,10 +1,10 @@
 import Foundation
 
-enum WhisperInputLanguage: Codable, Equatable, Hashable {
+nonisolated enum WhisperInputLanguage: Codable, Equatable, Hashable {
     case automatic
     case languageCode(String)
 
-    var displayName: String {
+    @MainActor var displayName: String {
         switch self {
         case .automatic:
             return "Auto Detect"

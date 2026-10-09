@@ -5,6 +5,207 @@ import XCTest
 
 @MainActor
 final class RecordingStartupTests: XCTestCase {
+    func testHistoryRetryFailurePreservesOriginalAndShowsError() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryPipeline-\(UUID())")
+        let store = SQLiteHistoryStore(root: root)
+        let fixture = try RecordingStartupFixture(whisper: PipelineWhisperService(failsTranscription: true), usePipelineModels: true, historyStore: store)
+        defer { fixture.cleanup(); try? FileManager.default.removeItem(at: root) }
+        let capture = try await store.prepareCapture(retention: .sevenDays)
+        try Data().write(to: capture.fileURL)
+        try await store.markFinishing(capture.id)
+        _ = try await store.finishCapture(capture.id, capture: DictationCapture(fileURL: capture.fileURL, duration: 1, capturedAt: Date()))
+        let original = try await store.startTranscription(capture.id, configuration: .default)
+        try await store.finishTranscription(original, result: WhisperTranscriptionResult(text: "Preserved original", segments: [], detectedLanguageCode: "en", model: .small, taskMode: .transcribe, completedAt: Date()), error: nil)
+        let newer = try await store.startTranscription(capture.id, configuration: .default)
+        try await store.finishTranscription(newer, result: WhisperTranscriptionResult(text: "Newer original", segments: [], detectedLanguageCode: "en", model: .small, taskMode: .transcribe, completedAt: Date()), error: nil)
+        await store.releaseAudio(capture.id)
+        await fixture.state.history.refresh()
+        await fixture.state.history.select(capture.id)
+        fixture.state.history.selectedTranscriptionID = original
+        fixture.state.history.selectTranscription()
+        fixture.state.showMainWindowPage(.history)
+        let finished = expectation(description: "Failed retry finishes")
+        var started = false
+        let observation = fixture.state.$isHistoryProcessing.sink {
+            if $0 { started = true }
+            if started && !$0 { finished.fulfill() }
+        }
+        fixture.state.retryHistoryTranscription()
+        XCTAssertEqual(fixture.state.processingHistoryID, capture.id)
+        await fulfillment(of: [finished], timeout: 3)
+        XCTAssertNil(fixture.state.processingHistoryID)
+        observation.cancel()
+        XCTAssertNotNil(fixture.state.history.errorMessage)
+        XCTAssertTrue(fixture.state.history.errorMessage?.contains("The saved audio could not be read") == true)
+        XCTAssertEqual(fixture.state.mainWindowPage, .history)
+        XCTAssertEqual(fixture.state.history.displayedText, "Preserved original")
+        let detail = try await store.detail(capture.id)
+        XCTAssertEqual(detail.transcriptions.count, 3)
+        XCTAssertEqual(detail.transcriptions.filter { $0.status == "failed" }.count, 1)
+        XCTAssertEqual(detail.transcriptions.first { $0.id == original }?.result?.text, "Preserved original")
+    }
+
+    func testSuccessfulRetryLabelsNewAttemptAndReportsTextChanges() async throws {
+        for previousText in ["New result", "Old result"] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryPipeline-\(UUID())")
+            let store = SQLiteHistoryStore(root: root)
+            let fixture = try RecordingStartupFixture(whisper: PipelineWhisperService(text: "New result"), usePipelineModels: true, refinementEnabled: false, historyStore: store)
+            defer { fixture.cleanup(); try? FileManager.default.removeItem(at: root) }
+            let capture = try await store.prepareCapture(retention: .sevenDays)
+            try Data().write(to: capture.fileURL)
+            try await store.markFinishing(capture.id)
+            _ = try await store.finishCapture(capture.id, capture: DictationCapture(fileURL: capture.fileURL, duration: 1, capturedAt: Date()))
+            let original = try await store.startTranscription(capture.id, configuration: .default)
+            try await store.finishTranscription(original, result: WhisperTranscriptionResult(text: previousText, segments: [], detectedLanguageCode: "en", model: .small, taskMode: .transcribe, completedAt: Date()), error: nil)
+            await store.releaseAudio(capture.id)
+            await fixture.state.history.select(capture.id)
+            let finished = expectation(description: "Retry completes for \(previousText)")
+            var started = false
+            let observation = fixture.state.$isHistoryProcessing.sink {
+                if $0 { started = true }
+                if started && !$0 { finished.fulfill() }
+            }
+            fixture.state.history.errorMessage = "Previous retry failed"
+            fixture.state.retryHistoryTranscription()
+            await fulfillment(of: [finished], timeout: 3)
+            observation.cancel()
+            XCTAssertNil(fixture.state.history.errorMessage, "A successful retry must not retain an old error banner")
+            XCTAssertEqual(fixture.state.history.displayedText, "New result")
+            let latest = try XCTUnwrap(fixture.state.history.transcription)
+            XCTAssertEqual(fixture.state.history.transcriptionLabel(latest), "Attempt 2 · Latest")
+            let first = try XCTUnwrap(fixture.state.history.detail?.transcriptions.first { $0.id == original })
+            XCTAssertEqual(fixture.state.history.transcriptionLabel(first), "First attempt · Previous")
+            XCTAssertEqual(fixture.state.history.retryMessages[capture.id], previousText == "New result" ? "Retry complete. Text unchanged." : "Retry complete. Text updated.")
+            XCTAssertNil(fixture.state.lastTextInsertion)
+        }
+    }
+
+    func testRefinementRetryKeepsSelectedOlderWhisperResult() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryPipeline-\(UUID())")
+        let store = SQLiteHistoryStore(root: root)
+        let refinement = PipelineRefinementService(expectedTranscript: "Older raw transcript")
+        let fixture = try RecordingStartupFixture(refinement: refinement, usePipelineModels: true, refinementEnabled: false, historyStore: store)
+        defer { fixture.cleanup(); try? FileManager.default.removeItem(at: root) }
+        let capture = try await store.prepareCapture(retention: .sevenDays)
+        try Data().write(to: capture.fileURL)
+        try await store.markFinishing(capture.id)
+        _ = try await store.finishCapture(capture.id, capture: DictationCapture(fileURL: capture.fileURL, duration: 1, capturedAt: Date()))
+        let older = try await store.startTranscription(capture.id, configuration: .default)
+        try await store.finishTranscription(older, result: WhisperTranscriptionResult(text: "Older raw transcript", segments: [], detectedLanguageCode: "en", model: .small, taskMode: .transcribe, completedAt: Date()), error: nil)
+        let newer = try await store.startTranscription(capture.id, configuration: .default)
+        try await store.finishTranscription(newer, result: WhisperTranscriptionResult(text: "Newer raw transcript", segments: [], detectedLanguageCode: "en", model: .small, taskMode: .transcribe, completedAt: Date()), error: nil)
+        await store.releaseAudio(capture.id)
+        await fixture.state.history.refresh()
+        await fixture.state.history.select(capture.id)
+        fixture.state.history.selectedTranscriptionID = older
+        fixture.state.history.selectTranscription()
+        let finished = expectation(description: "Refinement retry finishes")
+        var started = false
+        let observation = fixture.state.$isHistoryProcessing.sink {
+            if $0 { started = true }
+            if started && !$0 { finished.fulfill() }
+        }
+        fixture.state.retryHistoryRefinement()
+        await fulfillment(of: [finished], timeout: 3)
+        observation.cancel()
+        XCTAssertEqual(fixture.state.history.selectedTranscriptionID, older)
+        XCTAssertEqual(fixture.state.history.refinement?.transcriptionID, older)
+        XCTAssertEqual(fixture.state.history.displayedText, "Older raw transcript refined")
+        XCTAssertFalse(fixture.state.refinementConfiguration.isEnabled, "Manual refinement must leave the automatic refinement toggle off")
+        let detail = try await store.detail(capture.id)
+        XCTAssertEqual(detail.transcriptions.count, 2)
+        XCTAssertEqual(detail.refinements.count, 1)
+    }
+
+    func testFailedRefinementRetryPreservesSelectedOlderRefinement() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryPipeline-\(UUID())")
+        let store = SQLiteHistoryStore(root: root)
+        let refinement = PipelineRefinementService(expectedTranscript: "Saved original", failsRefinement: true)
+        let fixture = try RecordingStartupFixture(refinement: refinement, usePipelineModels: true, historyStore: store)
+        defer { fixture.cleanup(); try? FileManager.default.removeItem(at: root) }
+        let capture = try await store.prepareCapture(retention: .sevenDays)
+        try Data().write(to: capture.fileURL)
+        try await store.markFinishing(capture.id)
+        _ = try await store.finishCapture(capture.id, capture: DictationCapture(fileURL: capture.fileURL, duration: 1, capturedAt: Date()))
+        let transcription = try await store.startTranscription(capture.id, configuration: .default)
+        try await store.finishTranscription(transcription, result: WhisperTranscriptionResult(text: "Saved original", segments: [], detectedLanguageCode: "en", model: .small, taskMode: .transcribe, completedAt: Date()), error: nil)
+        var refinementIDs: [UUID] = []
+        for text in ["Older refinement", "Newer refinement"] {
+            let attempt = try await store.startRefinement(transcription, configuration: .default, prompt: "prompt")
+            try await store.finishRefinement(attempt, result: TranscriptRefinementResult(originalText: "Saved original", refinedText: text, model: .qwen3Small, mode: .smartCleanup, completedAt: Date()), error: nil)
+            refinementIDs.append(attempt)
+        }
+        await store.releaseAudio(capture.id)
+        await fixture.state.history.refresh()
+        await fixture.state.history.select(capture.id)
+        fixture.state.history.selectedRefinementID = refinementIDs[0]
+        fixture.state.history.showsOriginal = false
+        let finished = expectation(description: "Failed refinement retry finishes")
+        var started = false
+        let observation = fixture.state.$isHistoryProcessing.sink {
+            if $0 { started = true }
+            if started && !$0 { finished.fulfill() }
+        }
+        fixture.state.retryHistoryRefinement()
+        await fulfillment(of: [finished], timeout: 3)
+        observation.cancel()
+        XCTAssertEqual(fixture.state.history.selectedRefinementID, refinementIDs[0])
+        XCTAssertEqual(fixture.state.history.displayedText, "Older refinement")
+        XCTAssertFalse(fixture.state.history.showsOriginal)
+        XCTAssertTrue(fixture.state.history.errorMessage?.contains("Synthetic refinement failure") == true)
+        let detail = try await store.detail(capture.id)
+        XCTAssertEqual(detail.refinements.count, 3)
+        XCTAssertEqual(detail.refinements.filter { $0.status == "failed" }.count, 1)
+    }
+
+    func testEscapeDiscardsManagedHistoryAudio() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryPipeline-\(UUID())")
+        let store = SQLiteHistoryStore(root: root)
+        let fixture = try RecordingStartupFixture(historyStore: store)
+        defer { fixture.cleanup(); try? FileManager.default.removeItem(at: root) }
+        fixture.volume.shouldWait = false
+        let recording = expectation(description: "Managed recording starts")
+        let observation = fixture.state.$recordingState.sink { if $0.isRecording { recording.fulfill() } }
+        fixture.state.toggleDictation()
+        await fulfillment(of: [recording], timeout: 2)
+        observation.cancel()
+        let url = fixture.recorder.fileURL
+        XCTAssertTrue(url.path.hasPrefix(root.path))
+        await fixture.state.cancelRecording()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        let entries = try await store.entries(search: "", limit: 50, offset: 0)
+        XCTAssertTrue(entries.isEmpty)
+        XCTAssertNil(fixture.state.lastTextInsertion)
+    }
+
+    func testFinishedManagedRecordingPersistsRawTextAndRetriesWithoutInsertion() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryPipeline-\(UUID())")
+        let store = SQLiteHistoryStore(root: root)
+        let fixture = try RecordingStartupFixture(whisper: PipelineWhisperService(), refinement: PipelineRefinementService(), usePipelineModels: true, historyStore: store)
+        defer { fixture.cleanup(); try? FileManager.default.removeItem(at: root) }
+        fixture.volume.shouldWait = false
+        let recording = expectation(description: "Managed recording starts")
+        let observation = fixture.state.$recordingState.sink { if $0.isRecording { recording.fulfill() } }
+        fixture.state.toggleDictation()
+        await fulfillment(of: [recording], timeout: 2)
+        observation.cancel()
+        fixture.state.toggleDictation()
+        // Coordinator includes insertion/cleanup after publishing transcription.
+        for _ in 0..<100 where !fixture.state.canProcessHistory { try await Task.sleep(for: .milliseconds(10)) }
+        let entries = try await store.entries(search: "", limit: 50, offset: 0)
+        XCTAssertEqual(entries.count, 1)
+        let id = try XCTUnwrap(entries.first?.id)
+        let detail = try await store.detail(id)
+        XCTAssertEqual(detail.transcriptions.count, 1)
+        XCTAssertNotNil(detail.transcriptions.first?.result)
+        await fixture.state.history.select(id)
+        fixture.state.retryHistoryTranscription()
+        for _ in 0..<100 where fixture.state.isHistoryProcessing { try await Task.sleep(for: .milliseconds(10)) }
+        let retried = try await store.detail(id)
+        XCTAssertEqual(retried.transcriptions.count, 2)
+        XCTAssertNil(fixture.state.lastTextInsertion, "Synthetic empty transcript and retries must not insert")
+    }
+
     func testEmptyTranscriptSkipsRefinementAndInsertion() async throws {
         let whisper = PipelineWhisperService()
         let refinement = PipelineRefinementService()
@@ -228,7 +429,9 @@ private final class RecordingStartupFixture {
         permission: MicrophonePermissionState = .granted,
         whisper: WhisperServiceProtocol = WhisperCPPService(),
         refinement: TranscriptRefinementServiceProtocol = LlamaCLITranscriptRefinementService(),
-        usePipelineModels: Bool = false
+        usePipelineModels: Bool = false,
+        refinementEnabled: Bool? = nil,
+        historyStore: HistoryStoreProtocol? = nil
     ) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -236,7 +439,7 @@ private final class RecordingStartupFixture {
         settings.saveAutomaticallyChecksForUpdates(false)
         settings.saveRecordingPlaybackBehavior(.lowerSystemVolume)
         var refinementConfiguration = RefinementConfiguration.default
-        refinementConfiguration.isEnabled = usePipelineModels
+        refinementConfiguration.isEnabled = refinementEnabled ?? usePipelineModels
         settings.saveRefinementConfiguration(refinementConfiguration)
         try Data("synthetic model".utf8).write(to: directory.appendingPathComponent(settings.whisperConfiguration.model.filename))
         permissions = StartupPermissionService(permission: permission)
@@ -254,7 +457,8 @@ private final class RecordingStartupFixture {
             refinementPromptStore: StartupPromptStore(directory: directory),
             textInsertionService: StartupInsertionService(),
             localNotificationService: StartupNotificationService(),
-            appUpdateService: GitHubReleaseUpdateService()
+            appUpdateService: GitHubReleaseUpdateService(),
+            historyStore: historyStore
         )
         state.attach(recordingOverlayRouter: overlay)
     }
@@ -293,7 +497,7 @@ private final class StartupVolumeService: AudioOutputVolumeServiceProtocol {
 
 @MainActor
 private final class StartupRecorderService: AudioRecorderServiceProtocol {
-    let fileURL: URL
+    var fileURL: URL
     var isRecording = false
     var currentPowerLevel: Double { 0 }
     var startCalls = 0
@@ -311,6 +515,10 @@ private final class StartupRecorderService: AudioRecorderServiceProtocol {
         if shouldWaitPreparation {
             await withCheckedContinuation { preparationContinuation = $0; onPrepare?() }
         }
+    }
+    func prepareRecording(at url: URL) async throws {
+        fileURL = url
+        try await prepareRecording()
     }
     func resumePreparation() { preparationContinuation?.resume(); preparationContinuation = nil }
     func shutdown() { isRecording = false }
@@ -395,7 +603,13 @@ private final class StartupNotificationService: LocalNotificationServiceProtocol
 private actor PipelineWhisperService: WhisperServiceProtocol {
     var transcribeCalls = 0
     let onWarmup: @Sendable () -> Void
-    init(onWarmup: @escaping @Sendable () -> Void = {}) { self.onWarmup = onWarmup }
+    let failsTranscription: Bool
+    let text: String
+    init(onWarmup: @escaping @Sendable () -> Void = {}, failsTranscription: Bool = false, text: String = " \n") {
+        self.onWarmup = onWarmup
+        self.failsTranscription = failsTranscription
+        self.text = text
+    }
     func prepare(modelURL: URL) async throws {}
     func unloadModel() async {}
     func warmUpEncoder(audioFileURL: URL, modelURL: URL, configuration: WhisperConfiguration) async throws {
@@ -403,13 +617,20 @@ private actor PipelineWhisperService: WhisperServiceProtocol {
     }
     func transcribe(audioFileURL: URL, modelURL: URL, configuration: WhisperConfiguration) async throws -> WhisperTranscriptionResult {
         transcribeCalls += 1
-        return WhisperTranscriptionResult(text: " \n", segments: [], detectedLanguageCode: nil,
+        if failsTranscription { throw NSError(domain: "com.apple.coreaudio.avfaudio", code: 1954115647) }
+        return WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: nil,
             model: configuration.model, taskMode: configuration.taskMode, completedAt: Date())
     }
 }
 
 private actor PipelineRefinementService: TranscriptRefinementServiceProtocol {
     var refineCalls = 0
+    let expectedTranscript: String?
+    let failsRefinement: Bool
+    init(expectedTranscript: String? = nil, failsRefinement: Bool = false) {
+        self.expectedTranscript = expectedTranscript
+        self.failsRefinement = failsRefinement
+    }
     func isRuntimeAvailable(for model: RefinementModelDescriptor) async -> Bool { true }
     func prepare(modelURL: URL) async throws {}
     func reloadModels() async {}
@@ -417,8 +638,10 @@ private actor PipelineRefinementService: TranscriptRefinementServiceProtocol {
     func refine(transcript: String, whisperTaskMode: WhisperTaskMode, modelURL: URL,
                 configuration: RefinementConfiguration, promptTemplate: String) async throws -> TranscriptRefinementResult {
         refineCalls += 1
-        XCTFail("An empty raw transcript must never reach refinement")
-        return TranscriptRefinementResult(originalText: transcript, refinedText: "Invented text",
+        if let expectedTranscript { XCTAssertEqual(transcript, expectedTranscript) }
+        else { XCTFail("An empty raw transcript must never reach refinement") }
+        if failsRefinement { throw TranscriptRefinementServiceError.failedToRun("Synthetic refinement failure") }
+        return TranscriptRefinementResult(originalText: transcript, refinedText: transcript + " refined",
             model: configuration.model, mode: configuration.mode, completedAt: Date())
     }
 }

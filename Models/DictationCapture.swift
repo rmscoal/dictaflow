@@ -1,6 +1,6 @@
 import Foundation
 
-struct DictationCapture: Equatable {
+nonisolated struct DictationCapture: Equatable {
     let fileURL: URL
     let duration: TimeInterval
     let capturedAt: Date

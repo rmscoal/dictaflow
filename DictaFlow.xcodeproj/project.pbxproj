@@ -11,6 +11,8 @@
 		FBD100002D11000100000002 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		FBE942B32D0A000100000007 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */; };
 		FBE942B32D0A000100000008 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		DF51000000000000000000001 = {isa = PBXBuildFile; productRef = DF51000000000000000000003; };
+		DF51000000000000000000002 = {isa = PBXBuildFile; productRef = DF51000000000000000000004; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -91,6 +93,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				FBD100002D11000100000001 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Frameworks */,
+				DF51000000000000000000001,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -99,6 +102,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				FBE942B32D0A000100000007 /* Vendor/whisper.cpp/build-apple/whisper.xcframework in Frameworks */,
+				DF51000000000000000000002,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -151,6 +155,7 @@
 				FBE942B32D0A000100000003 /* Models */,
 				FBE942B32D0A000100000004 /* Services */,
 			);
+			packageProductDependencies = (DF51000000000000000000003, );
 			name = DictaFlow;
 			productName = DictaFlow;
 			productReference = FBD100002D11000100000004 /* DictaFlow.app */;
@@ -179,6 +184,7 @@
 				FBE942B32D0A000100000003 /* Models */,
 				FBE942B32D0A000100000004 /* Services */,
 			);
+			packageProductDependencies = (DF51000000000000000000004, );
 			name = "DictaFlow Dev";
 			productName = "DictaFlow Dev";
 			productReference = FB742D982F9A63D800AA0EED /* DictaFlow Dev.app */;
@@ -233,6 +239,7 @@
 			productRefGroup = FB2958102F9A4FAA008AE621;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (DF51000000000000000000005, );
 			targets = (
                 DF40000000000000000000003,
 				FBD100002D11000100000007 /* DictaFlow */,
@@ -240,6 +247,14 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+        DF51000000000000000000005 = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/groue/GRDB.swift.git"; requirement = {kind = exactVersion; version = 7.11.1; }; };
+/* End XCRemoteSwiftPackageReference section */
+/* Begin XCSwiftPackageProductDependency section */
+        DF51000000000000000000003 = {isa = XCSwiftPackageProductDependency; package = DF51000000000000000000005; productName = GRDB; };
+        DF51000000000000000000004 = {isa = XCSwiftPackageProductDependency; package = DF51000000000000000000005; productName = GRDB; };
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXResourcesBuildPhase section */
 		FBD100002D1100010000000B /* Resources */ = {
