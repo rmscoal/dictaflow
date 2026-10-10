@@ -6,6 +6,103 @@ import XCTest
 
 @MainActor
 final class RecordingStartupTests: XCTestCase {
+    func testTonePipelineWithRefinementOffOnAndFailure() async throws {
+        for refinementEnabled in [false, true] {
+            for fails in [false, true] where refinementEnabled || !fails {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("TonePipeline-\(UUID())")
+                let store = SQLiteHistoryStore(root: root)
+                let text = "I'm late."
+                let service = PipelineRefinementService(expectedTranscript: text, failsRefinement: fails)
+                let fixture = try RecordingStartupFixture(
+                    whisper: PipelineWhisperService(text: text, languageCode: "en"), refinement: service,
+                    usePipelineModels: true, refinementEnabled: refinementEnabled, historyStore: store, allowsInsertion: true)
+                defer { fixture.cleanup(); try? FileManager.default.removeItem(at: root) }
+                fixture.volume.shouldWait = false
+                fixture.permissions.accessibilityGranted = true
+                fixture.state.updateTextTone(.casual)
+                let recording = expectation(description: "Recording starts")
+                let observation = fixture.state.$recordingState.sink { if $0.isRecording { recording.fulfill() } }
+                fixture.state.toggleDictation()
+                await fulfillment(of: [recording], timeout: 2)
+                observation.cancel()
+                fixture.state.updateTextTone(.formal)
+                XCTAssertEqual(fixture.state.textTone, .casual, "Tone is locked during a recording")
+                fixture.state.toggleDictation()
+                for _ in 0..<200 where !fixture.state.canProcessHistory { try await Task.sleep(for: .milliseconds(10)) }
+                let final = refinementEnabled && !fails ? "im late. refined" : "im late"
+                XCTAssertEqual(fixture.state.lastTranscription?.insertionText, final)
+                XCTAssertEqual(fixture.state.lastTranscription?.text, text)
+                XCTAssertEqual(fixture.insertion.insertedTexts.last, final)
+                fixture.state.copyLastTranscription()
+                XCTAssertEqual(fixture.insertion.copiedTexts.last, final)
+                let calls = await service.refineCalls
+                XCTAssertEqual(calls, refinementEnabled ? 1 : 0)
+                let entries = try await store.entries(search: "", limit: 50, offset: 0)
+                let id = try XCTUnwrap(entries.first?.id)
+                await fixture.state.history.select(id)
+                XCTAssertEqual(fixture.state.history.displayedText, final)
+                fixture.state.updateTextTone(.formal)
+                XCTAssertEqual(fixture.state.lastTranscription?.insertionText, final, "Changing settings never reformats an existing result")
+                XCTAssertEqual(fixture.state.history.displayedText, final)
+                fixture.state.history.textView = .original
+                XCTAssertEqual(fixture.state.history.displayedText, text)
+                fixture.state.insertHistoryText()
+                for _ in 0..<100 where fixture.state.isHistoryProcessing { try await Task.sleep(for: .milliseconds(10)) }
+                XCTAssertEqual(fixture.insertion.insertedTexts.last, text)
+            }
+        }
+    }
+
+    func testWritingDraftsOnlyAffectInferenceAfterSaving() throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        state.updatePresetInstructions("Saved cleanup rule")
+        XCTAssertFalse(state.savedEffectiveRefinementPrompt(taskMode: .transcribe).contains("Saved cleanup rule"))
+        state.savePresetInstructions()
+        XCTAssertTrue(state.savedEffectiveRefinementPrompt(taskMode: .transcribe).contains("Saved cleanup rule"))
+        state.updateRefinementMode(.casualMessaging)
+        XCTAssertEqual(state.currentPresetInstructions, "")
+        state.updatePresetInstructions("Casual draft")
+        state.updateRefinementMode(.smartCleanup)
+        XCTAssertEqual(state.currentPresetInstructions, "Saved cleanup rule")
+        state.updateRefinementMode(.diy)
+        state.updateRefinementPromptText("# DIY draft")
+        XCTAssertFalse(state.savedEffectiveRefinementPrompt(taskMode: .transcribe).contains("# DIY draft"))
+        state.saveRefinementPromptText()
+        XCTAssertTrue(state.savedEffectiveRefinementPrompt(taskMode: .translateToEnglish).contains("# DIY draft"))
+        XCTAssertTrue(state.savedEffectiveRefinementPrompt(taskMode: .translateToEnglish).contains("Output English."))
+        XCTAssertFalse(state.savedEffectiveRefinementPrompt(taskMode: .transcribe).contains("Saved cleanup rule"))
+    }
+
+    func testUnreadablePresetInstructionsAreKeptAndCanBeRecovered() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("preset-instructions.json")
+        let original = Data("{broken JSON with existing instructions".utf8)
+        try original.write(to: file)
+        let promptStore = FileRefinementPromptStore(directoryURL: directory)
+        let fixture = try RecordingStartupFixture(promptStore: promptStore)
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        XCTAssertNotNil(state.refinementWritingError)
+        state.updatePresetInstructions("New cleanup instructions")
+        state.savePresetInstructions()
+        XCTAssertEqual(try Data(contentsOf: file), original)
+        XCTAssertTrue(state.isPresetInstructionsDirty)
+        XCTAssertNotNil(state.refinementWritingError)
+
+        // Repair outside the app, then retry without restarting or losing drafts.
+        try JSONEncoder().encode(["casualMessaging": "Keep emojis."]).write(to: file)
+        state.savePresetInstructions()
+        XCTAssertNil(state.refinementWritingError)
+        XCTAssertFalse(state.isPresetInstructionsDirty)
+        XCTAssertEqual(try promptStore.presetInstructions()["casualMessaging"], "Keep emojis.")
+        state.updateRefinementMode(.casualMessaging)
+        XCTAssertEqual(state.currentPresetInstructions, "Keep emojis.")
+    }
+
     func testRetentionChangeOnlyRequiresConfirmationForAffectedRecordings() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryRetention-\(UUID())")
         let store = SQLiteHistoryStore(root: root)
@@ -158,6 +255,9 @@ final class RecordingStartupTests: XCTestCase {
         let detail = try await store.detail(capture.id)
         XCTAssertEqual(detail.transcriptions.count, 2)
         XCTAssertEqual(detail.refinements.count, 1)
+        let prompt = try XCTUnwrap(detail.refinements.first?.prompt)
+        XCTAssertEqual(prompt, fixture.state.savedEffectiveRefinementPrompt(taskMode: .transcribe))
+        XCTAssertFalse(prompt.contains("{{languageInstruction}}"))
     }
 
     func testFailedRefinementRetryPreservesSelectedOlderRefinement() async throws {
@@ -467,6 +567,7 @@ private final class RecordingStartupFixture {
     let overlay = StartupOverlayRouter()
     let cues = StartupCueService()
     let state: DictaFlowAppState
+    let insertion: StartupInsertionService
 
     init(
         permission: MicrophonePermissionState = .granted,
@@ -474,7 +575,9 @@ private final class RecordingStartupFixture {
         refinement: TranscriptRefinementServiceProtocol = LlamaCLITranscriptRefinementService(),
         usePipelineModels: Bool = false,
         refinementEnabled: Bool? = nil,
-        historyStore: HistoryStoreProtocol? = nil
+        historyStore: HistoryStoreProtocol? = nil,
+        promptStore: RefinementPromptStoreProtocol? = nil,
+        allowsInsertion: Bool = false
     ) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -486,6 +589,7 @@ private final class RecordingStartupFixture {
         settings.saveRefinementConfiguration(refinementConfiguration)
         try Data("synthetic model".utf8).write(to: directory.appendingPathComponent(settings.whisperConfiguration.model.filename))
         permissions = StartupPermissionService(permission: permission)
+        insertion = StartupInsertionService(allowsInsertion: allowsInsertion)
         recorder = StartupRecorderService(fileURL: directory.appendingPathComponent("capture.m4a"))
         state = DictaFlowAppState(
             settingsStore: settings, permissionService: permissions,
@@ -497,8 +601,8 @@ private final class RecordingStartupFixture {
                 : WhisperModelDownloadService(modelsDirectoryURL: directory),
             whisperService: whisper,
             transcriptRefinementService: refinement,
-            refinementPromptStore: StartupPromptStore(directory: directory),
-            textInsertionService: StartupInsertionService(),
+            refinementPromptStore: promptStore ?? StartupPromptStore(directory: directory),
+            textInsertionService: insertion,
             localNotificationService: StartupNotificationService(),
             appUpdateService: GitHubReleaseUpdateService(),
             historyStore: historyStore
@@ -626,15 +730,26 @@ private final class StartupPromptStore: RefinementPromptStoreProtocol {
     func hasCustomPromptTemplate() -> Bool { false }
     func savePromptTemplate(_ template: String) throws {}
     func resetPromptTemplate() throws {}
+    private var instructions: [String: String] = [:]
+    func presetInstructions() throws -> [String: String] { instructions }
+    func savePresetInstructions(_ instructions: [String: String]) throws { self.instructions = instructions }
 }
 
 @MainActor
 private final class StartupInsertionService: TextInsertionServiceProtocol {
+    let allowsInsertion: Bool
+    var insertedTexts: [String] = []
+    var copiedTexts: [String] = []
+    init(allowsInsertion: Bool = false) { self.allowsInsertion = allowsInsertion }
     func insertText(_ text: String, targetApplication: InsertionTargetApplication?, allowAccessibilityFeatures: Bool) async -> TextInsertionResult {
-        XCTFail("No insertion is expected")
+        if !allowsInsertion { XCTFail("No insertion is expected") }
+        insertedTexts.append(text)
         return TextInsertionResult(text: text, method: .copyPanel, targetApplicationName: nil, completedAt: Date(), isInsertionConfirmed: false)
     }
-    func copyTextToPasteboard(_ text: String) { XCTFail("No clipboard writes are expected") }
+    func copyTextToPasteboard(_ text: String) {
+        if !allowsInsertion { XCTFail("No clipboard writes are expected") }
+        copiedTexts.append(text)
+    }
 }
 
 @MainActor
@@ -648,10 +763,12 @@ private actor PipelineWhisperService: WhisperServiceProtocol {
     let onWarmup: @Sendable () -> Void
     let failsTranscription: Bool
     let text: String
-    init(onWarmup: @escaping @Sendable () -> Void = {}, failsTranscription: Bool = false, text: String = " \n") {
+    let languageCode: String?
+    init(onWarmup: @escaping @Sendable () -> Void = {}, failsTranscription: Bool = false, text: String = " \n", languageCode: String? = nil) {
         self.onWarmup = onWarmup
         self.failsTranscription = failsTranscription
         self.text = text
+        self.languageCode = languageCode
     }
     func prepare(modelURL: URL) async throws {}
     func unloadModel() async {}
@@ -661,7 +778,7 @@ private actor PipelineWhisperService: WhisperServiceProtocol {
     func transcribe(audioFileURL: URL, modelURL: URL, configuration: WhisperConfiguration) async throws -> WhisperTranscriptionResult {
         transcribeCalls += 1
         if failsTranscription { throw NSError(domain: "com.apple.coreaudio.avfaudio", code: 1954115647) }
-        return WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: nil,
+        return WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: languageCode,
             model: configuration.model, taskMode: configuration.taskMode, completedAt: Date())
     }
 }

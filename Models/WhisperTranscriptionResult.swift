@@ -10,8 +10,10 @@ nonisolated struct WhisperTranscriptionResult: Codable, Equatable {
     var refinement: TranscriptRefinementResult? = nil
     var refinementStatus: TranscriptRefinementStatus = .disabled
 
+    var toneFormatting: ToneFormattingResult? = nil
+
     var insertionText: String {
-        refinement?.refinedText ?? text
+        (refinement?.insertionText ?? toneFormatting?.text ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var detectedLanguageDisplayName: String {

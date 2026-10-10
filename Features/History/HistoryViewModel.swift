@@ -14,7 +14,17 @@ final class HistoryViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var selectedTranscriptionID: UUID?
     @Published var selectedRefinementID: UUID?
-    @Published var showsOriginal = false
+    enum TextView: Hashable { case original, refined, final }
+    @Published var textView: TextView = .final
+
+    var showsOriginal: Bool {
+        get { textView == .original }
+        set { textView = newValue ? .original : .final }
+    }
+    var showsRawRefinement: Bool { textView == .refined }
+    var hasToneFormatting: Bool {
+        (refinement?.result?.toneFormatting ?? transcription?.result?.toneFormatting)?.tone != nil
+    }
     let player = HistoryAudioPlayer()
     private let store: HistoryStoreProtocol?
     private var playbackID: UUID?
@@ -43,7 +53,10 @@ final class HistoryViewModel: ObservableObject {
     }
 
     var displayedText: String? {
-        let text = showsOriginal ? transcription?.result?.text : refinement?.result?.refinedText
+        let text: String?
+        if showsOriginal { text = transcription?.result?.text }
+        else if showsRawRefinement { text = refinement?.result?.refinedText }
+        else { text = refinement?.result?.insertionText ?? transcription?.result?.insertionText }
         guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return text
     }
@@ -167,7 +180,7 @@ final class HistoryViewModel: ObservableObject {
 
     func selectTranscription() {
         selectedRefinementID = refinements.first(where: { $0.result != nil })?.id ?? refinements.first?.id
-        showsOriginal = refinement?.result == nil
+        textView = refinement?.result == nil && !hasToneFormatting ? .original : .final
     }
 
     private func clearSelection() async {

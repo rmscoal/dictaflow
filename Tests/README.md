@@ -137,7 +137,7 @@ an actionable error instead of an unfiltered transcript.
 Use the Dev app in `/Applications`, with its separate Dev preferences and
 permissions. Check the Refinement and Models pages at the minimum window size,
 with both downloaded and missing model states. The
-single model card should remain readable, download progress should be
+provider tabs and model rows should remain readable, download progress should be
 continuous, and switches should lock during recording or inference.
 
 Enabling refinement and launching the app must not load a model. Starting a
@@ -177,3 +177,46 @@ background apps. Measure latency, idle CPU, resident memory, and CPU/GPU power.
 Power measurements cover the whole machine and do not establish output quality.
 Review questions, requests, names, numbers, self-corrections, and mixed-language
 text separately for preservation of meaning.
+
+
+## Multiple refinement models and writing styles
+
+`RefinementWritingStyleTests` checks preset composition, DIY replacement, language
+requirements, model preference round trips, pinned download revisions, private
+prompt persistence, and corrupt/symlink storage rejection. Coordinator tests
+check that unsaved drafts never reach inference and that additions stay separate
+per preset. Lifecycle tests cover ordered long-transcript chunks and rejection
+of the entire rewrite when a later chunk is incomplete. Context-aware fixtures
+check corrections across source boundaries, continuous list numbering, and no
+duplicated earlier output. Storage tests check that a failed load cannot overwrite
+existing additions and that repairing the file permits a retry without restarting.
+
+Optional real-model tests cover every model in `RefinementModelDescriptor.allCases`.
+Supply their checksum-pinned filenames in `/tmp/DictaFlowRefinementFixtures/`.
+These tests do not download models. A slow connection is sufficient for manual
+start/progress/cancel checks, but cannot establish inference quality or RAM usage
+for new weights. Verify all four provider tabs, the active-model summary, download
+status across tabs, preset switching, per-preset saving, DIY Write/Preview, and
+narrow-window light/dark layouts in the installed Dev app.
+
+`testVerifiedQwenLongTranscriptQualityProbe` records an observed Qwen3 0.6B
+limitation: it can omit a corrected date among many repetitive technical facts.
+Only that semantic assertion is marked as a non-strict expected failure. Runtime
+errors and identifier/number checks still fail normally. Do not interpret passing
+structural chunk tests as proof that every model preserves every fact.
+
+## Dictation tone and combined settings
+
+`TextToneFormatterTests` checks conservative English rules, protected structured
+text and vocabulary, non-English behavior, empty output, idempotence, settings
+persistence, and legacy result decoding. `RecordingStartupTests` verifies the
+pipeline with refinement off, on, and failing, including the locked tone snapshot,
+inserted/copied text, and retrieving the original. `HistoryStoreTests` checks raw
+and final search/preview, saved rule versions, and upgrade from the v2 schema.
+
+In the installed Dev app, check Dictation's three tabs, all six Whisper cards,
+encoder expansion before and after speech-model download, and the existing
+refinement provider/model and DIY controls. Check narrow-window layouts and
+that sound cues and custom vocabulary remain below speech models. Tone preview
+should update without enabling refinement. Verify download/progress/cancel and
+encoder on/off with real artifacts when available.

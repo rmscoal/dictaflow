@@ -94,10 +94,20 @@ Public releases are signed and notarized for macOS.
 | **Record** | DictaFlow creates a temporary local `.m4a` recording. |
 | **Transcribe** | Bundled speech detection filters non-speech audio before `whisper.cpp` converts speech to text on your Mac. |
 | **Refine** | If enabled, a local language model cleans the text. |
+| **Tone** | Fixed Swift rules apply the selected tone, with or without refinement. |
 | **Insert** | DictaFlow returns the text to the previously focused app. |
 
 Insertion uses the best available method: direct Accessibility insertion,
 clipboard paste, simulated typing, then a copy panel as the final fallback.
+
+### Dictation settings
+
+**Dictation** contains **Transcription**, **Refinement**, and **Tone** tabs.
+Transcription combines task and language defaults, Whisper model cards, sound
+cues, and custom vocabulary. Every model card has an optional **Neural Engine**
+section. Download the speech model first, then its encoder. Encoder download
+turns acceleration on automatically; you can switch it off without removing it.
+**Models** remains available for storage management.
 
 ### Transcribe or translate
 
@@ -108,15 +118,41 @@ clipboard paste, simulated typing, then a copy panel as the final fallback.
 
 Local refinement can fix punctuation, repeated wording, and rough sentence
 structure. It is optional. If refinement fails, DictaFlow uses the original
-Whisper transcript.
+Whisper transcript with the selected tone.
 
-The Refinement page uses one model, Qwen3 0.6B. It loads when recording starts,
-stays ready between dictations, and releases its weights after five minutes
-without use. Turning refinement off or quitting stops the runtime.
+The Dictation > Refinement tab offers local models from Qwen, Meta Llama, Google Gemma, and
+Microsoft Phi. Download a model, then choose **Use model**. Downloading never
+changes the active model. Each row shows file size, estimated model RAM,
+progress, and cancellation. RAM estimates exclude Whisper and other apps.
+Existing Qwen3 0.6B selections stay unchanged while the newer models are evaluated.
+Models load when recording starts, remain ready between dictations, and sleep
+after five minutes without use.
 
 Refinement uses the bundled llama-server engine. Older model preferences migrate
 to standard Qwen3, and old downloads remain available for removal from Storage.
-Until Qwen3 is downloaded, dictation uses the original transcript.
+Until the selected model is downloaded, dictation uses the original transcript.
+
+### Tone
+
+Tone runs after optional local refinement and before insertion. **Original** is
+the default. **Balanced** preserves the incoming casing, contractions, and
+punctuation. **Casual** lowercases common prose words, simplifies an allowlist of
+English contractions, and removes a terminal prose period. **Formal** expands
+clear English contractions and “gonna”, removes opening fillers, and adds a
+terminal prose period and restores English sentence starts when safe. These rules do not infer grammar or missing
+commas. English word replacements require detected English or translation mode.
+
+The formatter protects URLs, email addresses, numbers, code spans, identifiers,
+acronyms, and custom vocabulary. It conservatively keeps unfamiliar capitalized
+words, so names are usually preserved, but name detection is not guaranteed.
+Multiline punctuation is left alone. Tone settings are saved independently of
+refinement. Settings are locked during processing.
+
+History saves raw transcripts, raw refinement results, and the final text with
+the selected tone and rule version. **Original**, **Refined**, and **Final** let
+you inspect the available outputs. Changing tone settings does not rewrite saved
+results. Copy and insertion use the selected saved output; outer whitespace is
+trimmed for final output. Retrying creates a new result using current settings.
 
 ## Models and Local Data
 
@@ -125,8 +161,8 @@ checksum-verified before use.
 
 | Model type | Available sizes |
 | --- | --- |
-| Whisper | Tiny 75 MB, Base 142 MB, Small 466 MB, Medium 1.5 GB |
-| Refinement | Qwen3 0.6B: 397 MB |
+| Whisper | Tiny 75 MB, Base 142 MB, Small 466 MB, Medium 1.5 GB, Large V3 Turbo 1.5 GB, Large V3 2.9 GB |
+| Refinement | Qwen3 0.6B: 397 MB; new models: approximately 1.28–3.35 GB |
 
 Models are stored in:
 
@@ -138,8 +174,8 @@ Open **Models** to view, prepare, or remove models.
 
 | Data | Storage behavior |
 | --- | --- |
-| Recordings | Temporary files, deleted after processing |
-| Latest transcript | Kept in memory for review, copy, and re-insertion |
+| Recordings | Saved locally for the chosen history retention period; temporary when history is off |
+| Latest transcript | Kept in memory; raw and final outputs also saved to SQLite when history is on |
 | Models | Stored locally until you remove them |
 | Clipboard | Used briefly when needed, with restoration attempted |
 
@@ -197,3 +233,38 @@ Contributions are welcome. Please keep DictaFlow local-first and read
 DictaFlow is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE).
 Third-party notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 and [NOTICE](NOTICE).
+
+
+## Writing style and local prompts
+
+Choose Normal Cleanup, Professional Formal, Casual Text Messaging, Technical and
+Engineering, or DIY. The first four have optional **Additional instructions**
+saved separately for each mode and a static writing example. DIY replaces the
+built-in prompt with your own system prompt. Write Markdown source and switch
+to Preview to check headings, bullets, emphasis, and code. Preview never changes
+the saved source. Click Save before your edits affect dictation.
+
+Built-in prompts ship in `Resources/RefinementPrompts`. Selected model, mode,
+and refinement enablement use the existing local preferences. DIY Markdown is
+stored as `Prompts/refinement.txt`; preset additions use `Prompts/preset-instructions.json`
+under the app's Application Support directory. Dev uses `DictaFlow Dev`, and
+release uses `DictaFlow`. Old Dev prompts are copied once from the previously
+shared folder, and an existing custom prompt migrates to DIY. Files are private
+and written atomically. Saving preset additions reloads the existing file first;
+unreadable instructions are kept intact until the file is repaired and Save is
+retried. History stores the effective prompt snapshot for each
+attempt in its existing SQLite database. Clearing history leaves prompts intact.
+
+Long transcripts are split at paragraph or sentence boundaries using the loaded
+model's tokenizer and context budget. Chunks run in order. An editable ending is carried into the next rewrite so
+nearby self-corrections can cross source boundaries. Recent earlier output supplies
+read-only context for style and list numbering and is not appended again. An
+incomplete or failed chunk rejects the whole rewrite and uses
+the original transcription. Large DIY prompts may need shortening. Chunked
+rewrites still cannot resolve corrections referring far back beyond the retained
+context; model accuracy and formatting should be evaluated on real recordings.
+Qwen3 0.6B has also omitted a corrected date in a synthetic long technical passage,
+even with boundary context. Context support does not guarantee factual preservation.
+
+Meta's model section displays “Built with Llama”; its license and notice ship
+in `Resources/ThirdParty`. All inference stays on-device through llama.cpp.
