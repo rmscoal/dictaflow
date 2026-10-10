@@ -3,6 +3,7 @@ import Foundation
 nonisolated struct RefinementConfiguration: Codable, Equatable {
     var isEnabled: Bool
     var model: RefinementModelDescriptor
+    var writingStyleVersion = 1
     var mode: RefinementMode
 
     static let `default` = RefinementConfiguration(
@@ -22,9 +23,7 @@ nonisolated struct RefinementConfiguration: Codable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case isEnabled
-        case model
-        case mode
+        case isEnabled, model, mode, writingStyleVersion
     }
 
     init(from decoder: Decoder) throws {
@@ -38,5 +37,6 @@ nonisolated struct RefinementConfiguration: Codable, Equatable {
             self.model = .qwen3Small
         }
         self.mode = try container.decode(RefinementMode.self, forKey: .mode)
+        self.writingStyleVersion = try container.decodeIfPresent(Int.self, forKey: .writingStyleVersion) ?? 0
     }
 }

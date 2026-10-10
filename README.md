@@ -110,13 +110,17 @@ Local refinement can fix punctuation, repeated wording, and rough sentence
 structure. It is optional. If refinement fails, DictaFlow uses the original
 Whisper transcript.
 
-The Refinement page uses one model, Qwen3 0.6B. It loads when recording starts,
-stays ready between dictations, and releases its weights after five minutes
-without use. Turning refinement off or quitting stops the runtime.
+The Refinement page offers local models from Qwen, Meta Llama, Google Gemma, and
+Microsoft Phi. Download a model, then choose **Use model**. Downloading never
+changes the active model. Each row shows file size, estimated model RAM,
+progress, and cancellation. RAM estimates exclude Whisper and other apps.
+Existing Qwen3 0.6B selections stay unchanged while the newer models are evaluated.
+Models load when recording starts, remain ready between dictations, and sleep
+after five minutes without use.
 
 Refinement uses the bundled llama-server engine. Older model preferences migrate
 to standard Qwen3, and old downloads remain available for removal from Storage.
-Until Qwen3 is downloaded, dictation uses the original transcript.
+Until the selected model is downloaded, dictation uses the original transcript.
 
 ## Models and Local Data
 
@@ -126,7 +130,7 @@ checksum-verified before use.
 | Model type | Available sizes |
 | --- | --- |
 | Whisper | Tiny 75 MB, Base 142 MB, Small 466 MB, Medium 1.5 GB |
-| Refinement | Qwen3 0.6B: 397 MB |
+| Refinement | Qwen3 0.6B: 397 MB; new models: approximately 1.28–3.35 GB |
 
 Models are stored in:
 
@@ -197,3 +201,38 @@ Contributions are welcome. Please keep DictaFlow local-first and read
 DictaFlow is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE).
 Third-party notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 and [NOTICE](NOTICE).
+
+
+## Writing style and local prompts
+
+Choose Normal Cleanup, Professional Formal, Casual Text Messaging, Technical and
+Engineering, or DIY. The first four have optional **Additional instructions**
+saved separately for each mode and a static writing example. DIY replaces the
+built-in prompt with your own system prompt. Write Markdown source and switch
+to Preview to check headings, bullets, emphasis, and code. Preview never changes
+the saved source. Click Save before your edits affect dictation.
+
+Built-in prompts ship in `Resources/RefinementPrompts`. Selected model, mode,
+and refinement enablement use the existing local preferences. DIY Markdown is
+stored as `Prompts/refinement.txt`; preset additions use `Prompts/preset-instructions.json`
+under the app's Application Support directory. Dev uses `DictaFlow Dev`, and
+release uses `DictaFlow`. Old Dev prompts are copied once from the previously
+shared folder, and an existing custom prompt migrates to DIY. Files are private
+and written atomically. Saving preset additions reloads the existing file first;
+unreadable instructions are kept intact until the file is repaired and Save is
+retried. History stores the effective prompt snapshot for each
+attempt in its existing SQLite database. Clearing history leaves prompts intact.
+
+Long transcripts are split at paragraph or sentence boundaries using the loaded
+model's tokenizer and context budget. Chunks run in order. An editable ending is carried into the next rewrite so
+nearby self-corrections can cross source boundaries. Recent earlier output supplies
+read-only context for style and list numbering and is not appended again. An
+incomplete or failed chunk rejects the whole rewrite and uses
+the original transcription. Large DIY prompts may need shortening. Chunked
+rewrites still cannot resolve corrections referring far back beyond the retained
+context; model accuracy and formatting should be evaluated on real recordings.
+Qwen3 0.6B has also omitted a corrected date in a synthetic long technical passage,
+even with boundary context. Context support does not guarantee factual preservation.
+
+Meta's model section displays “Built with Llama”; its license and notice ship
+in `Resources/ThirdParty`. All inference stays on-device through llama.cpp.

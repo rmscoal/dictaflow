@@ -108,15 +108,90 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         guard !text.isEmpty else { throw TranscriptRefinementServiceError.emptyOutput }
         let url = try await ensureServer(modelURL: modelURL)
         let started = ContinuousClock.now
-        let json = try await post(path: "v1/chat/completions", baseURL: url, payload: [
-            "messages": [
-                ["role": "system", "content": RefinementPromptTemplate.renderedInstructions(from: promptTemplate, whisperTaskMode: whisperTaskMode)],
-                ["role": "user", "content": text]
-            ],
-            "max_tokens": RefinementInference.maximumOutputTokens(for: text),
+        let instructions = RefinementPromptTemplate.renderedInstructions(from: promptTemplate, whisperTaskMode: whisperTaskMode)
+        // Measure using the loaded model's tokenizer, including its own chat template.
+        let chunks = try await boundedChunks(text, instructions: instructions, baseURL: url)
+        // Short dictations retain the original single-request path.
+        if chunks.count == 1 {
+            let output = try await rewrite(messages: messages(instructions: instructions, text: text),
+                                           configuration: configuration, baseURL: url)
+            logger.info("llama refinement duration=\(String(describing: started.duration(to: .now)), privacy: .public) sourceChunks=1")
+            return try RefinementInference.result(output, original: transcript, configuration: configuration)
+        }
+
+        let rollingInstructions = instructions + """
+
+
+        This transcript is being edited in parts. The preceding assistant message,
+        if present, is earlier output provided only for context. Do not repeat it.
+        Rewrite only the latest user message. Its beginning may be an editable
+        ending from the previous part. Resolve self-corrections across that ending
+        and the new speech. Continue list numbering from the earlier output;
+        preserve existing item numbers unless the speaker corrects them.
+        Do not summarize. Preserve every distinct request, condition, and corrected
+        date, even when the surrounding speech is repetitive.
+        """
+        var pending = chunks
+        var committed = ""
+        var editableEnding = ""
+        var earlierContext = ""
+        while !pending.isEmpty {
+            try Task.checkCancellation()
+            let chunk = pending.removeFirst()
+            let input = editableEnding.isEmpty ? chunk : editableEnding + "\n\n" + chunk
+            var requestMessages = [["role": "system", "content": rollingInstructions]]
+            if !earlierContext.isEmpty {
+                requestMessages.append(["role": "assistant", "content": earlierContext])
+            }
+            requestMessages.append(["role": "user", "content": input])
+            // Count the exact multi-turn template, including read-only context.
+            let promptTokens = try await promptTokenCount(messages: requestMessages, baseURL: url)
+            let inputTokens = try await tokenCount(input, baseURL: url)
+            if promptTokens > 2400 || inputTokens > 900 {
+                guard let split = RefinementInference.splitNearMiddle(chunk) else {
+                    throw TranscriptRefinementServiceError.failedToRun("The system prompt is too long for contextual refinement. Shorten your instructions.")
+                }
+                pending.insert(contentsOf: [split.0, split.1], at: 0)
+                continue
+            }
+            let output = try await rewrite(messages: requestMessages, configuration: configuration, baseURL: url)
+            if pending.isEmpty {
+                committed += output
+            } else {
+                // Delay committing the ending until the next source chunk is seen.
+                // Split the generated output itself, so overlapping input is never
+                // appended twice and earlier wording can still be corrected.
+                var ending = output
+                var prefix = ""
+                while try await tokenCount(ending, baseURL: url) > 450 {
+                    guard let split = RefinementInference.splitNearMiddle(ending) else {
+                        throw TranscriptRefinementServiceError.incompleteOutput
+                    }
+                    prefix += split.0
+                    ending = split.1
+                }
+                if !prefix.isEmpty {
+                    committed += prefix.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n"
+                    earlierContext = try await contextSuffix(committed, baseURL: url)
+                }
+                editableEnding = ending.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        let result = try RefinementInference.result(committed, original: transcript, configuration: configuration)
+        logger.info("llama refinement duration=\(String(describing: started.duration(to: .now)), privacy: .public) sourceChunks=\(chunks.count)")
+        return result
+    }
+
+    private func rewrite(messages: [[String: String]], configuration: RefinementConfiguration, baseURL: URL) async throws -> String {
+        var payload: [String: Any] = [
+            "messages": messages, "max_tokens": 1536,
             "temperature": 0.2, "top_p": 0.9, "top_k": 0, "min_p": 0,
-            "chat_template_kwargs": ["enable_thinking": false], "stream": false
-        ])
+            "stream": false
+        ]
+        if configuration.model.provider == .qwen || configuration.model.provider == .google {
+            payload["chat_template_kwargs"] = ["enable_thinking": false]
+        }
+        let json = try await post(path: "v1/chat/completions", baseURL: baseURL, payload: payload)
         guard let choice = (json["choices"] as? [[String: Any]])?.first else {
             throw TranscriptRefinementServiceError.emptyOutput
         }
@@ -124,10 +199,63 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
             throw TranscriptRefinementServiceError.incompleteOutput
         }
         let content = (choice["message"] as? [String: Any])?["content"] as? String ?? ""
-        let result = try RefinementInference.result(content, original: transcript, configuration: configuration)
-        let usage = json["usage"] as? [String: Any]
-        logger.info("llama refinement duration=\(String(describing: started.duration(to: .now)), privacy: .public) outputTokens=\(usage?["completion_tokens"] as? Int ?? 0)")
-        return result
+        return try RefinementInference.result(content, original: "", configuration: configuration).refinedText
+    }
+
+    private func contextSuffix(_ text: String, baseURL: URL) async throws -> String {
+        // Only a small recent context is needed to continue numbering and style.
+        var context = String(text.suffix(800))
+        while try await tokenCount(context, baseURL: baseURL) > 200 {
+            context = String(context.suffix(context.count / 2))
+        }
+        return context
+    }
+
+    private func messages(instructions: String, text: String) -> [[String: String]] {
+        [["role": "system", "content": instructions], ["role": "user", "content": text]]
+    }
+
+    private func tokenCount(_ text: String, baseURL: URL) async throws -> Int {
+        let tokenized = try await post(path: "tokenize", baseURL: baseURL, payload: ["content": text])
+        guard let tokens = tokenized["tokens"] as? [Int] else {
+            throw TranscriptRefinementServiceError.failedToRun("Could not tokenize the transcript.")
+        }
+        return tokens.count
+    }
+
+    private func promptTokenCount(messages: [[String: String]], baseURL: URL) async throws -> Int {
+        let rendered = try await post(path: "apply-template", baseURL: baseURL,
+            payload: ["messages": messages, "chat_template_kwargs": ["enable_thinking": false]])
+        guard let prompt = rendered["prompt"] as? String else {
+            throw TranscriptRefinementServiceError.failedToRun("Could not measure the model's context budget.")
+        }
+        let tokenized = try await post(path: "tokenize", baseURL: baseURL,
+            payload: ["content": prompt, "add_special": true, "parse_special": true])
+        guard let tokens = tokenized["tokens"] as? [Int] else {
+            throw TranscriptRefinementServiceError.failedToRun("Could not tokenize the transcript.")
+        }
+        return tokens.count
+    }
+
+    private func boundedChunks(_ text: String, instructions: String, baseURL: URL) async throws -> [String] {
+        var pending = [text]
+        var chunks: [String] = []
+        while let candidate = pending.first {
+            pending.removeFirst()
+            try Task.checkCancellation()
+            let promptTokens = try await promptTokenCount(messages: messages(instructions: instructions, text: candidate), baseURL: baseURL)
+            let sourceTokens = try await tokenCount(candidate, baseURL: baseURL)
+            // 4096 context minus 1536 output tokens and template/special-token margin.
+            if promptTokens <= 2400 && sourceTokens <= 900 {
+                chunks.append(candidate)
+            } else {
+                guard let split = RefinementInference.splitNearMiddle(candidate) else {
+                    throw TranscriptRefinementServiceError.failedToRun("The system prompt is too long for the model's context. Shorten your instructions.")
+                }
+                pending.insert(contentsOf: [split.0, split.1], at: 0)
+            }
+        }
+        return chunks
     }
 
     private func ensureServer(modelURL: URL) async throws -> URL {
@@ -243,9 +371,24 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
 
 /// Shared limits and output checks keep both backends' insertion behavior consistent.
 enum RefinementInference {
-    nonisolated static func maximumOutputTokens(for transcript: String) -> Int {
-        // CJK/Thai scripts use about one token per character. Do not assume Latin density.
-        min(1024, max(128, transcript.count + 64))
+    /// Prefer paragraph and sentence boundaries; never overlap chunks or repeat source text.
+    nonisolated static func splitNearMiddle(_ text: String) -> (String, String)? {
+        guard text.count > 128 else { return nil }
+        let chars = Array(text)
+        let middle = chars.count / 2
+        let radius = chars.count / 4
+        var boundary: Int?
+        for predicate: (Character) -> Bool in [{ $0 == "\n" }, { ".!?。！？".contains($0) }, { $0.isWhitespace }] {
+            for distance in 0...radius {
+                for index in [middle - distance, middle + distance] where index > 0 && index < chars.count - 1 {
+                    if predicate(chars[index]) { boundary = index + 1; break }
+                }
+                if boundary != nil { break }
+            }
+            if boundary != nil { break }
+        }
+        let split = boundary ?? middle
+        return (String(chars[..<split]), String(chars[split...]))
     }
 
     nonisolated static func result(_ output: String, original: String, configuration: RefinementConfiguration) throws -> TranscriptRefinementResult {

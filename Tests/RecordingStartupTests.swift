@@ -6,6 +6,56 @@ import XCTest
 
 @MainActor
 final class RecordingStartupTests: XCTestCase {
+    func testWritingDraftsOnlyAffectInferenceAfterSaving() throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        state.updatePresetInstructions("Saved cleanup rule")
+        XCTAssertFalse(state.savedEffectiveRefinementPrompt(taskMode: .transcribe).contains("Saved cleanup rule"))
+        state.savePresetInstructions()
+        XCTAssertTrue(state.savedEffectiveRefinementPrompt(taskMode: .transcribe).contains("Saved cleanup rule"))
+        state.updateRefinementMode(.casualMessaging)
+        XCTAssertEqual(state.currentPresetInstructions, "")
+        state.updatePresetInstructions("Casual draft")
+        state.updateRefinementMode(.smartCleanup)
+        XCTAssertEqual(state.currentPresetInstructions, "Saved cleanup rule")
+        state.updateRefinementMode(.diy)
+        state.updateRefinementPromptText("# DIY draft")
+        XCTAssertFalse(state.savedEffectiveRefinementPrompt(taskMode: .transcribe).contains("# DIY draft"))
+        state.saveRefinementPromptText()
+        XCTAssertTrue(state.savedEffectiveRefinementPrompt(taskMode: .translateToEnglish).contains("# DIY draft"))
+        XCTAssertTrue(state.savedEffectiveRefinementPrompt(taskMode: .translateToEnglish).contains("Output English."))
+        XCTAssertFalse(state.savedEffectiveRefinementPrompt(taskMode: .transcribe).contains("Saved cleanup rule"))
+    }
+
+    func testUnreadablePresetInstructionsAreKeptAndCanBeRecovered() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("preset-instructions.json")
+        let original = Data("{broken JSON with existing instructions".utf8)
+        try original.write(to: file)
+        let promptStore = FileRefinementPromptStore(directoryURL: directory)
+        let fixture = try RecordingStartupFixture(promptStore: promptStore)
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        XCTAssertNotNil(state.refinementWritingError)
+        state.updatePresetInstructions("New cleanup instructions")
+        state.savePresetInstructions()
+        XCTAssertEqual(try Data(contentsOf: file), original)
+        XCTAssertTrue(state.isPresetInstructionsDirty)
+        XCTAssertNotNil(state.refinementWritingError)
+
+        // Repair outside the app, then retry without restarting or losing drafts.
+        try JSONEncoder().encode(["casualMessaging": "Keep emojis."]).write(to: file)
+        state.savePresetInstructions()
+        XCTAssertNil(state.refinementWritingError)
+        XCTAssertFalse(state.isPresetInstructionsDirty)
+        XCTAssertEqual(try promptStore.presetInstructions()["casualMessaging"], "Keep emojis.")
+        state.updateRefinementMode(.casualMessaging)
+        XCTAssertEqual(state.currentPresetInstructions, "Keep emojis.")
+    }
+
     func testRetentionChangeOnlyRequiresConfirmationForAffectedRecordings() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryRetention-\(UUID())")
         let store = SQLiteHistoryStore(root: root)
@@ -158,6 +208,9 @@ final class RecordingStartupTests: XCTestCase {
         let detail = try await store.detail(capture.id)
         XCTAssertEqual(detail.transcriptions.count, 2)
         XCTAssertEqual(detail.refinements.count, 1)
+        let prompt = try XCTUnwrap(detail.refinements.first?.prompt)
+        XCTAssertEqual(prompt, fixture.state.savedEffectiveRefinementPrompt(taskMode: .transcribe))
+        XCTAssertFalse(prompt.contains("{{languageInstruction}}"))
     }
 
     func testFailedRefinementRetryPreservesSelectedOlderRefinement() async throws {
@@ -474,7 +527,8 @@ private final class RecordingStartupFixture {
         refinement: TranscriptRefinementServiceProtocol = LlamaCLITranscriptRefinementService(),
         usePipelineModels: Bool = false,
         refinementEnabled: Bool? = nil,
-        historyStore: HistoryStoreProtocol? = nil
+        historyStore: HistoryStoreProtocol? = nil,
+        promptStore: RefinementPromptStoreProtocol? = nil
     ) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -497,7 +551,7 @@ private final class RecordingStartupFixture {
                 : WhisperModelDownloadService(modelsDirectoryURL: directory),
             whisperService: whisper,
             transcriptRefinementService: refinement,
-            refinementPromptStore: StartupPromptStore(directory: directory),
+            refinementPromptStore: promptStore ?? StartupPromptStore(directory: directory),
             textInsertionService: StartupInsertionService(),
             localNotificationService: StartupNotificationService(),
             appUpdateService: GitHubReleaseUpdateService(),
@@ -626,6 +680,9 @@ private final class StartupPromptStore: RefinementPromptStoreProtocol {
     func hasCustomPromptTemplate() -> Bool { false }
     func savePromptTemplate(_ template: String) throws {}
     func resetPromptTemplate() throws {}
+    private var instructions: [String: String] = [:]
+    func presetInstructions() throws -> [String: String] { instructions }
+    func savePresetInstructions(_ instructions: [String: String]) throws { self.instructions = instructions }
 }
 
 @MainActor

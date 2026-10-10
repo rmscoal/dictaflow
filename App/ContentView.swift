@@ -794,7 +794,7 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
-                    Text("Qwen3 0.6B")
+                    Text(model.displayName)
                         .font(.system(size: 13, weight: .semibold))
                     Text(ready ? "Downloaded" : "Download needed")
                         .font(.system(size: 10, weight: .medium))
@@ -814,7 +814,7 @@ struct ContentView: View {
             Spacer(minLength: 8)
             if downloading {
                 ProgressView().controlSize(.small)
-                    .accessibilityLabel("Downloading Qwen3")
+                    .accessibilityLabel("Downloading " + model.displayName)
             } else if !ready {
                 Button(appState.refinementDownloadError(for: model) == nil ? "Download" : "Retry") {
                     selectedRefinementModel = model
@@ -842,84 +842,7 @@ struct ContentView: View {
 
     private var refinementPage: some View {
         DetailPage {
-            VStack(alignment: .leading, spacing: 7) {
-                FormSectionTitle("Local text cleanup")
-
-                SettingsFormPanel {
-                    SettingsFormRow(
-                        title: "Refine before insertion",
-                        detail: "Clean punctuation and wording with a local LLM"
-                    ) {
-                        Toggle("Refine before insertion", isOn: refinementEnabledBinding)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .disabled(appState.refinementSettingsLocked)
-                    }
-
-                }
-
-                FormSectionTitle("Local model")
-                    .padding(.top, 7)
-                refinementModelCard
-
-                if appState.isDownloadingRefinementModel(appState.refinementConfiguration.model) || appState.refinementDownloadError(for: appState.refinementConfiguration.model) != nil {
-                    let model = appState.refinementConfiguration.model
-                    ModelDownloadStatusPanel(
-                        title: "Qwen3 0.6B download",
-                        statusText: appState.refinementDownloadError(for: model) ?? appState.refinementDownloadStatusText(for: model),
-                        isActive: appState.isDownloadingRefinementModel(model),
-                        progress: appState.refinementDownloadProgress(for: model),
-                        hasFailed: appState.refinementDownloadError(for: model) != nil,
-                        cancelAction: { appState.cancelRefinementModelDownload(model) }
-                    )
-                }
-
-                Text("The model loads while you record, stays ready between dictations, and sleeps after five minutes without use.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 4)
-
-                FormSectionTitle("System prompt")
-                    .padding(.top, 7)
-
-                TextEditor(text: refinementPromptTextBinding)
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(AppTheme.primaryText.opacity(0.86))
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 116)
-                    .padding(9)
-                    .background(AppTheme.editorFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(AppTheme.border, lineWidth: 1)
-                    )
-                    .disabled(appState.whisperSettingsLocked)
-
-                HStack(spacing: 8) {
-                    Text(shortRefinementStatusText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(AppTheme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Spacer(minLength: 8)
-
-                    Button("Folder") { appState.openRefinementPromptsFolder() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-
-                    Button("Reset") { appState.resetActiveRefinementPrompt() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(appState.whisperSettingsLocked)
-
-                    Button("Save") { appState.saveRefinementPromptText() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .tint(AppTheme.accent)
-                        .disabled(appState.whisperSettingsLocked || !appState.isRefinementPromptDirty || appState.refinementPromptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
+            RefinementSettingsView(appState: appState)
         }
     }
 

@@ -145,6 +145,9 @@ final class DictaFlowAppState: ObservableObject {
     private var pendingInsertionTargetApplication: InsertionTargetApplication?
     private var isOnboardingPracticeSession = false
     private var preservedStatusMessage: String?
+    @Published private(set) var presetInstructionDrafts: [String: String] = [:]
+    @Published private(set) var refinementWritingError: String?
+    private var savedPresetInstructions: [String: String] = [:]
     private var savedRefinementPromptText: String
     private var activeWhisperDownloadTokens: [WhisperModelDescriptor: UUID] = [:]
     private var activeRefinementDownloadTokens: [RefinementModelDescriptor: UUID] = [:]
@@ -186,7 +189,12 @@ final class DictaFlowAppState: ObservableObject {
         appUpdateService: AppUpdateChecking,
         historyStore: HistoryStoreProtocol? = nil
     ) {
-        let initialRefinementConfiguration = settingsStore.refinementConfiguration
+        var initialRefinementConfiguration = settingsStore.refinementConfiguration
+        if initialRefinementConfiguration.writingStyleVersion == 0 {
+            if refinementPromptStore.hasCustomPromptTemplate() { initialRefinementConfiguration.mode = .diy }
+            initialRefinementConfiguration.writingStyleVersion = 1
+            settingsStore.saveRefinementConfiguration(initialRefinementConfiguration)
+        }
         let initialPromptText = refinementPromptStore.promptTemplate()
 
         self.historyStore = historyStore
@@ -241,6 +249,13 @@ final class DictaFlowAppState: ObservableObject {
         self.automaticallyChecksForUpdates = settingsStore.automaticallyChecksForUpdates
         self.preservedStatusMessage = nil
         self.lastKnownExternalTargetApplication = Self.makeInsertionTargetApplication(from: NSWorkspace.shared.frontmostApplication)
+        refinementWritingError = refinementPromptStore.loadError
+        do {
+            savedPresetInstructions = try refinementPromptStore.presetInstructions()
+            presetInstructionDrafts = savedPresetInstructions
+        } catch {
+            refinementWritingError = "Could not load additional instructions. " + error.localizedDescription
+        }
         configureWorkspaceObservers()
         updateStatusMessage()
     }
@@ -423,7 +438,7 @@ final class DictaFlowAppState: ObservableObject {
 
     var refinementStatusText: String {
         if isRefinementServerPreparing {
-            return "Preparing Qwen3 0.6B for this recording…"
+            return "Preparing \(refinementConfiguration.model.displayName) for this recording…"
         }
 
         if let unsupportedReason = refinementModelSupport(for: refinementConfiguration.model).unsupportedReason {
@@ -435,7 +450,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         if !isSelectedRefinementModelPrepared {
-            return "Download Qwen3 0.6B for standard refinement. Your original transcript is used until it is ready."
+            return "Download \(refinementConfiguration.model.displayName) for local refinement. Your original transcript is used until it is ready."
         }
         if refinementConfiguration.isEnabled {
             return "Loads when recording starts and sleeps after five minutes without use."
@@ -952,7 +967,7 @@ final class DictaFlowAppState: ObservableObject {
                 return
             }
             guard isSelectedRefinementModelPrepared else {
-                setPreservedStatusMessage("Download Qwen3 0.6B before turning on text refinement.")
+                setPreservedStatusMessage("Download \(refinementConfiguration.model.displayName) before turning on text refinement.")
                 showMainWindowPage(.refinement)
                 return
             }
@@ -986,21 +1001,71 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    func updateRefinementMode(_ mode: RefinementMode) {
+        guard !refinementSettingsLocked else { return }
+        refinementConfiguration.mode = mode
+        persistRefinementConfiguration()
+    }
+
+    var currentPresetInstructions: String {
+        presetInstructionDrafts[refinementConfiguration.mode.rawValue] ?? ""
+    }
+
+    var isPresetInstructionsDirty: Bool {
+        currentPresetInstructions != (savedPresetInstructions[refinementConfiguration.mode.rawValue] ?? "")
+    }
+
+    func updatePresetInstructions(_ text: String) {
+        guard !refinementSettingsLocked else { return }
+        presetInstructionDrafts[refinementConfiguration.mode.rawValue] = text
+    }
+
+    func savePresetInstructions() {
+        guard !refinementSettingsLocked, refinementConfiguration.mode != .diy else { return }
+        do {
+            // Never replace instructions that failed to load. Re-read on Save so
+            // repairing the file allows a retry without restarting the app.
+            var updated = try refinementPromptStore.presetInstructions()
+            updated[refinementConfiguration.mode.rawValue] = currentPresetInstructions
+            try refinementPromptStore.savePresetInstructions(updated)
+            savedPresetInstructions = updated
+            for (key, value) in updated where presetInstructionDrafts[key] == nil {
+                presetInstructionDrafts[key] = value
+            }
+            refinementWritingError = nil
+        } catch {
+            refinementWritingError = "Could not save additional instructions. Check preset-instructions.json in the local Prompts folder and retry. " + error.localizedDescription
+        }
+    }
+
+    private var savedRefinementPromptTemplate: String {
+        RefinementPromptTemplate.template(for: refinementConfiguration.mode,
+            additionalInstructions: savedPresetInstructions[refinementConfiguration.mode.rawValue] ?? "",
+            diyPrompt: savedRefinementPromptText)
+    }
+
+    func savedEffectiveRefinementPrompt(taskMode: WhisperTaskMode) -> String {
+        RefinementPromptTemplate.renderedInstructions(from: savedRefinementPromptTemplate, whisperTaskMode: taskMode)
+    }
+
     func updateRefinementPromptText(_ promptText: String) {
+        guard !refinementSettingsLocked else { return }
         refinementPromptText = promptText
         isRefinementPromptDirty = promptText != savedRefinementPromptText
     }
 
     func saveRefinementPromptText() {
+        guard !refinementSettingsLocked else { return }
         do {
             try refinementPromptStore.savePromptTemplate(refinementPromptText)
             savedRefinementPromptText = refinementPromptText
             isRefinementPromptDirty = false
             hasCustomRefinementPrompt = true
+            refinementWritingError = nil
             setPreservedStatusMessage("Saved the refinement system prompt in Application Support.")
             updateStatusMessage()
         } catch {
-            setPreservedStatusMessage("Could not save the refinement system prompt. \(error.localizedDescription)")
+            refinementWritingError = "Could not save the system prompt. " + error.localizedDescription
             showMainWindow()
             updateStatusMessage()
         }
@@ -2962,7 +3027,7 @@ final class DictaFlowAppState: ObservableObject {
 
         guard isSelectedRefinementModelPrepared else {
             var skippedTranscription = transcription
-            skippedTranscription.refinementStatus = .skipped(reason: "Download Qwen3 0.6B from the Refinement page.")
+            skippedTranscription.refinementStatus = .skipped(reason: "Download \(model.displayName) from the Refinement page.")
             lastTranscription = skippedTranscription
             playSoundCue(.error)
             return skippedTranscription
@@ -2985,19 +3050,20 @@ final class DictaFlowAppState: ObservableObject {
 
         var configuration = refinementConfiguration
         if forceEnabled { configuration.isEnabled = true }
-        let prompt = refinementPromptText
+        let prompt = savedRefinementPromptTemplate
+        let effectivePrompt = RefinementPromptTemplate.renderedInstructions(from: prompt, whisperTaskMode: transcription.taskMode)
         prewarmRefinementModel(forceEnabled: forceEnabled)
         // Persistence yields to the preparation task. Keep its result even if
         // preparation finishes and clears the coordinator's in-flight handle.
         let preparation = refinementPreparationTask
         var historyAttempt: UUID?
         if let historyTranscriptionID, let historyStore {
-            do { historyAttempt = try await historyStore.startRefinement(historyTranscriptionID, configuration: configuration, prompt: prompt) }
+            do { historyAttempt = try await historyStore.startRefinement(historyTranscriptionID, configuration: configuration, prompt: effectivePrompt) }
             catch { history.report(error) }
         }
         do {
             guard let preparation else {
-                throw TranscriptRefinementServiceError.failedToRun("Download Qwen3 0.6B from the Refinement page.")
+                throw TranscriptRefinementServiceError.failedToRun("Download \(model.displayName) from the Refinement page.")
             }
             let modelURL = try await preparation.value
             guard !isTerminating else { return transcription }
