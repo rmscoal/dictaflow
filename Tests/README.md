@@ -204,3 +204,19 @@ limitation: it can omit a corrected date among many repetitive technical facts.
 Only that semantic assertion is marked as a non-strict expected failure. Runtime
 errors and identifier/number checks still fail normally. Do not interpret passing
 structural chunk tests as proof that every model preserves every fact.
+
+## Dictation tone and combined settings
+
+`TextToneFormatterTests` checks conservative English rules, protected structured
+text and vocabulary, non-English behavior, empty output, idempotence, settings
+persistence, and legacy result decoding. `RecordingStartupTests` verifies the
+pipeline with refinement off, on, and failing, including the locked tone snapshot,
+inserted/copied text, and retrieving the original. `HistoryStoreTests` checks raw
+and final search/preview, saved rule versions, and upgrade from the v2 schema.
+
+In the installed Dev app, check Dictation's three tabs, all six Whisper cards,
+encoder expansion before and after speech-model download, and the existing
+refinement provider/model and DIY controls. Check narrow-window layouts and
+that sound cues and custom vocabulary remain below speech models. Tone preview
+should update without enabling refinement. Verify download/progress/cancel and
+encoder on/off with real artifacts when available.

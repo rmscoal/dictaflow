@@ -6,6 +6,53 @@ import XCTest
 
 @MainActor
 final class RecordingStartupTests: XCTestCase {
+    func testTonePipelineWithRefinementOffOnAndFailure() async throws {
+        for refinementEnabled in [false, true] {
+            for fails in [false, true] where refinementEnabled || !fails {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("TonePipeline-\(UUID())")
+                let store = SQLiteHistoryStore(root: root)
+                let text = "I'm late."
+                let service = PipelineRefinementService(expectedTranscript: text, failsRefinement: fails)
+                let fixture = try RecordingStartupFixture(
+                    whisper: PipelineWhisperService(text: text, languageCode: "en"), refinement: service,
+                    usePipelineModels: true, refinementEnabled: refinementEnabled, historyStore: store, allowsInsertion: true)
+                defer { fixture.cleanup(); try? FileManager.default.removeItem(at: root) }
+                fixture.volume.shouldWait = false
+                fixture.permissions.accessibilityGranted = true
+                fixture.state.updateTextTone(.casual)
+                let recording = expectation(description: "Recording starts")
+                let observation = fixture.state.$recordingState.sink { if $0.isRecording { recording.fulfill() } }
+                fixture.state.toggleDictation()
+                await fulfillment(of: [recording], timeout: 2)
+                observation.cancel()
+                fixture.state.updateTextTone(.formal)
+                XCTAssertEqual(fixture.state.textTone, .casual, "Tone is locked during a recording")
+                fixture.state.toggleDictation()
+                for _ in 0..<200 where !fixture.state.canProcessHistory { try await Task.sleep(for: .milliseconds(10)) }
+                let final = refinementEnabled && !fails ? "im late. refined" : "im late"
+                XCTAssertEqual(fixture.state.lastTranscription?.insertionText, final)
+                XCTAssertEqual(fixture.state.lastTranscription?.text, text)
+                XCTAssertEqual(fixture.insertion.insertedTexts.last, final)
+                fixture.state.copyLastTranscription()
+                XCTAssertEqual(fixture.insertion.copiedTexts.last, final)
+                let calls = await service.refineCalls
+                XCTAssertEqual(calls, refinementEnabled ? 1 : 0)
+                let entries = try await store.entries(search: "", limit: 50, offset: 0)
+                let id = try XCTUnwrap(entries.first?.id)
+                await fixture.state.history.select(id)
+                XCTAssertEqual(fixture.state.history.displayedText, final)
+                fixture.state.updateTextTone(.formal)
+                XCTAssertEqual(fixture.state.lastTranscription?.insertionText, final, "Changing settings never reformats an existing result")
+                XCTAssertEqual(fixture.state.history.displayedText, final)
+                fixture.state.history.textView = .original
+                XCTAssertEqual(fixture.state.history.displayedText, text)
+                fixture.state.insertHistoryText()
+                for _ in 0..<100 where fixture.state.isHistoryProcessing { try await Task.sleep(for: .milliseconds(10)) }
+                XCTAssertEqual(fixture.insertion.insertedTexts.last, text)
+            }
+        }
+    }
+
     func testWritingDraftsOnlyAffectInferenceAfterSaving() throws {
         let fixture = try RecordingStartupFixture()
         defer { fixture.cleanup() }
@@ -520,6 +567,7 @@ private final class RecordingStartupFixture {
     let overlay = StartupOverlayRouter()
     let cues = StartupCueService()
     let state: DictaFlowAppState
+    let insertion: StartupInsertionService
 
     init(
         permission: MicrophonePermissionState = .granted,
@@ -528,7 +576,8 @@ private final class RecordingStartupFixture {
         usePipelineModels: Bool = false,
         refinementEnabled: Bool? = nil,
         historyStore: HistoryStoreProtocol? = nil,
-        promptStore: RefinementPromptStoreProtocol? = nil
+        promptStore: RefinementPromptStoreProtocol? = nil,
+        allowsInsertion: Bool = false
     ) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -540,6 +589,7 @@ private final class RecordingStartupFixture {
         settings.saveRefinementConfiguration(refinementConfiguration)
         try Data("synthetic model".utf8).write(to: directory.appendingPathComponent(settings.whisperConfiguration.model.filename))
         permissions = StartupPermissionService(permission: permission)
+        insertion = StartupInsertionService(allowsInsertion: allowsInsertion)
         recorder = StartupRecorderService(fileURL: directory.appendingPathComponent("capture.m4a"))
         state = DictaFlowAppState(
             settingsStore: settings, permissionService: permissions,
@@ -552,7 +602,7 @@ private final class RecordingStartupFixture {
             whisperService: whisper,
             transcriptRefinementService: refinement,
             refinementPromptStore: promptStore ?? StartupPromptStore(directory: directory),
-            textInsertionService: StartupInsertionService(),
+            textInsertionService: insertion,
             localNotificationService: StartupNotificationService(),
             appUpdateService: GitHubReleaseUpdateService(),
             historyStore: historyStore
@@ -687,11 +737,19 @@ private final class StartupPromptStore: RefinementPromptStoreProtocol {
 
 @MainActor
 private final class StartupInsertionService: TextInsertionServiceProtocol {
+    let allowsInsertion: Bool
+    var insertedTexts: [String] = []
+    var copiedTexts: [String] = []
+    init(allowsInsertion: Bool = false) { self.allowsInsertion = allowsInsertion }
     func insertText(_ text: String, targetApplication: InsertionTargetApplication?, allowAccessibilityFeatures: Bool) async -> TextInsertionResult {
-        XCTFail("No insertion is expected")
+        if !allowsInsertion { XCTFail("No insertion is expected") }
+        insertedTexts.append(text)
         return TextInsertionResult(text: text, method: .copyPanel, targetApplicationName: nil, completedAt: Date(), isInsertionConfirmed: false)
     }
-    func copyTextToPasteboard(_ text: String) { XCTFail("No clipboard writes are expected") }
+    func copyTextToPasteboard(_ text: String) {
+        if !allowsInsertion { XCTFail("No clipboard writes are expected") }
+        copiedTexts.append(text)
+    }
 }
 
 @MainActor
@@ -705,10 +763,12 @@ private actor PipelineWhisperService: WhisperServiceProtocol {
     let onWarmup: @Sendable () -> Void
     let failsTranscription: Bool
     let text: String
-    init(onWarmup: @escaping @Sendable () -> Void = {}, failsTranscription: Bool = false, text: String = " \n") {
+    let languageCode: String?
+    init(onWarmup: @escaping @Sendable () -> Void = {}, failsTranscription: Bool = false, text: String = " \n", languageCode: String? = nil) {
         self.onWarmup = onWarmup
         self.failsTranscription = failsTranscription
         self.text = text
+        self.languageCode = languageCode
     }
     func prepare(modelURL: URL) async throws {}
     func unloadModel() async {}
@@ -718,7 +778,7 @@ private actor PipelineWhisperService: WhisperServiceProtocol {
     func transcribe(audioFileURL: URL, modelURL: URL, configuration: WhisperConfiguration) async throws -> WhisperTranscriptionResult {
         transcribeCalls += 1
         if failsTranscription { throw NSError(domain: "com.apple.coreaudio.avfaudio", code: 1954115647) }
-        return WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: nil,
+        return WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: languageCode,
             model: configuration.model, taskMode: configuration.taskMode, completedAt: Date())
     }
 }

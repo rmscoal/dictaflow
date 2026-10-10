@@ -137,7 +137,7 @@ struct ContentView: View {
         case .dictation:
             dictationPage
         case .refinement:
-            refinementPage
+            dictationPage
         case .history:
             HistoryView(appState: appState, model: appState.history)
         case .shortcutAndAudio:
@@ -189,7 +189,6 @@ struct ContentView: View {
             SidebarSection(title: "DICTAFLOW", isCollapsed: isSidebarCollapsed) {
                 SidebarItem(page: .overview, title: "Overview", systemImage: "square.grid.2x2.fill", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
                 SidebarItem(page: .dictation, title: "Dictation", systemImage: "waveform", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
-                SidebarItem(page: .refinement, title: "Refinement", systemImage: "wand.and.sparkles", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
                 SidebarItem(page: .history, title: "History", systemImage: "clock", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
             }
 
@@ -277,7 +276,7 @@ struct ContentView: View {
                         primaryText: Text(appState.refinementConfiguration.model.displayName).fontWeight(.semibold),
                         secondaryText: "Cleans punctuation and wording locally."
                     ) {
-                        appState.mainWindowPage = .refinement
+                        appState.showMainWindowPage(.refinement)
                     }
                 }
 
@@ -645,139 +644,174 @@ struct ContentView: View {
 
     private var dictationPage: some View {
         DetailPage {
-            VStack(alignment: .leading, spacing: 7) {
-                FormSectionTitle("Transcription defaults")
+            VStack(alignment: .leading, spacing: 18) {
+                dictationTabs
+                Text("\(appState.whisperConfiguration.taskMode == .translateToEnglish ? "Translate" : "Transcribe") → \(appState.refinementConfiguration.isEnabled ? "Refine locally" : "Refinement off") → \(appState.textTone == .original ? "Tone unchanged" : appState.textTone.title + " tone") → Insert")
+                    .font(.caption).foregroundStyle(AppTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                switch appState.dictationSettingsTab {
+                case .transcription: transcriptionSettings
+                case .refinement: RefinementSettingsView(appState: appState)
+                case .tone: ToneSettingsView(appState: appState)
+                }
+            }
+        }
+    }
 
-                SettingsFormPanel {
-                    SettingsFormRow(
-                        title: "Task",
-                        detail: "Transcribe speech or translate it to English"
-                    ) {
-                        Picker("Task", selection: taskModeBinding) {
-                            Text("Transcribe").tag(WhisperTaskMode.transcribe)
-                            Text("Translate").tag(WhisperTaskMode.translateToEnglish)
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .frame(width: 166)
-                        .disabled(appState.whisperSettingsLocked)
+    private var dictationTabs: some View {
+        HStack(spacing: 2) {
+            ForEach(DictationSettingsTab.allCases) { tab in
+                let isSelected = appState.dictationSettingsTab == tab
+                Button { appState.dictationSettingsTab = tab } label: {
+                    Text(tab.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                        .foregroundStyle(isSelected ? Color.white : AppTheme.primaryText)
+                        .background(isSelected ? Color(nsColor: .controlAccentColor) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Dictation settings")
+    }
+
+    private var transcriptionSettings: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            FormSectionTitle("Transcription defaults")
+
+            SettingsFormPanel {
+                SettingsFormRow(
+                    title: "Task",
+                    detail: "Transcribe speech or translate it to English"
+                ) {
+                    Picker("Task", selection: taskModeBinding) {
+                        Text("Transcribe").tag(WhisperTaskMode.transcribe)
+                        Text("Translate").tag(WhisperTaskMode.translateToEnglish)
                     }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 166)
+                    .disabled(appState.whisperSettingsLocked)
+                }
 
-                    Divider().overlay(AppTheme.border)
+                Divider().overlay(AppTheme.border)
 
-                    SettingsFormRow(
-                        title: "Input language",
-                        detail: "Automatic works well for mixed-language speech"
-                    ) {
-                        Picker("Input language", selection: inputLanguageBinding) {
-                            Text(WhisperInputLanguage.automatic.displayName).tag(WhisperInputLanguage.automatic)
-                            if !appState.commonWhisperLanguages.isEmpty {
-                                Divider()
-                                Section("Common") {
-                                    ForEach(appState.commonWhisperLanguages) { language in
-                                        Text(language.displayName).tag(language.inputLanguage)
-                                    }
-                                }
-                            }
-                            Section("All") {
-                                ForEach(appState.additionalWhisperLanguages) { language in
+                SettingsFormRow(
+                    title: "Input language",
+                    detail: "Automatic works well for mixed-language speech"
+                ) {
+                    Picker("Input language", selection: inputLanguageBinding) {
+                        Text(WhisperInputLanguage.automatic.displayName).tag(WhisperInputLanguage.automatic)
+                        if !appState.commonWhisperLanguages.isEmpty {
+                            Divider()
+                            Section("Common") {
+                                ForEach(appState.commonWhisperLanguages) { language in
                                     Text(language.displayName).tag(language.inputLanguage)
                                 }
                             }
                         }
+                        Section("All") {
+                            ForEach(appState.additionalWhisperLanguages) { language in
+                                Text(language.displayName).tag(language.inputLanguage)
+                            }
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 142)
+                    .disabled(appState.whisperSettingsLocked)
+                }
+            }
+
+            Divider().overlay(AppTheme.border).padding(.vertical, 10)
+            FormSectionTitle("Speech model")
+            WhisperModelsView(appState: appState, downloadModel: { model in
+                selectedModel = model
+                isShowingModelPreparationConfirmation = true
+            }, downloadEncoder: { model in
+                selectedModel = model
+                isShowingEncoderDownloadConfirmation = true
+            })
+            Divider().overlay(AppTheme.border).padding(.vertical, 10)
+
+            FormSectionTitle("Sound cues")
+                .padding(.top, 7)
+
+            SettingsFormPanel {
+                SettingsFormRow(
+                    title: "Play sound cues",
+                    detail: "Start, stop, and processing errors"
+                ) {
+                    Toggle("Play sound cues", isOn: soundCuesEnabledBinding)
                         .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: 142)
-                        .disabled(appState.whisperSettingsLocked)
-                    }
-
-                    Divider().overlay(AppTheme.border)
-
-                    SettingsFormRow(
-                        title: "Whisper model",
-                        detail: "Only prepared local models can be selected"
-                    ) {
-                        WhisperModelPickerControl(
-                            selectedModel: appState.whisperConfiguration.model,
-                            isEnabled: !appState.whisperSettingsLocked,
-                            isModelSelectable: { appState.isWhisperModelPrepared($0) },
-                            selectModel: { appState.updateWhisperModel($0) }
-                        )
-                    }
+                        .toggleStyle(.switch)
                 }
 
-                FormSectionTitle("Sound cues")
-                    .padding(.top, 7)
+                Divider().overlay(AppTheme.border)
 
-                SettingsFormPanel {
-                    SettingsFormRow(
-                        title: "Play sound cues",
-                        detail: "Start, stop, and processing errors"
-                    ) {
-                        Toggle("Play sound cues", isOn: soundCuesEnabledBinding)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                    }
-
-                    Divider().overlay(AppTheme.border)
-
-                    SettingsFormRow(
-                        title: "Sound style",
-                        detail: "Choose the tone of your feedback"
-                    ) {
-                        Picker("Sound style", selection: soundCueStyleBinding) {
-                            ForEach(SoundCueStyle.allCases) { style in
-                                Text(style.title).tag(style)
-                            }
+                SettingsFormRow(
+                    title: "Sound style",
+                    detail: "Choose the tone of your feedback"
+                ) {
+                    Picker("Sound style", selection: soundCueStyleBinding) {
+                        ForEach(SoundCueStyle.allCases) { style in
+                            Text(style.title).tag(style)
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: 142)
-                        .disabled(!appState.soundCuesEnabled || appState.whisperSettingsLocked)
                     }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 142)
+                    .disabled(!appState.soundCuesEnabled || appState.whisperSettingsLocked)
+                }
 
-                    Divider().overlay(AppTheme.border)
+                Divider().overlay(AppTheme.border)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Preview")
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(AppTheme.primaryText)
-                        HStack(spacing: 8) {
-                            ForEach(SoundCue.allCases) { cue in
-                                Button {
-                                    appState.previewSoundCue(cue)
-                                } label: {
-                                    Label(cue.title, systemImage: "play.fill")
-                                }
-                                .accessibilityLabel("Preview \(cue.title.lowercased()) sound")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Preview")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(AppTheme.primaryText)
+                    HStack(spacing: 8) {
+                        ForEach(SoundCue.allCases) { cue in
+                            Button {
+                                appState.previewSoundCue(cue)
+                            } label: {
+                                Label(cue.title, systemImage: "play.fill")
                             }
+                            .accessibilityLabel("Preview \(cue.title.lowercased()) sound")
                         }
-                        .controlSize(.small)
-                        .disabled(!appState.soundCuesEnabled || appState.whisperSettingsLocked)
+                    }
+                    .controlSize(.small)
+                    .disabled(!appState.soundCuesEnabled || appState.whisperSettingsLocked)
 
-                        Text(appState.soundCuesEnabled
-                             ? "Recording starts immediately. For best results, speak after the start sound."
-                             : "Speak once recording starts. No sound cue will play.")
+                    Text(appState.soundCuesEnabled
+                         ? "Recording starts immediately. For best results, speak after the start sound."
+                         : "Speak once recording starts. No sound cue will play.")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let message = appState.soundCuePlaybackMessage {
+                        Text(message)
                             .font(.system(size: 10.5))
                             .foregroundStyle(AppTheme.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
-
-                        if let message = appState.soundCuePlaybackMessage {
-                            Text(message)
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
                     }
-                    .padding(13)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-
-                FormSectionTitle("Custom vocabulary")
-                    .padding(.top, 7)
-
-                CustomVocabularyEditor(appState: appState)
+                .padding(13)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            FormSectionTitle("Custom vocabulary")
+                .padding(.top, 7)
+
+            CustomVocabularyEditor(appState: appState)
         }
     }
 
@@ -838,12 +872,6 @@ struct ContentView: View {
         .padding(14)
         .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 9))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(AppTheme.border, lineWidth: 1))
-    }
-
-    private var refinementPage: some View {
-        DetailPage {
-            RefinementSettingsView(appState: appState)
-        }
     }
 
     private var permissionsPage: some View {
@@ -936,7 +964,7 @@ struct ContentView: View {
         switch appState.mainWindowPage {
         case .overview: "Overview"
         case .dictation: "Dictation"
-        case .refinement: "Refinement"
+        case .refinement: "Dictation"
         case .history: "History"
         case .shortcutAndAudio: "Shortcut & Audio"
         case .appearance: "Appearance"
@@ -950,7 +978,7 @@ struct ContentView: View {
         switch appState.mainWindowPage {
         case .overview: "Ready for private, local dictation"
         case .dictation: "Choose how speech becomes text."
-        case .refinement: "Clean transcripts locally before insertion."
+        case .refinement: "Choose how speech becomes text."
         case .history: "Replay recordings, review results, and retry locally."
         case .shortcutAndAudio: "Control recording access and audio behavior."
         case .appearance: "Choose how DictaFlow looks."
@@ -1918,7 +1946,7 @@ private struct CustomVocabularyEditor: View {
 
     private var helperText: String {
         let count = appState.whisperConfiguration.customVocabulary.count
-        return "Single words only, up to \(WhisperConfiguration.maxCustomVocabularyTerms). Whisper uses them as context to recognize these words better. \(count) of \(WhisperConfiguration.maxCustomVocabularyTerms) keywords used."
+        return "Single words only · \(count) of \(WhisperConfiguration.maxCustomVocabularyTerms) keywords"
     }
 
     private func commitKeyword() {

@@ -1,4 +1,5 @@
 import AVFoundation
+import GRDB
 import XCTest
 @testable import DictaFlow_Dev
 
@@ -35,6 +36,71 @@ final class HistoryStoreTests: XCTestCase {
 
     private func result(_ text: String) -> WhisperTranscriptionResult {
         WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: "en", model: .base, taskMode: .transcribe, completedAt: Date())
+    }
+
+    @MainActor
+    func testToneOnlyHistoryAndRefinementKeepRawAndFinalOutputs() async throws {
+        let capture = try await recording()
+        let attempt = try await store.startTranscription(capture.id, configuration: .default)
+        var raw = result("I'm late.")
+        raw.toneFormatting = TextToneFormatter.format(raw.text, tone: .formal, isEnglish: true)
+        try await store.finishTranscription(attempt, result: raw, error: nil)
+        await store.releaseAudio(capture.id)
+        let model = HistoryViewModel(store: store)
+        await model.select(capture.id)
+        XCTAssertEqual(model.displayedText, "I am late.")
+        model.textView = .original
+        XCTAssertEqual(model.displayedText, "I'm late.")
+        let matches = try await store.entries(search: "am late", limit: 50, offset: 0)
+        XCTAssertEqual(matches.first?.preview, "I am late.")
+        XCTAssertEqual(matches.count, 1)
+        let crossOutputMatches = try await store.entries(search: "I'm late. I am late.", limit: 50, offset: 0)
+        XCTAssertTrue(crossOutputMatches.isEmpty, "Search must not join raw and final text into an invented sentence")
+
+        let refinement = try await store.startRefinement(attempt, configuration: .default, prompt: "prompt")
+        var refined = TranscriptRefinementResult(originalText: raw.text, refinedText: "I can't go.", model: .qwen3Small, mode: .smartCleanup, completedAt: Date())
+        refined.toneFormatting = TextToneFormatter.format(refined.refinedText, tone: .formal, isEnglish: true)
+        try await store.finishRefinement(refinement, result: refined, error: nil)
+        await model.select(capture.id)
+        XCTAssertEqual(model.displayedText, "I cannot go.")
+        model.textView = .refined
+        XCTAssertEqual(model.displayedText, "I can't go.")
+        model.textView = .original
+        XCTAssertEqual(model.displayedText, "I'm late.")
+        let saved = try await store.detail(capture.id)
+        XCTAssertEqual(saved.refinements.first?.result?.toneFormatting?.formatterVersion, 1)
+        let finalMatches = try await store.entries(search: "cannot", limit: 50, offset: 0)
+        XCTAssertEqual(finalMatches.first?.preview, "I cannot go.")
+        let rawMatches = try await store.entries(search: "can't", limit: 50, offset: 0)
+        XCTAssertEqual(rawMatches.count, 1)
+    }
+
+    func testVersionTwoDatabaseMigratesWithoutChangingLegacyText() async throws {
+        let capture = try await recording()
+        let attempt = try await store.startTranscription(capture.id, configuration: .default)
+        try await store.finishTranscription(attempt, result: result("Legacy original."), error: nil)
+        await store.releaseAudio(capture.id)
+        store = nil
+        // Reconstruct the prior schema in this isolated fixture. Its blobs have no tone field.
+        let db = try DatabaseQueue(path: root.appendingPathComponent("history.sqlite").path)
+        try await db.write {
+            try $0.execute(sql: "ALTER TABLE transcription_results DROP COLUMN finalText")
+            try $0.execute(sql: "ALTER TABLE refinement_results DROP COLUMN finalText")
+            try $0.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'history-v3-tone-output'")
+        }
+        store = SQLiteHistoryStore(root: root)
+        try await store.initialize()
+        let saved = try await store.detail(capture.id)
+        XCTAssertEqual(saved.transcriptions.first?.result?.insertionText, "Legacy original.")
+        XCTAssertNil(saved.transcriptions.first?.result?.toneFormatting)
+        XCTAssertEqual(saved.entry.preview, "Legacy original.")
+        let newAttempt = try await store.startTranscription(capture.id, configuration: .default)
+        var newResult = result("I'm here.")
+        newResult.toneFormatting = TextToneFormatter.format(newResult.text, tone: .formal, isEnglish: true)
+        try await store.finishTranscription(newAttempt, result: newResult, error: nil)
+        let updated = try await store.detail(capture.id)
+        XCTAssertEqual(updated.entry.preview, "I am here.")
+        XCTAssertEqual(updated.transcriptions.count, 2)
     }
 
     @MainActor

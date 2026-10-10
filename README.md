@@ -94,10 +94,20 @@ Public releases are signed and notarized for macOS.
 | **Record** | DictaFlow creates a temporary local `.m4a` recording. |
 | **Transcribe** | Bundled speech detection filters non-speech audio before `whisper.cpp` converts speech to text on your Mac. |
 | **Refine** | If enabled, a local language model cleans the text. |
+| **Tone** | Fixed Swift rules apply the selected tone, with or without refinement. |
 | **Insert** | DictaFlow returns the text to the previously focused app. |
 
 Insertion uses the best available method: direct Accessibility insertion,
 clipboard paste, simulated typing, then a copy panel as the final fallback.
+
+### Dictation settings
+
+**Dictation** contains **Transcription**, **Refinement**, and **Tone** tabs.
+Transcription combines task and language defaults, Whisper model cards, sound
+cues, and custom vocabulary. Every model card has an optional **Neural Engine**
+section. Download the speech model first, then its encoder. Encoder download
+turns acceleration on automatically; you can switch it off without removing it.
+**Models** remains available for storage management.
 
 ### Transcribe or translate
 
@@ -108,9 +118,9 @@ clipboard paste, simulated typing, then a copy panel as the final fallback.
 
 Local refinement can fix punctuation, repeated wording, and rough sentence
 structure. It is optional. If refinement fails, DictaFlow uses the original
-Whisper transcript.
+Whisper transcript with the selected tone.
 
-The Refinement page offers local models from Qwen, Meta Llama, Google Gemma, and
+The Dictation > Refinement tab offers local models from Qwen, Meta Llama, Google Gemma, and
 Microsoft Phi. Download a model, then choose **Use model**. Downloading never
 changes the active model. Each row shows file size, estimated model RAM,
 progress, and cancellation. RAM estimates exclude Whisper and other apps.
@@ -122,6 +132,28 @@ Refinement uses the bundled llama-server engine. Older model preferences migrate
 to standard Qwen3, and old downloads remain available for removal from Storage.
 Until the selected model is downloaded, dictation uses the original transcript.
 
+### Tone
+
+Tone runs after optional local refinement and before insertion. **Original** is
+the default. **Balanced** preserves the incoming casing, contractions, and
+punctuation. **Casual** lowercases common prose words, simplifies an allowlist of
+English contractions, and removes a terminal prose period. **Formal** expands
+clear English contractions and “gonna”, removes opening fillers, and adds a
+terminal prose period and restores English sentence starts when safe. These rules do not infer grammar or missing
+commas. English word replacements require detected English or translation mode.
+
+The formatter protects URLs, email addresses, numbers, code spans, identifiers,
+acronyms, and custom vocabulary. It conservatively keeps unfamiliar capitalized
+words, so names are usually preserved, but name detection is not guaranteed.
+Multiline punctuation is left alone. Tone settings are saved independently of
+refinement. Settings are locked during processing.
+
+History saves raw transcripts, raw refinement results, and the final text with
+the selected tone and rule version. **Original**, **Refined**, and **Final** let
+you inspect the available outputs. Changing tone settings does not rewrite saved
+results. Copy and insertion use the selected saved output; outer whitespace is
+trimmed for final output. Retrying creates a new result using current settings.
+
 ## Models and Local Data
 
 Models are downloaded when you prepare them in DictaFlow. Every download is
@@ -129,7 +161,7 @@ checksum-verified before use.
 
 | Model type | Available sizes |
 | --- | --- |
-| Whisper | Tiny 75 MB, Base 142 MB, Small 466 MB, Medium 1.5 GB |
+| Whisper | Tiny 75 MB, Base 142 MB, Small 466 MB, Medium 1.5 GB, Large V3 Turbo 1.5 GB, Large V3 2.9 GB |
 | Refinement | Qwen3 0.6B: 397 MB; new models: approximately 1.28–3.35 GB |
 
 Models are stored in:
@@ -142,8 +174,8 @@ Open **Models** to view, prepare, or remove models.
 
 | Data | Storage behavior |
 | --- | --- |
-| Recordings | Temporary files, deleted after processing |
-| Latest transcript | Kept in memory for review, copy, and re-insertion |
+| Recordings | Saved locally for the chosen history retention period; temporary when history is off |
+| Latest transcript | Kept in memory; raw and final outputs also saved to SQLite when history is on |
 | Models | Stored locally until you remove them |
 | Clipboard | Used briefly when needed, with restoration attempted |
 

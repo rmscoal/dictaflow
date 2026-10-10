@@ -105,6 +105,10 @@ actor SQLiteHistoryStore: HistoryStoreProtocol {
             try db.execute(sql: "ALTER TABLE transcription_results ADD COLUMN completedAt REAL")
             try db.execute(sql: "ALTER TABLE refinement_results ADD COLUMN completedAt REAL")
         }
+        migrator.registerMigration("history-v3-tone-output") { db in
+            try db.execute(sql: "ALTER TABLE transcription_results ADD COLUMN finalText TEXT")
+            try db.execute(sql: "ALTER TABLE refinement_results ADD COLUMN finalText TEXT")
+        }
         try migrator.migrate(queue)
         try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: root.appendingPathComponent("history.sqlite").path)
         database = queue
@@ -236,7 +240,7 @@ actor SQLiteHistoryStore: HistoryStoreProtocol {
     func finishTranscription(_ attemptID: UUID, result: WhisperTranscriptionResult?, error: String?) throws {
         let payload = try result.map { try JSONEncoder().encode($0) }
         try open().write { db in
-            try db.execute(sql: "UPDATE transcription_results SET status = ?, result = ?, text = ?, error = ?, completedAt = ? WHERE id = ? AND status = 'running' AND recordingID IN (SELECT id FROM recordings WHERE state = 'ready')", arguments: [result == nil ? "failed" : "succeeded", payload, result?.text, error, result?.completedAt.timeIntervalSince1970 ?? Date().timeIntervalSince1970, attemptID.uuidString])
+            try db.execute(sql: "UPDATE transcription_results SET status = ?, result = ?, text = ?, finalText = ?, error = ?, completedAt = ? WHERE id = ? AND status = 'running' AND recordingID IN (SELECT id FROM recordings WHERE state = 'ready')", arguments: [result == nil ? "failed" : "succeeded", payload, result?.text, result?.insertionText, error, result?.completedAt.timeIntervalSince1970 ?? Date().timeIntervalSince1970, attemptID.uuidString])
             guard db.changesCount == 1 else { throw HistoryStoreError.unavailable }
         }
     }
@@ -253,15 +257,15 @@ actor SQLiteHistoryStore: HistoryStoreProtocol {
     func finishRefinement(_ attemptID: UUID, result: TranscriptRefinementResult?, error: String?) throws {
         let payload = try result.map { try JSONEncoder().encode($0) }
         try open().write { db in
-            try db.execute(sql: "UPDATE refinement_results SET status = ?, result = ?, text = ?, error = ?, completedAt = ? WHERE id = ? AND status = 'running' AND transcriptionID IN (SELECT t.id FROM transcription_results t JOIN recordings r ON r.id = t.recordingID WHERE r.state = 'ready')", arguments: [result == nil ? "failed" : "succeeded", payload, result?.refinedText, error, result?.completedAt.timeIntervalSince1970 ?? Date().timeIntervalSince1970, attemptID.uuidString])
+            try db.execute(sql: "UPDATE refinement_results SET status = ?, result = ?, text = ?, finalText = ?, error = ?, completedAt = ? WHERE id = ? AND status = 'running' AND transcriptionID IN (SELECT t.id FROM transcription_results t JOIN recordings r ON r.id = t.recordingID WHERE r.state = 'ready')", arguments: [result == nil ? "failed" : "succeeded", payload, result?.refinedText, result?.insertionText, error, result?.completedAt.timeIntervalSince1970 ?? Date().timeIntervalSince1970, attemptID.uuidString])
             guard db.changesCount == 1 else { throw HistoryStoreError.unavailable }
         }
     }
 
     private static let summarySQL = """
         SELECT r.*,
-          COALESCE((SELECT f.text FROM refinement_results f JOIN transcription_results t ON t.id = f.transcriptionID WHERE t.id = (SELECT id FROM transcription_results WHERE recordingID = r.id AND status = 'succeeded' ORDER BY startedAt DESC, id DESC LIMIT 1) AND f.status = 'succeeded' ORDER BY f.startedAt DESC, f.id DESC LIMIT 1),
-                   (SELECT text FROM transcription_results t WHERE t.recordingID = r.id AND t.status = 'succeeded' ORDER BY t.startedAt DESC LIMIT 1), '') AS preview,
+          COALESCE((SELECT COALESCE(f.finalText, f.text) FROM refinement_results f JOIN transcription_results t ON t.id = f.transcriptionID WHERE t.id = (SELECT id FROM transcription_results WHERE recordingID = r.id AND status = 'succeeded' ORDER BY startedAt DESC, id DESC LIMIT 1) AND f.status = 'succeeded' ORDER BY f.startedAt DESC, f.id DESC LIMIT 1),
+                   (SELECT COALESCE(t.finalText, t.text) FROM transcription_results t WHERE t.recordingID = r.id AND t.status = 'succeeded' ORDER BY t.startedAt DESC LIMIT 1), '') AS preview,
           COALESCE((SELECT status FROM transcription_results t WHERE t.recordingID = r.id ORDER BY startedAt DESC LIMIT 1), 'unprocessed') AS status
         FROM recordings r
         """
@@ -285,10 +289,10 @@ actor SQLiteHistoryStore: HistoryStoreProtocol {
         try open().read { db in
             let rows = try Row.fetchAll(db, sql: Self.summarySQL + "\n" + """
                 WHERE r.state = 'ready' AND r.expiresAt > ? AND
-                  (? = '' OR EXISTS (SELECT 1 FROM transcription_results t WHERE t.recordingID = r.id AND instr(lower(COALESCE(t.text, '')), lower(?)) > 0)
-                   OR EXISTS (SELECT 1 FROM refinement_results f JOIN transcription_results t ON t.id = f.transcriptionID WHERE t.recordingID = r.id AND instr(lower(COALESCE(f.text, '')), lower(?)) > 0))
+                  (? = '' OR EXISTS (SELECT 1 FROM transcription_results t WHERE t.recordingID = r.id AND (instr(lower(COALESCE(t.text, '')), lower(?)) > 0 OR instr(lower(COALESCE(t.finalText, '')), lower(?)) > 0))
+                   OR EXISTS (SELECT 1 FROM refinement_results f JOIN transcription_results t ON t.id = f.transcriptionID WHERE t.recordingID = r.id AND (instr(lower(COALESCE(f.text, '')), lower(?)) > 0 OR instr(lower(COALESCE(f.finalText, '')), lower(?)) > 0)))
                 ORDER BY r.capturedAt DESC, r.id DESC LIMIT ? OFFSET ?
-                """, arguments: [Date().timeIntervalSince1970, search, search, search, min(max(limit, 1), 100), max(offset, 0)])
+                """, arguments: [Date().timeIntervalSince1970, search, search, search, search, search, min(max(limit, 1), 100), max(offset, 0)])
             return try rows.map(entry)
         }
     }
