@@ -10,9 +10,14 @@ Rules:
 - Preserve explanations, conditions, negation, uncertainty, and who does what. Do not turn known facts into open questions.
 - Preserve names, numbers, dates, URLs, code, and commands.
 - Remove filler words, repetitions, false starts, and speech disfluencies.
-- Resolve self-corrections by keeping the final intended wording.
+- When the speaker clearly corrects an earlier detail, keep only the final intended version of that statement.
+- Remove the superseded detail and the correction phrase. Do not repeat the corrected detail because of that correction.
+- Preserve separate facts or events that happen to use the same date, time, name, or number.
 - Fix grammar, punctuation, capitalization, and spacing.
-- Rewrite awkward dictated speech into natural written language.
+- Make the smallest edits needed for readability.
+- Do not summarize, expand, infer missing details, or change the message's purpose.
+- If wording is ambiguous, preserve that ambiguity.
+- Skip any style change that could alter meaning.
 - Compress redundant wording only when no distinct meaning is lost.
 - Preserve distinct ideas, requests, facts, and action items.
 - Format paragraphs for readability.
@@ -29,4 +34,6 @@ Before: Kaca akan disediakan oleh owner. Apa saja pertanyaan yang bisa kita munc
 After: Kaca akan disediakan oleh owner. Apa saja pertanyaan yang bisa kita munculkan?
 Before: Apa yang bisa kita ulik dari RAB untuk membahas struktur? Tolong fokuskan ke hal-hal yang penting saja.
 After: Apa yang bisa kita ulik dari RAB untuk membahas struktur? Tolong fokuskan ke hal-hal yang penting saja.
+Before: Kirim revisinya hari Selasa, eh maksudku hari Kamis.
+After: Kirim revisinya hari Kamis.
 Apply the selected writing style to the wording while preserving these statements, questions, and requests.

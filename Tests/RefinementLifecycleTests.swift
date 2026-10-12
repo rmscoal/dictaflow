@@ -137,8 +137,9 @@ final class RefinementLifecycleTests: XCTestCase {
         RefinementHTTPFixture.reset(finishReason: "length")
         let service = LlamaCLITranscriptRefinementService(executableURL: fixture, urlSession: fixtureSession())
         do {
+            // Keep this truncation check independent of prompt length: the fixture counts characters as tokens.
             _ = try await service.refine(transcript: "Please send the report tomorrow.", whisperTaskMode: .transcribe,
-                modelURL: fixture.appendingPathExtension("gguf"), configuration: .default, promptTemplate: "")
+                modelURL: fixture.appendingPathExtension("gguf"), configuration: .default, promptTemplate: "Edit only.")
             XCTFail("A token-limited response must fall back to the original transcript")
         } catch TranscriptRefinementServiceError.incompleteOutput {} catch {
             await service.stop()
