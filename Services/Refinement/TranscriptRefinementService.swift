@@ -124,7 +124,7 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
 
         This transcript is being edited in parts. The preceding assistant message,
         if present, is earlier output provided only for context. Do not repeat it.
-        Rewrite only the latest user message. Its beginning may be an editable
+        Rewrite only the transcript inside the latest user message. Its beginning may be an editable
         ending from the previous part. Resolve self-corrections across that ending
         and the new speech. Continue list numbering from the earlier output;
         preserve existing item numbers unless the speaker corrects them.
@@ -139,11 +139,7 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
             try Task.checkCancellation()
             let chunk = pending.removeFirst()
             let input = editableEnding.isEmpty ? chunk : editableEnding + "\n\n" + chunk
-            var requestMessages = [["role": "system", "content": rollingInstructions]]
-            if !earlierContext.isEmpty {
-                requestMessages.append(["role": "assistant", "content": earlierContext])
-            }
-            requestMessages.append(["role": "user", "content": input])
+            let requestMessages = messages(instructions: rollingInstructions, text: input, earlierContext: earlierContext)
             // Count the exact multi-turn template, including read-only context.
             let promptTokens = try await promptTokenCount(messages: requestMessages, baseURL: url)
             let inputTokens = try await tokenCount(input, baseURL: url)
@@ -211,8 +207,13 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
         return context
     }
 
-    private func messages(instructions: String, text: String) -> [[String: String]] {
-        [["role": "system", "content": instructions], ["role": "user", "content": text]]
+    private func messages(instructions: String, text: String, earlierContext: String = "") -> [[String: String]] {
+        var messages = [["role": "system", "content": instructions]]
+        if !earlierContext.isEmpty {
+            messages.append(["role": "assistant", "content": earlierContext])
+        }
+        messages.append(["role": "user", "content": RefinementPromptTemplate.sourceMessage(text)])
+        return messages
     }
 
     private func tokenCount(_ text: String, baseURL: URL) async throws -> Int {

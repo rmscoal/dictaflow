@@ -17,6 +17,58 @@ final class RefinementIntegrationTests: XCTestCase {
     func testGemma4E2B() async throws { try await checkModel(.gemma4E2B) }
     func testPhi4Mini() async throws { try await checkModel(.phi4Mini) }
 
+    func testLlama32ThreeBPreservesIndonesianIntent() async throws {
+        let model = RefinementModelDescriptor.llama32ThreeB
+        guard FileManager.default.fileExists(atPath: fixtures.appendingPathComponent(model.filename).path) else {
+            throw XCTSkip("Pinned Llama weights are not installed for intent-preservation checks")
+        }
+        let downloads = WhisperModelDownloadService(modelsDirectoryURL: fixtures)
+        let verified = await downloads.verifiedRefinementModelURL(for: model)
+        let modelURL = try XCTUnwrap(verified)
+        let runtime = try XCTUnwrap(Bundle.main.url(forAuxiliaryExecutable: "llama-server"))
+        let service = LlamaCLITranscriptRefinementService(executableURL: runtime)
+        let configuration = RefinementConfiguration(isEnabled: true, model: model, mode: .casualMessaging)
+        let cases: [(source: String, required: [String], forbidden: [String], questions: Int)] = [
+            (
+                "Oke, ya berarti yang harus di exclude itu adalah kaca dan aluminium, cat interior. Kemudian pekerjaan kaca, kusen dan jendela itu kosong karena akan di provide oleh owner. Bongkaran bangunan lama memang kosong karena ini adalah tanah kosong. Sanitire ini akan di provide nanti. Jadi untuk scope dan exclusion pengerjaan harusnya cukup di struktur dan ME atau mechanical electric. Nah kira-kira apa saja pertanyaan yang bisa kita munculkan dari informasi ini?",
+                ["kaca", "aluminium", "cat interior", "kusen", "jendela", "owner", "tanah kosong", "struktur", "ME", "pertanyaan"],
+                ["siapa yang akan", "apakah sudah"], 1
+            ),
+            (
+                "Oke kita fokus ke scope struktur. Apa yang bisa kita ulik dari RAB untuk membahas struktur? Tolong fokuskan ke hal-hal yang penting saja.",
+                ["struktur", "RAB", "fokus", "penting"],
+                ["alokasi sumber daya", "pengelolaan risiko", "berikut beberapa"], 1
+            ),
+            (
+                "Siapa yang menyediakan kaca? Apakah cat interior termasuk scope?",
+                ["siapa", "kaca", "apakah", "cat interior", "scope"], [], 2
+            ),
+            (
+                "Owner akan menyediakan kaca. Cat interior tidak termasuk scope. Jadwalnya mungkin berubah.",
+                ["owner", "kaca", "cat interior", "tidak", "scope", "mungkin"], [], 0
+            )
+        ]
+        do {
+            for sample in cases {
+                for _ in 0..<3 {
+                    let result = try await service.refine(transcript: sample.source, whisperTaskMode: .transcribe,
+                        modelURL: modelURL, configuration: configuration,
+                        promptTemplate: RefinementPromptTemplate.template(for: .casualMessaging))
+                    for term in sample.required {
+                        XCTAssertTrue(result.refinedText.localizedCaseInsensitiveContains(term), "Missing source detail: \(term)")
+                    }
+                    for term in sample.forbidden {
+                        XCTAssertFalse(result.refinedText.localizedCaseInsensitiveContains(term), "Invented answer or question: \(term)")
+                    }
+                    XCTAssertEqual(result.refinedText.filter { $0 == "?" }.count, sample.questions)
+                    XCTAssertFalse(result.refinedText.contains("<transcript>"))
+                    XCTAssertFalse(result.refinedText.contains("</transcript>"))
+                }
+            }
+        } catch { await service.stop(); throw error }
+        await service.stop()
+    }
+
     private func checkModel(_ model: RefinementModelDescriptor) async throws {
         guard FileManager.default.fileExists(atPath: fixtures.appendingPathComponent(model.filename).path) else {
             throw XCTSkip("Pinned \(model.displayName) weights are not installed")
