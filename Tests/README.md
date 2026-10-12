@@ -226,7 +226,10 @@ downloads its encoder through the existing encoder path. Check cancellation in
 both stages and retry after a model or encoder failure. Cancelling the model
 stage must not start the encoder; an encoder failure must keep the downloaded
 model. The installed-model menu offers “Download Encoder” when missing and
-“Use Encoder” when installed. Removal must confirm and remove the model together
+“Use Encoder” when installed. While an encoder downloads for an inactive,
+downloaded model, “Use model” must remain available. Selecting the model must
+leave the encoder downloading, and “Cancel encoder” must stop only the encoder
+download. Removal must confirm and remove the model together
 with its encoder, including a disabled encoder. Switch away from the active
 model before removing it; keep at least one downloaded speech model.
 

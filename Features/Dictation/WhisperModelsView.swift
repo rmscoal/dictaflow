@@ -63,10 +63,9 @@ struct WhisperModelsView: View {
                         .font(.caption).foregroundStyle(AppTheme.secondaryText)
                 }
                 Spacer()
-                if downloadingModel || downloadingEncoder {
+                if downloadingModel {
                     Button("Cancel") {
-                        if downloadingModel { appState.cancelWhisperModelDownload(model) }
-                        if downloadingEncoder { appState.cancelWhisperEncoderDownload(model) }
+                        appState.cancelWhisperModelDownload(model)
                     }.controlSize(.small)
                 } else if active {
                     HStack(spacing: 12) {
@@ -106,7 +105,8 @@ struct WhisperModelsView: View {
             if downloadingEncoder {
                 downloadProgress(
                     appState.whisperEncoderDownloadProgress(for: model),
-                    status: "Downloading encoder · \(appState.whisperEncoderDownloadStatusText(for: model))"
+                    status: "Downloading encoder · \(appState.whisperEncoderDownloadStatusText(for: model))",
+                    cancelEncoder: { appState.cancelWhisperEncoderDownload(model) }
                 )
             }
             if let error = appState.whisperDownloadError(for: model) {
@@ -157,9 +157,15 @@ struct WhisperModelsView: View {
         .accessibilityLabel("Actions for \(model.displayName)")
     }
 
-    private func downloadProgress(_ progress: Double?, status: String) -> some View {
+    private func downloadProgress(_ progress: Double?, status: String, cancelEncoder: (() -> Void)? = nil) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(status).font(.caption).foregroundStyle(AppTheme.secondaryText)
+            HStack {
+                Text(status).font(.caption).foregroundStyle(AppTheme.secondaryText)
+                if let cancelEncoder {
+                    Spacer()
+                    Button("Cancel encoder", action: cancelEncoder).controlSize(.small)
+                }
+            }
             ProgressView(value: progress)
                 .progressViewStyle(.linear)
                 .tint(AppTheme.accent)
