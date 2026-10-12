@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var isShowingHelp = false
     @State private var isSidebarCollapsed = false
     @State private var isShowingModelPreparationConfirmation = false
+    @State private var downloadIncludesEncoder = false
     @State private var isShowingEncoderDownloadConfirmation = false
     @State private var isShowingRefinementModelPreparationConfirmation = false
     @State private var isShowingWhisperModelDeletionConfirmation = false
@@ -51,18 +52,24 @@ struct ContentView: View {
             Text(appState.recordingFailureMessage ?? "Check your microphone and sound output, then try again.")
         }
         .alert(
-            "Download \(selectedModel.displayName) Model?",
+            "Download \(selectedModel.displayName)\(downloadIncludesEncoder ? " with Encoder" : " Model")?",
             isPresented: $isShowingModelPreparationConfirmation
         ) {
             Button("Cancel", role: .cancel) {}
-            Button("Download Model") {
-                appState.downloadWhisperModel(selectedModel)
+            Button(downloadIncludesEncoder ? "Download Both" : "Download Model") {
+                if downloadIncludesEncoder {
+                    appState.downloadWhisperModelWithEncoder(selectedModel)
+                } else {
+                    appState.downloadWhisperModel(selectedModel)
+                }
             }
         } message: {
-            Text("DictaFlow will download \(selectedModel.displayName) locally in the background. Your current model stays selected until you switch.")
+            Text(downloadIncludesEncoder
+                 ? "DictaFlow will download the \(selectedModel.approximateDiskSizeDescription) model, then its \(selectedModel.encoderApproximateSizeDescription) encoder. Your current model stays selected until you switch."
+                 : "DictaFlow will download \(selectedModel.displayName) locally in the background. Your current model stays selected until you switch.")
         }
         .alert(
-            "Download \(selectedModel.displayName) Neural Engine Encoder?",
+            "Download \(selectedModel.displayName) Encoder?",
             isPresented: $isShowingEncoderDownloadConfirmation
         ) {
             Button("Cancel", role: .cancel) {}
@@ -96,20 +103,22 @@ struct ContentView: View {
             Text(unusedModelDeletionConfirmationText)
         }
         .alert(
-            "Delete \(whisperModelPendingDeletion?.displayName ?? "Whisper Model")?",
+            "Remove \(whisperModelPendingDeletion?.displayName ?? "Whisper Model")\(whisperModelPendingDeletionHasEncoder ? " and its encoder" : "")?",
             isPresented: $isShowingWhisperModelDeletionConfirmation
         ) {
             Button("Cancel", role: .cancel) {
                 whisperModelPendingDeletion = nil
             }
-            Button("Delete Model", role: .destructive) {
+            Button("Remove", role: .destructive) {
                 if let model = whisperModelPendingDeletion {
                     appState.deleteWhisperModel(model)
                 }
                 whisperModelPendingDeletion = nil
             }
         } message: {
-            Text("This permanently deletes the local model file and its Neural Engine encoder, if downloaded. DictaFlow keeps at least one downloaded Whisper model, and the active model cannot be deleted.")
+            Text(whisperModelPendingDeletionHasEncoder
+                 ? "The model and its encoder will be removed from this Mac. You can download them again later."
+                 : "The model will be removed from this Mac. You can download it again later.")
         }
         .alert(
             "Delete \(refinementModelPendingDeletion?.displayName ?? "Refinement Model")?",
@@ -127,6 +136,10 @@ struct ContentView: View {
         } message: {
             Text("This permanently deletes the local model file. Only inactive models can be deleted.")
         }
+    }
+
+    private var whisperModelPendingDeletionHasEncoder: Bool {
+        whisperModelPendingDeletion.map { appState.isWhisperEncoderDownloaded($0) } ?? false
     }
 
     @ViewBuilder
@@ -403,6 +416,7 @@ struct ContentView: View {
                                 if appState.isDownloadingWhisperModel(model) {
                                     return
                                 } else if !isPrepared {
+                                    downloadIncludesEncoder = false
                                     isShowingModelPreparationConfirmation = true
                                 } else if !isActive {
                                     appState.updateWhisperModel(model)
@@ -646,9 +660,6 @@ struct ContentView: View {
         DetailPage {
             VStack(alignment: .leading, spacing: 18) {
                 dictationTabs
-                Text("\(appState.whisperConfiguration.taskMode == .translateToEnglish ? "Translate" : "Transcribe") → \(appState.refinementConfiguration.isEnabled ? "Refine locally" : "Refinement off") → \(appState.textTone == .original ? "Tone unchanged" : appState.textTone.title + " tone") → Insert")
-                    .font(.caption).foregroundStyle(AppTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
                 switch appState.dictationSettingsTab {
                 case .transcription: transcriptionSettings
                 case .refinement: RefinementSettingsView(appState: appState)
@@ -734,10 +745,18 @@ struct ContentView: View {
             FormSectionTitle("Speech model")
             WhisperModelsView(appState: appState, downloadModel: { model in
                 selectedModel = model
+                downloadIncludesEncoder = false
                 isShowingModelPreparationConfirmation = true
             }, downloadEncoder: { model in
                 selectedModel = model
                 isShowingEncoderDownloadConfirmation = true
+            }, downloadModelWithEncoder: { model in
+                selectedModel = model
+                downloadIncludesEncoder = true
+                isShowingModelPreparationConfirmation = true
+            }, removeModel: { model in
+                whisperModelPendingDeletion = model
+                isShowingWhisperModelDeletionConfirmation = true
             })
             Divider().overlay(AppTheme.border).padding(.vertical, 10)
 
@@ -807,6 +826,8 @@ struct ContentView: View {
                 .padding(13)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            Divider().overlay(AppTheme.border).padding(.vertical, 10)
 
             FormSectionTitle("Custom vocabulary")
                 .padding(.top, 7)

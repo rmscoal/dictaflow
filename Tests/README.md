@@ -215,8 +215,22 @@ inserted/copied text, and retrieving the original. `HistoryStoreTests` checks ra
 and final search/preview, saved rule versions, and upgrade from the v2 schema.
 
 In the installed Dev app, check Dictation's three tabs, all six Whisper cards,
-encoder expansion before and after speech-model download, and the existing
+split download buttons and installed-model menus, and the existing
 refinement provider/model and DIY controls. Check narrow-window layouts and
 that sound cues and custom vocabulary remain below speech models. Tone preview
 should update without enabling refinement. Verify download/progress/cancel and
 encoder on/off with real artifacts when available.
+
+“Download with Encoder” downloads and verifies the speech model first, then
+downloads its encoder through the existing encoder path. Check cancellation in
+both stages and retry after a model or encoder failure. Cancelling the model
+stage must not start the encoder; an encoder failure must keep the downloaded
+model. The installed-model menu offers “Download Encoder” when missing and
+“Use Encoder” when installed. Removal must confirm and remove the model together
+with its encoder, including a disabled encoder. Switch away from the active
+model before removing it; keep at least one downloaded speech model.
+
+`RecordingStartupTests` also checks combined download order, cancellation with
+late completion, model failure followed by a plain retry, and encoder failure
+followed by an encoder-only retry. These checks use synthetic download services
+and do not download weights.

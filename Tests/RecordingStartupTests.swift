@@ -380,6 +380,95 @@ final class RecordingStartupTests: XCTestCase {
         // StartupInsertionService also fails on any insertion or clipboard write.
     }
 
+    func testCombinedWhisperDownloadStartsEncoderAfterModelSucceeds() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        let encoderStarted = expectation(description: "Encoder starts after verified model download")
+        service.onEncoderDownload = {
+            XCTAssertTrue(service.isWhisperModelPrepared(.tiny))
+            encoderStarted.fulfill()
+        }
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+
+        fixture.state.downloadWhisperModelWithEncoder(.tiny)
+        await fulfillment(of: [encoderStarted], timeout: 2)
+        XCTAssertEqual(service.downloadRequests, ["whisper.tiny", "whisper.tiny.encoder"])
+        XCTAssertEqual(fixture.state.whisperConfiguration.model, .small)
+    }
+
+    func testFailedCombinedModelDownloadDoesNotQueueEncoderOnPlainRetry() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        service.onModelDownload = { throw ModelDownloadServiceError.checksumMismatch }
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+        let failed = expectation(description: "Model verification failure is surfaced")
+        let failureObservation = fixture.state.$whisperDownloadErrors.sink {
+            if $0[.tiny] != nil { failed.fulfill() }
+        }
+        fixture.state.downloadWhisperModelWithEncoder(.tiny)
+        await fulfillment(of: [failed], timeout: 2)
+        failureObservation.cancel()
+        XCTAssertEqual(service.downloadRequests, ["whisper.tiny"])
+
+        service.onModelDownload = nil
+        let completed = expectation(description: "Plain model retry completes")
+        let completionObservation = fixture.state.$whisperDownloads.sink {
+            if $0[.tiny] == nil && service.isWhisperModelPrepared(.tiny) { completed.fulfill() }
+        }
+        fixture.state.downloadWhisperModel(.tiny)
+        await fulfillment(of: [completed], timeout: 2)
+        completionObservation.cancel()
+        XCTAssertEqual(service.downloadRequests, ["whisper.tiny", "whisper.tiny"])
+    }
+
+    func testCancellingCombinedDownloadPreventsEncoderEvenIfModelFinishes() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        var continuation: CheckedContinuation<Void, Never>?
+        let started = expectation(description: "Model download is in flight")
+        service.onModelDownload = {
+            await withCheckedContinuation { continuation = $0; started.fulfill() }
+        }
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+        fixture.state.downloadWhisperModelWithEncoder(.tiny)
+        await fulfillment(of: [started], timeout: 2)
+        fixture.state.cancelWhisperModelDownload(.tiny)
+        let completed = expectation(description: "Late completion is handled")
+        let observation = fixture.state.$whisperDownloads.sink {
+            if $0[.tiny] == nil { completed.fulfill() }
+        }
+        continuation?.resume()
+        await fulfillment(of: [completed], timeout: 2)
+        observation.cancel()
+        XCTAssertEqual(service.downloadRequests, ["whisper.tiny"])
+    }
+
+    func testCombinedEncoderFailureKeepsDownloadedModelForEncoderRetry() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        service.encoderDownloadError = ModelDownloadServiceError.checksumMismatch
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+        let failed = expectation(description: "Encoder failure is surfaced")
+        let observation = fixture.state.$whisperEncoderDownloadErrors.sink {
+            if $0[.tiny] != nil { failed.fulfill() }
+        }
+        fixture.state.downloadWhisperModelWithEncoder(.tiny)
+        await fulfillment(of: [failed], timeout: 2)
+        observation.cancel()
+        XCTAssertTrue(fixture.state.isWhisperModelPrepared(.tiny))
+        service.encoderDownloadError = nil
+        let retried = expectation(description: "Only encoder is retried")
+        service.onEncoderDownload = { retried.fulfill() }
+        fixture.state.downloadWhisperModelWithEncoder(.tiny)
+        await fulfillment(of: [retried], timeout: 2)
+        XCTAssertEqual(service.downloadRequests, ["whisper.tiny", "whisper.tiny.encoder", "whisper.tiny.encoder"])
+        XCTAssertEqual(fixture.state.whisperConfiguration.model, .small)
+    }
+
     func testEncoderDownloadUsesDedicatedWarmupInsteadOfTranscription() async throws {
         let warmed = expectation(description: "Encoder warmup is called")
         let whisper = PipelineWhisperService(onWarmup: { warmed.fulfill() })
@@ -574,6 +663,7 @@ private final class RecordingStartupFixture {
         whisper: WhisperServiceProtocol = WhisperCPPService(),
         refinement: TranscriptRefinementServiceProtocol = LlamaCLITranscriptRefinementService(),
         usePipelineModels: Bool = false,
+        modelDownloadService: ModelDownloadServiceProtocol? = nil,
         refinementEnabled: Bool? = nil,
         historyStore: HistoryStoreProtocol? = nil,
         promptStore: RefinementPromptStoreProtocol? = nil,
@@ -596,9 +686,9 @@ private final class RecordingStartupFixture {
             audioRecorderService: recorder, audioOutputVolumeService: volume,
             soundCueService: cues,
             hotkeyService: StartupHotkeyService(),
-            modelDownloadService: usePipelineModels
+            modelDownloadService: modelDownloadService ?? (usePipelineModels
                 ? PipelineModelDownloadService(modelsDirectoryURL: directory)
-                : WhisperModelDownloadService(modelsDirectoryURL: directory),
+                : WhisperModelDownloadService(modelsDirectoryURL: directory)),
             whisperService: whisper,
             transcriptRefinementService: refinement,
             refinementPromptStore: promptStore ?? StartupPromptStore(directory: directory),
@@ -810,24 +900,35 @@ private actor PipelineRefinementService: TranscriptRefinementServiceProtocol {
 @MainActor
 private final class PipelineModelDownloadService: ModelDownloadServiceProtocol {
     let modelsDirectoryURL: URL
+    var preparedModels: Set<WhisperModelDescriptor>?
+    var downloadRequests: [String] = []
+    var onModelDownload: (() async throws -> Void)?
+    var onEncoderDownload: (() -> Void)?
+    var encoderDownloadError: Error?
     init(modelsDirectoryURL: URL) { self.modelsDirectoryURL = modelsDirectoryURL }
     func installedModelFiles() -> [LocalModelFile] { [] }
     func deleteModelFiles(_ files: [LocalModelFile]) async throws -> Int64 { 0 }
     func cancelDownload(modelIdentifier: String) {}
     func removeIncompleteDownloads() -> Int64 { 0 }
-    func isWhisperModelPrepared(_ model: WhisperModelDescriptor) -> Bool { true }
+    func isWhisperModelPrepared(_ model: WhisperModelDescriptor) -> Bool { preparedModels?.contains(model) ?? true }
     func verifiedWhisperModelURL(for model: WhisperModelDescriptor) async -> URL? {
         modelsDirectoryURL.appendingPathComponent(model.filename)
     }
     func ensureModelAvailable(_ model: WhisperModelDescriptor, progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void) async throws -> URL {
-        modelsDirectoryURL.appendingPathComponent(model.filename)
+        downloadRequests.append(model.modelIdentifier)
+        try await onModelDownload?()
+        preparedModels?.insert(model)
+        return modelsDirectoryURL.appendingPathComponent(model.filename)
     }
     func isWhisperEncoderPrepared(_ model: WhisperModelDescriptor) -> Bool { true }
     func isWhisperEncoderDownloaded(_ model: WhisperModelDescriptor) -> Bool { false }
     func setWhisperEncoderEnabled(_ enabled: Bool, for model: WhisperModelDescriptor) async throws {}
     func removeOrphanedEncoders() -> Int64 { 0 }
     func ensureWhisperEncoderAvailable(_ model: WhisperModelDescriptor, progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void) async throws -> URL {
-        modelsDirectoryURL.appendingPathComponent(model.encoderDirectoryName)
+        downloadRequests.append(model.encoderModelIdentifier)
+        if let encoderDownloadError { throw encoderDownloadError }
+        onEncoderDownload?()
+        return modelsDirectoryURL.appendingPathComponent(model.encoderDirectoryName)
     }
     func deleteWhisperEncoder(_ model: WhisperModelDescriptor) async throws -> Int64 { 0 }
     func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool { true }

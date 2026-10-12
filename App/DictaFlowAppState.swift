@@ -153,6 +153,7 @@ final class DictaFlowAppState: ObservableObject {
     private var savedPresetInstructions: [String: String] = [:]
     private var savedRefinementPromptText: String
     private var activeWhisperDownloadTokens: [WhisperModelDescriptor: UUID] = [:]
+    private var whisperModelsPendingEncoderDownload: Set<WhisperModelDescriptor> = []
     private var activeRefinementDownloadTokens: [RefinementModelDescriptor: UUID] = [:]
     private var activeWhisperEncoderDownloadTokens: [WhisperModelDescriptor: UUID] = [:]
 
@@ -1260,6 +1261,18 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    func downloadWhisperModelWithEncoder(_ model: WhisperModelDescriptor) {
+        if isWhisperModelPrepared(model) {
+            downloadWhisperEncoder(model)
+            return
+        }
+
+        guard !isDownloadingWhisperModel(model) else { return }
+        // Use the existing verified downloads, with the encoder starting only after the model succeeds.
+        whisperModelsPendingEncoderDownload.insert(model)
+        downloadWhisperModel(model)
+    }
+
     func downloadWhisperModel(_ model: WhisperModelDescriptor) {
         if isWhisperModelPrepared(model) {
             updateWhisperModel(model)
@@ -1818,6 +1831,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func cancelWhisperModelDownload(_ model: WhisperModelDescriptor) {
+        whisperModelsPendingEncoderDownload.remove(model)
         guard whisperDownloads[model] != nil else {
             return
         }
@@ -2134,6 +2148,9 @@ final class DictaFlowAppState: ObservableObject {
 
         updateStatusMessage()
         refreshInstalledLocalModelFiles()
+        if whisperModelsPendingEncoderDownload.remove(model) != nil {
+            downloadWhisperEncoder(model)
+        }
     }
 
     private func discardWhisperDownload(_ model: WhisperModelDescriptor, token: UUID) {
@@ -2142,6 +2159,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         activeWhisperDownloadTokens[model] = nil
+        whisperModelsPendingEncoderDownload.remove(model)
         whisperDownloads[model] = nil
         setPreservedStatusMessage("Cancelled the \(model.displayName) download. The partial file was removed. Downloading again starts from the beginning.")
         updateStatusMessage()
@@ -2153,6 +2171,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         activeWhisperDownloadTokens[model] = nil
+        whisperModelsPendingEncoderDownload.remove(model)
         whisperDownloads[model] = nil
         let message = "Could not download \(model.displayName). \(error.localizedDescription)"
         whisperDownloadErrors[model] = message
