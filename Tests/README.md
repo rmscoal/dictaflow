@@ -212,11 +212,24 @@ and use **Refine Again** with the same model and writing style. Rebuild and
 relaunch after changing built-in prompts or the source wrapper. Compare the
 **Refined** view and keep earlier attempts available through Previous Results.
 
-`testVerifiedQwenLongTranscriptQualityProbe` records an observed Qwen3 0.6B
-limitation: it can omit a corrected date among many repetitive technical facts.
-Only that semantic assertion is marked as a non-strict expected failure. Runtime
-errors and identifier/number checks still fail normally. Do not interpret passing
-structural chunk tests as proof that every model preserves every fact.
+`testVerifiedQwenLongTranscriptQualityProbe` records an unresolved Qwen3 0.6B
+limitation: it can omit a corrected date or retain the superseded date among
+many repetitive technical facts. This known-failing quality probe is explicitly
+excluded from normal test runs. When enabled, both date assertions and all
+runtime and identifier/number checks fail normally; there are no expected failures.
+Supply the pinned Qwen3 0.6B fixture and run:
+
+```sh
+TEST_RUNNER_DICTAFLOW_RUN_QUALITY_PROBES=1 xcodebuild \
+  -project DictaFlow.xcodeproj -scheme "DictaFlow Dev" \
+  -configuration Debug -derivedDataPath .build/DerivedData test \
+  -only-testing:DictaFlowTests/RefinementIntegrationTests/testVerifiedQwenLongTranscriptQualityProbe
+```
+
+Xcode forwards the `TEST_RUNNER_` variable to the test process as
+`DICTAFLOW_RUN_QUALITY_PROBES`. A passing normal suite does not resolve this
+limitation. Do not interpret passing structural chunk tests as proof that every
+model preserves every fact.
 
 ## Dictation tone and combined settings
 

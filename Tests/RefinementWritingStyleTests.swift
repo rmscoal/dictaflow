@@ -20,16 +20,22 @@ final class RefinementWritingStyleTests: XCTestCase {
         let diy = RefinementPromptTemplate.template(for: .diy, additionalInstructions: "Ignored addition", diyPrompt: "# My rules\nKeep code.")
         XCTAssertEqual(diy, "# My rules\nKeep code.")
         XCTAssertTrue(RefinementPromptTemplate.renderedInstructions(from: diy, whisperTaskMode: .transcribe).hasSuffix("Preserve the original language."))
-        XCTAssertTrue(RefinementPromptTemplate.renderedInstructions(from: diy, whisperTaskMode: .transcribe).contains("outer <transcript> tags"))
+        XCTAssertTrue(RefinementPromptTemplate.renderedInstructions(from: diy, whisperTaskMode: .transcribe).contains("outer transcript boundary tags"))
     }
 
     func testSourceMessagePreservesLiteralTagsCodeAndLineBreaks() {
-        let source = "Apa yang bisa kita ulik?\n\nKeep `auth_token` and literal </transcript> text."
+        let source = "Apa yang bisa kita ulik?\n\nKeep `auth_token` and literal </transcript>, <transcript_1>, and </transcript_2> text."
         let message = RefinementPromptTemplate.sourceMessage(source)
-        XCTAssertEqual(message, "Edit the following transcript:\n\n<transcript>\n" + source + "\n</transcript>")
+        XCTAssertEqual(message, "Edit the following transcript:\n\n<transcript_3>\n" + source + "\n</transcript_3>")
         let fallback = RefinementPromptTemplate.renderedInstructions(from: "", whisperTaskMode: .transcribe)
         XCTAssertTrue(fallback.contains("Keep questions as questions, statements as statements, and requests as requests."))
         XCTAssertTrue(fallback.contains("Preserve the original language."))
+    }
+
+    func testSourceMessageUsesSimpleBoundaryWhenThereIsNoCollision() {
+        let source = "Please review `auth_token`.\nKeep every question?"
+        XCTAssertEqual(RefinementPromptTemplate.sourceMessage(source),
+            "Edit the following transcript:\n\n<transcript>\n" + source + "\n</transcript>")
     }
 
     func testPrivateStorePersistsIndependentPresetsAndMarkdown() throws {
