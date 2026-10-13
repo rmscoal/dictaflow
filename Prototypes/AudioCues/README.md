@@ -20,10 +20,10 @@ immediately. Muting remembers the style and stops pending playback. Style change
 and previews are disabled during dictation; the mute switch remains available.
 
 - Start plays asynchronously after microphone capture starts. Capture does not
-  wait for the cue to finish. It plays through the recording's `AVAudioEngine`
-  with Apple's native voice processing enabled, so echo cancellation can reduce
-  speaker playback in microphone input. Capture is not trimmed or muted during
-  the cue. For best results on speakers, speak after the start sound.
+  wait for the cue to finish. It plays through a standalone `AVAudioPlayer`,
+  separate from microphone capture. Capture is not trimmed or muted during the
+  cue. Without echo cancellation, a speaker-played cue can reach the microphone.
+  Use headphones or turn cues off if this affects transcription.
   If system volume lowering is enabled, it happens
   after the cue finishes so its volume stays steady. With cues off, lowering
   starts immediately after capture begins. Stop/cancel cancels pending start
@@ -41,61 +41,50 @@ and previews are disabled during dictation; the mute switch remains available.
 Cues play sequentially to prevent overlap. Stop/error playback does not
 hold up transcription or insertion. Starting dictation interrupts previews and
 old cues. Playback failures appear in the Sound cues section and do not block
-dictation. Audio data is local; players are cached for the selected style and
-prepared only when needed. No network calls, runtime synthesis, or idle audio
+dictation. Audio data is local; unused players are cached for the selected style
+and each playback reserves its own player so delayed callbacks cannot stop a
+newer cue. Players are prepared only when needed. No network calls, runtime synthesis, or idle audio
 processing are added.
 
 ## Responsive startup
 
-After microphone permission is granted, the app prepares the native engine on a
-serial background queue. Preparation does not start audio hardware or create a
-recording file. A shortcut shows a cancellable Starting pill immediately. The
-start cue still plays only after hardware capture starts, so it means the
-microphone is ready. Start/stop and AAC finalization never block the UI thread.
+The app prepares an `AVAudioRecorder` on a serial background queue only after a
+recording request and microphone permission approval. Launch and permission
+approval alone cache sound files without preparing microphone I/O. The shortcut
+shows a cancellable Starting pill immediately. The start cue plays only after
+hardware capture starts. Recorder preparation, start/stop, and AAC finalization
+stay off the UI thread.
 
-Stop/cancel pauses audio hardware, detaches the capture sink, drains the writer,
-and retains the engine graph and tap. The next recording gets a fresh private
-AAC file and sink without rebuilding voice processing. No idle samples are stored.
-Device configuration changes invalidate the prepared graph; the next start
-rebuilds it. An interrupted active capture still fails visibly. Quitting shuts
-hardware down and removes a pending temporary capture.
+Stop/cancel releases the recorder, metering timer, delegate, and input-device
+observer. Preparation failures also release audio I/O, including failures before
+a recording file exists. Each recording uses a fresh recorder with the current
+input device. Logs report preparation time, capture readiness, and release time.
+Use the opt-in hardware tests in `Tests/README.md` to compare capture APIs and
+verify real AAC data and cleanup.
 
-Initial permission approval, recording immediately during app startup, or an
-audio-device change can require cold preparation. The pill remains responsive
-and cancellable during that work. Logs report background preparation time,
-request acknowledgement, capture readiness, and whether idle hardware is stopped.
-These are measured service timings, not a claim of identical audible latency on
-every output route.
+## Microphone capture and playback
 
-## Native echo cancellation
+The [audio capture README](../../Docs/Audio/README.md) explains the recorder
+choice, measured latency, and the AUHAL option for a later comparison.
 
-The recorder uses `AVAudioEngine` voice processing throughout each recording,
-including when cues are disabled. The start cue uses a player node in that same
-engine. The microphone feeds a capture tap only, never the output mixer, to avoid
-live microphone feedback. Stop, error, and settings previews use the standalone
-player after capture ends; previews never start microphone input.
+The recorder uses mono AAC at 44.1 kHz without native Voice Processing I/O.
+Voice processing reduced other apps' playback volume even before capture started
+and added substantial preparation latency. `AVAudioRecorder` writes AAC directly;
+its meter feeds the waveform through a lock-protected status snapshot. Device
+changes, encoding errors, and unexpected stops are reported rather than silently
+transcribing a failed capture. File protection and private local storage are
+preserved.
 
-Capture and output use the same explicit mono client format. This is required by
-Voice Processing I/O and avoids encoding the aggregate device's microphone and
-reference channel layout as AAC. Recording failures appear in a main-window alert
-as well as status text; write failures also log their system error domain/code.
+All cues and previews use standalone `AVAudioPlayer` instances. Capture never
+connects microphone audio to playback. With System audio set to Unchanged,
+DictaFlow does not lower output volume. The optional Lower setting still applies
+only during recording and restores volume on stop, cancel, failure, or quit.
 
-The meter and AAC recording use the same processed microphone buffers. A bounded
-pool copies tap buffers before they can be reused; a serial writer performs AAC
-encoding and file I/O away from the tap. Stop/cancel drains accepted buffers and
-closes the file before transcription or deletion. File protection and local
-temporary `.m4a` storage are preserved. Audio hardware is paused while idle; prepared resources are retained for the next recording.
-
-Automatic gain control is disabled to avoid additional microphone level changes.
-Apple's other-audio ducking is set to its minimum, with dynamic ducking disabled.
-Minimum is not a guaranteed zero reduction of other audio; listen with both
-DictaFlow system-volume behaviors. DictaFlow's optional master-volume adjustment
-still happens after the cue and is restored on stop, cancel, interruption, or quit.
-
-If voice processing cannot start, recording fails with an actionable message;
-it does not silently fall back to unprocessed capture. A changed/stopped device,
-write failure, or exhausted buffer pool interrupts capture, restores volume,
-and reports the problem instead of transcribing an incomplete recording.
+There is no native echo cancellation. Speaker playback, including the start cue,
+can reach the microphone. Compare cue-only silence and speech with cues enabled
+and disabled. Headphones or disabled cues reduce this risk. Bluetooth devices
+using their own microphone can still switch to a hands-free profile under macOS;
+use a separate microphone when preserving Bluetooth playback quality matters.
 
 ## Audio format and source
 
@@ -131,22 +120,24 @@ silent players; they never play sound or access the microphone:
 xcrun swiftc -swift-version 5 -default-isolation MainActor \
   Models/SoundCue.swift Models/DictationCapture.swift \
   Services/Audio/AudioRecorderService.swift \
-  Services/Audio/RecordingAudioBufferSink.swift Services/Audio/RecordingAudioEngine.swift \
+  Prototypes/AudioCues/RecordingAudioBufferSink.swift Services/Audio/RecordingAudioWorker.swift \
   Services/Audio/SoundCueService.swift \
   Prototypes/AudioCues/verify-playback.swift -o .build/verify-sound-cue-playback
 .build/verify-sound-cue-playback \
   '.build/DerivedData/Build/Products/Debug/DictaFlow Dev.app'
 ```
 
-Verify the capture writer with synthetic PCM. This creates temporary audio files
-and checks AAC finalization and the actual Whisper decoding service, without
+Verify the historical AVAudioEngine candidate writer with synthetic PCM.
+Production AVAudioRecorder checks are covered by the opt-in hardware tests.
+The synthetic check creates temporary audio files and checks AAC finalization
+and the actual Whisper decoding service, without
 opening a microphone, playing sounds, or creating an audio engine:
 
 ```sh
 xcrun swiftc -swift-version 5 -default-isolation MainActor \
   Models/SoundCue.swift Models/DictationCapture.swift \
   Services/Audio/AudioRecorderService.swift \
-  Services/Audio/RecordingAudioBufferSink.swift Services/Audio/RecordingAudioEngine.swift \
+  Prototypes/AudioCues/RecordingAudioBufferSink.swift Services/Audio/RecordingAudioWorker.swift \
   Services/Audio/SoundCueService.swift \
   Services/Whisper/AudioDecodingService.swift \
   Prototypes/AudioCues/verify-native-capture.swift -o .build/verify-native-capture
@@ -155,13 +146,23 @@ xcrun swiftc -swift-version 5 -default-isolation MainActor \
 
 ## Manual checks
 
+With continuous video or music playback, launch the installed Dev app and leave
+it idle. Playback volume should remain unchanged. Repeat after permission
+approval, a completed recording, cancellation during Starting and recording,
+and an audio-device failure. Compare first and repeated startup timings in the
+AudioCapture logs. With playback set to Unchanged, recording must not duck other
+audio. Check both system-volume behaviors, and confirm the Starting pill remains
+responsive and cancellable.
+
 Run the mock-only coordinator checks for responsive startup, cancellation during
 blocked preparation, cue overlap, mute, volume restoration, interruption/error
 alerts, and termination. These use isolated settings and never capture/play audio
 or change the clipboard or system volume:
 
 ```sh
-python3 Prototypes/AudioCues/verify-recording-flow.py
+xcodebuild -project DictaFlow.xcodeproj -scheme "DictaFlow Dev" \
+  -configuration Debug -derivedDataPath .build/DerivedData \
+  -only-testing:DictaFlowTests/RecordingStartupTests test
 ```
 
 Install the dev app in `/Applications/` before checking real permissions, hotkeys,
@@ -172,10 +173,9 @@ error/manual-copy paths. Verify start/stop cues do not appear in a transcript.
 Actual playback, output-route latency, cue leakage, and perceived quality need
 this listening check; numerical validation does not replace it.
 
-Native echo cancellation reduces speaker leakage but is not a promise of perfect
-removal or unchanged speech on every device. Compare cue-only silence and speech
-starting immediately with cues enabled/disabled, at low/high speaker volume and
+Compare cue-only silence and speech starting immediately with cues enabled/disabled,
+at low/high speaker volume and
 with external microphones. Pay particular attention to first and final words,
 very short recordings, immediate stop/cancel, muting during the start cue, volume
-restoration, and input/output device changes during capture. Check the native
-engine's startup time and Bluetooth mode changes as well as transcript quality.
+restoration, and input/output device changes during capture. Check the recorder's
+startup time and Bluetooth mode changes as well as transcript quality.
