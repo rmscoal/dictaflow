@@ -120,7 +120,7 @@ Local refinement can fix punctuation, repeated wording, and rough sentence
 structure. It is optional. If refinement fails, DictaFlow uses the original
 Whisper transcript with the selected tone.
 
-The Dictation > Refinement tab offers local models from Qwen, Meta Llama, Google Gemma, and
+The Dictation > Refinement tab offers local models from Qwen, Google Gemma, and
 Microsoft Phi. Download a model, then choose **Use model**. Downloading never
 changes the active model. Each row shows file size, estimated model RAM,
 progress, and cancellation. RAM estimates exclude Whisper and other apps.
@@ -266,5 +266,7 @@ context; model accuracy and formatting should be evaluated on real recordings.
 Qwen3 0.6B has also omitted a corrected date in a synthetic long technical passage,
 even with boundary context. Context support does not guarantee factual preservation.
 
-Meta's model section displays “Built with Llama”; its license and notice ship
-in `Resources/ThirdParty`. All inference stays on-device through llama.cpp.
+Meta Llama is no longer supported for refinement. Existing Llama selections keep
+their model name with refinement disabled until a supported model is selected.
+Saved history remains readable, and old weights can be removed through Storage.
+All inference stays on-device through llama.cpp.

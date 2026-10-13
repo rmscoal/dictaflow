@@ -104,6 +104,9 @@ actor LlamaCLITranscriptRefinementService: TranscriptRefinementServiceProtocol {
 
     func refine(transcript: String, whisperTaskMode: WhisperTaskMode, modelURL: URL,
                 configuration: RefinementConfiguration, promptTemplate: String) async throws -> TranscriptRefinementResult {
+        guard RefinementModelDescriptor.allCases.contains(configuration.model) else {
+            throw TranscriptRefinementServiceError.failedToRun("This refinement model is no longer supported. Select another model in Dictation > Refinement.")
+        }
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw TranscriptRefinementServiceError.emptyOutput }
         let url = try await ensureServer(modelURL: modelURL)

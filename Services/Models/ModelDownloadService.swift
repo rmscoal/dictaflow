@@ -40,6 +40,7 @@ enum ModelDownloadServiceError: LocalizedError {
     case invalidLocalModelFile
     case invalidModelDeletionRequest
     case modelDeletionUnavailable
+    case unsupportedRefinementModel
     case encoderExtractionFailed
 
     var errorDescription: String? {
@@ -62,6 +63,8 @@ enum ModelDownloadServiceError: LocalizedError {
             return "DictaFlow can only delete local model files it recognizes."
         case .modelDeletionUnavailable:
             return "A model is still being prepared. Try deleting unused models after it finishes."
+        case .unsupportedRefinementModel:
+            return "This refinement model is no longer supported. Select another model in Dictation > Refinement."
         case .encoderExtractionFailed:
             return "DictaFlow could not unpack the Neural Engine encoder. Try downloading it again."
         }
@@ -115,6 +118,9 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         _ model: RefinementModelDescriptor,
         progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void
     ) async throws -> URL {
+        guard RefinementModelDescriptor.allCases.contains(model) else {
+            throw ModelDownloadServiceError.unsupportedRefinementModel
+        }
         return try await ensureLocalModelAvailable(
             modelIdentifier: model.modelIdentifier,
             filename: model.filename,

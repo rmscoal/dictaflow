@@ -121,25 +121,35 @@ struct ContentView: View {
                  : "The model will be removed from this Mac. You can download it again later.")
         }
         .alert(
-            "Delete \(refinementModelPendingDeletion?.displayName ?? "Refinement Model")?",
+            "Remove \(refinementModelPendingDeletion?.displayName ?? "Refinement Model")?",
             isPresented: $isShowingRefinementModelDeletionConfirmation
         ) {
             Button("Cancel", role: .cancel) {
                 refinementModelPendingDeletion = nil
             }
-            Button("Delete Model", role: .destructive) {
+            Button("Remove Model", role: .destructive) {
                 if let model = refinementModelPendingDeletion {
                     appState.deleteRefinementModel(model)
                 }
                 refinementModelPendingDeletion = nil
             }
+            .disabled(refinementModelPendingDeletion.map { !appState.canDeleteRefinementModel($0) } ?? true)
         } message: {
-            Text("This permanently deletes the local model file. Only inactive models can be deleted.")
+            Text(refinementModelDeletionConfirmationText)
         }
     }
 
     private var whisperModelPendingDeletionHasEncoder: Bool {
         whisperModelPendingDeletion.map { appState.isWhisperEncoderDownloaded($0) } ?? false
+    }
+
+    private var refinementModelDeletionConfirmationText: String {
+        guard let model = refinementModelPendingDeletion else { return "Select an inactive model to remove." }
+        let file = appState.installedLocalModelFiles.first {
+            $0.category == .refinement && $0.modelIdentifier == model.modelIdentifier
+        }
+        let size = file.map { appState.formattedLocalModelSize($0.byteCount) } ?? model.approximateDiskSizeDescription
+        return "This removes the \(size) model file from this Mac. Saved transcripts and refinement results are kept. You can download the model again later."
     }
 
     @ViewBuilder
@@ -662,7 +672,11 @@ struct ContentView: View {
                 dictationTabs
                 switch appState.dictationSettingsTab {
                 case .transcription: transcriptionSettings
-                case .refinement: RefinementSettingsView(appState: appState)
+                case .refinement:
+                    RefinementSettingsView(appState: appState, removeModel: { model in
+                        refinementModelPendingDeletion = model
+                        isShowingRefinementModelDeletionConfirmation = true
+                    })
                 case .tone: ToneSettingsView(appState: appState)
                 }
             }
@@ -886,8 +900,8 @@ struct ContentView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .disabled(appState.refinementConfiguration.isEnabled || appState.refinementSettingsLocked)
-                .help("Turn off text refinement before removing this model.")
+                .disabled(!appState.canDeleteRefinementModel(model))
+                .help("Select another refinement model before removing this one.")
             }
         }
         .padding(14)

@@ -195,15 +195,15 @@ Optional real-model tests cover every model in `RefinementModelDescriptor.allCas
 Supply their checksum-pinned filenames in `/tmp/DictaFlowRefinementFixtures/`.
 These tests do not download models. A slow connection is sufficient for manual
 start/progress/cancel checks, but cannot establish inference quality or RAM usage
-for new weights. Verify all four provider tabs, the active-model summary, download
+for new weights. Verify all three provider tabs, the active-model summary, download
 status across tabs, preset switching, per-preset saving, DIY Write/Preview, and
 narrow-window light/dark layouts in the installed Dev app.
 
-`testLlama32ThreeBPreservesIndonesianIntent` runs each Indonesian case three times
-with Llama 3.2 3B and Casual Text Messaging. It checks mixed construction facts
+`testQwen3FourBPreservesIndonesianIntent` runs each Indonesian case three times
+with Qwen3-4B-Instruct-2507 and Casual Text Messaging. It checks mixed construction facts
 and a question, an unanswered RAB question with a request, a questionnaire, and
 statements with negation and uncertainty. Supply the pinned
-`Llama-3.2-3B-Instruct-Q4_K_M.gguf` fixture to run it. Missing weights skip the
+`Qwen3-4B-Instruct-2507-Q4_K_M.gguf` fixture to run it. Missing weights skip the
 check. Term and punctuation assertions catch the reported failures but do not
 prove complete semantic fidelity; review the outputs in the installed app too.
 

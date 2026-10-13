@@ -199,6 +199,10 @@ final class DictaFlowAppState: ObservableObject {
             initialRefinementConfiguration.writingStyleVersion = 1
             settingsStore.saveRefinementConfiguration(initialRefinementConfiguration)
         }
+        if !RefinementModelDescriptor.allCases.contains(initialRefinementConfiguration.model), initialRefinementConfiguration.isEnabled {
+            initialRefinementConfiguration.isEnabled = false
+            settingsStore.saveRefinementConfiguration(initialRefinementConfiguration)
+        }
         let initialPromptText = refinementPromptStore.promptTemplate()
 
         self.historyStore = historyStore
@@ -657,6 +661,14 @@ final class DictaFlowAppState: ObservableObject {
         modelDownloadService.isRefinementModelPrepared(model)
     }
 
+    func canDeleteRefinementModel(_ model: RefinementModelDescriptor) -> Bool {
+        !refinementSettingsLocked && !isDownloadingRefinementModel(model)
+            && (model != refinementConfiguration.model || !RefinementModelDescriptor.allCases.contains(model))
+            && installedLocalModelFiles.contains {
+                $0.category == .refinement && $0.modelIdentifier == model.modelIdentifier
+            }
+    }
+
     var unusedLocalModelFiles: [LocalModelFile] {
         installedLocalModelFiles.filter { !isActiveLocalModelFile($0) }
     }
@@ -698,11 +710,14 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private var activeLocalModelIdentifiers: Set<String> {
-        [
+        var identifiers: Set<String> = [
             whisperConfiguration.model.modelIdentifier,
-            whisperConfiguration.model.encoderModelIdentifier,
-            refinementConfiguration.model.modelIdentifier
+            whisperConfiguration.model.encoderModelIdentifier
         ]
+        if RefinementModelDescriptor.allCases.contains(refinementConfiguration.model) {
+            identifiers.insert(refinementConfiguration.model.modelIdentifier)
+        }
+        return identifiers
     }
 
     var textInsertionStatusText: String {
@@ -1911,18 +1926,22 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
+        guard model != refinementConfiguration.model || !RefinementModelDescriptor.allCases.contains(model) else {
+            setPreservedStatusMessage("Select another refinement model before removing this one.")
+            return
+        }
+
+        guard !isDownloadingRefinementModel(model) else {
+            setPreservedStatusMessage("Cancel the model download before removing it.")
+            return
+        }
+
         guard let file = installedLocalModelFiles.first(where: {
             $0.category == .refinement && $0.modelIdentifier == model.modelIdentifier
         }) else {
             setPreservedStatusMessage("The \(model.displayName) model is not downloaded.")
             return
         }
-
-        if refinementConfiguration.model == model, refinementConfiguration.isEnabled {
-            setPreservedStatusMessage("Turn off text refinement before removing its model.")
-            return
-        }
-        if refinementConfiguration.model == model { stopRefinement() }
 
         isDeletingModel = true
         clearPreservedStatusMessage()

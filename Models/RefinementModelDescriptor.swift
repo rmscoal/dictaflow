@@ -5,24 +5,24 @@ enum RefinementModelDescriptor: String, CaseIterable, Codable, Hashable, Sendabl
     case qwen35TwoB
     case qwen35FourB
     case qwen3FourB2507
-    case llama32ThreeB
     case gemma4E2B
     case phi4Mini
 
-    // Retained for storage cleanup and decoding older preferences.
+    // Retained only for history decoding and explicit cleanup of old downloads.
+    case llama32ThreeB
     case qwen25HalfB
     case qwen25OneAndHalfB
     case qwen25ThreeB
     case smolLM2OnePointSevenB
 
-    nonisolated static let allCases: [RefinementModelDescriptor] = [.qwen35TwoB, .qwen35FourB, .qwen3FourB2507, .qwen3Small, .llama32ThreeB, .gemma4E2B, .phi4Mini]
-    nonisolated static let storedModels: [RefinementModelDescriptor] = allCases + [.qwen25HalfB, .qwen25OneAndHalfB, .qwen25ThreeB, .smolLM2OnePointSevenB]
+    nonisolated static let allCases: [RefinementModelDescriptor] = [.qwen35TwoB, .qwen35FourB, .qwen3FourB2507, .qwen3Small, .gemma4E2B, .phi4Mini]
+    nonisolated static let storedModels: [RefinementModelDescriptor] = allCases + [.llama32ThreeB, .qwen25HalfB, .qwen25OneAndHalfB, .qwen25ThreeB, .smolLM2OnePointSevenB]
     nonisolated static let recommendedDefault: RefinementModelDescriptor = .qwen3Small
     nonisolated static let bestQualityDefault: RefinementModelDescriptor = .qwen3Small
 
-    nonisolated var provider: RefinementProvider {
+    nonisolated var provider: RefinementProvider? {
         switch self {
-        case .llama32ThreeB: .meta
+        case .llama32ThreeB: nil
         case .gemma4E2B: .google
         case .phi4Mini: .microsoft
         default: .qwen

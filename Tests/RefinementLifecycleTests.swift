@@ -5,6 +5,36 @@ import XCTest
 
 @MainActor
 final class RefinementLifecycleTests: XCTestCase {
+    func testRetiredLlamaSelectionIsPreservedWithRefinementDisabled() throws {
+        let data = Data("{\"isEnabled\":true,\"model\":\"llama32ThreeB\",\"mode\":\"casualMessaging\",\"writingStyleVersion\":1}".utf8)
+        let configuration = try JSONDecoder().decode(RefinementConfiguration.self, from: data)
+        XCTAssertEqual(configuration.model, .llama32ThreeB)
+        XCTAssertFalse(configuration.isEnabled)
+        XCTAssertEqual(configuration.mode, .casualMessaging)
+        let result = TranscriptRefinementResult(originalText: "Original", refinedText: "Edited",
+            model: .llama32ThreeB, mode: .casualMessaging, completedAt: Date())
+        let decoded = try JSONDecoder().decode(TranscriptRefinementResult.self, from: JSONEncoder().encode(result))
+        XCTAssertEqual(decoded.model, .llama32ThreeB)
+        XCTAssertEqual(decoded.refinedText, "Edited")
+        XCTAssertFalse(RefinementModelDescriptor.allCases.contains(.llama32ThreeB))
+        XCTAssertTrue(RefinementModelDescriptor.storedModels.contains(.llama32ThreeB))
+        XCTAssertNil(RefinementModelDescriptor.llama32ThreeB.provider)
+        XCTAssertEqual(RefinementProvider.allCases.count, 3)
+    }
+
+    func testRetiredLlamaCannotStartInference() async throws {
+        let service = LlamaCLITranscriptRefinementService(executableURL: URL(fileURLWithPath: "/missing-runtime"))
+        do {
+            _ = try await service.refine(transcript: "Edit me", whisperTaskMode: .transcribe,
+                modelURL: URL(fileURLWithPath: "/missing-model.gguf"),
+                configuration: RefinementConfiguration(isEnabled: true, model: .llama32ThreeB, mode: .smartCleanup),
+                promptTemplate: "Edit only")
+            XCTFail("A retired model must not reach runtime startup")
+        } catch TranscriptRefinementServiceError.failedToRun(let reason) {
+            XCTAssertTrue(reason.contains("no longer supported"))
+        }
+    }
+
     func testLegacyPreferencesMigrateWithoutDisablingRefinement() throws {
         for model in ["qwen25HalfB", "qwen25OneAndHalfB", "qwen25ThreeB", "smolLM2OnePointSevenB", "qwen3SmallMLX"] {
             let data = Data("{\"isEnabled\":true,\"model\":\"\(model)\",\"mode\":\"smartCleanup\"}".utf8)

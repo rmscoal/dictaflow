@@ -6,6 +6,90 @@ import XCTest
 
 @MainActor
 final class RecordingStartupTests: XCTestCase {
+    func testRetiredLlamaSelectionCannotBeEnabledAndRemainsRemovable() async throws {
+        let fixture = try RecordingStartupFixture(refinementEnabled: true, refinementModel: .llama32ThreeB)
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        XCTAssertEqual(state.refinementConfiguration.model, .llama32ThreeB)
+        XCTAssertFalse(state.refinementConfiguration.isEnabled)
+        XCTAssertFalse(state.isSelectedRefinementModelSupported)
+        state.updateRefinementEnabled(true)
+        XCTAssertFalse(state.refinementConfiguration.isEnabled)
+        state.downloadRefinementModel(.llama32ThreeB)
+        XCTAssertFalse(state.isDownloadingRefinementModel(.llama32ThreeB))
+
+        let url = fixture.directory.appendingPathComponent(RefinementModelDescriptor.llama32ThreeB.filename)
+        try Data("retired weights".utf8).write(to: url)
+        let refreshed = expectation(description: "Retired weights visible in storage")
+        let observation = state.$installedLocalModelFiles.first { files in
+            files.contains { $0.modelIdentifier == RefinementModelDescriptor.llama32ThreeB.modelIdentifier }
+        }.sink { _ in refreshed.fulfill() }
+        state.refreshInstalledLocalModelFiles()
+        await fulfillment(of: [refreshed], timeout: 2)
+        observation.cancel()
+        XCTAssertTrue(state.canDeleteRefinementModel(.llama32ThreeB))
+        XCTAssertTrue(state.unusedLocalModelFiles.contains { $0.modelIdentifier == RefinementModelDescriptor.llama32ThreeB.modelIdentifier })
+        let removed = expectation(description: "Retired weights removed")
+        let deletionObservation = state.$installedLocalModelFiles.first { files in
+            !files.contains { $0.modelIdentifier == RefinementModelDescriptor.llama32ThreeB.modelIdentifier }
+        }.sink { _ in removed.fulfill() }
+        state.deleteRefinementModel(.llama32ThreeB)
+        await fulfillment(of: [removed], timeout: 2)
+        deletionObservation.cancel()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(state.refinementConfiguration.model, .llama32ThreeB)
+    }
+
+    func testRefinementRemovalProtectsSelectedModelAndDeletesOnlyInactiveWeights() async throws {
+        let fixture = try RecordingStartupFixture(refinementEnabled: false)
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        let original = state.refinementConfiguration.model
+        let replacement = RefinementModelDescriptor.qwen3FourB2507
+        let originalURL = fixture.directory.appendingPathComponent(original.filename)
+        let replacementURL = fixture.directory.appendingPathComponent(replacement.filename)
+        try Data("original weights".utf8).write(to: originalURL)
+        try Data("replacement weights".utf8).write(to: replacementURL)
+
+        let refreshed = expectation(description: "Refinement model files loaded")
+        let observation = state.$installedLocalModelFiles.first { files in
+            files.contains { $0.modelIdentifier == original.modelIdentifier }
+                && files.contains { $0.modelIdentifier == replacement.modelIdentifier }
+        }.sink { _ in refreshed.fulfill() }
+        state.refreshInstalledLocalModelFiles()
+        await fulfillment(of: [refreshed], timeout: 2)
+        observation.cancel()
+
+        XCTAssertFalse(state.canDeleteRefinementModel(original), "Selected weights stay protected even with refinement off")
+        XCTAssertTrue(state.canDeleteRefinementModel(replacement))
+        XCTAssertFalse(state.canDeleteRefinementModel(.phi4Mini), "A missing model cannot be removed")
+        state.deleteRefinementModel(original)
+        XCTAssertFalse(state.isDeletingModel)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: originalURL.path))
+
+        // Recheck selection at deletion time, rather than trusting a previously opened menu.
+        state.updateRefinementModel(replacement)
+        XCTAssertFalse(state.canDeleteRefinementModel(replacement))
+        state.deleteRefinementModel(replacement)
+        XCTAssertFalse(state.isDeletingModel)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: replacementURL.path))
+
+        state.deleteRefinementModel(original)
+        XCTAssertTrue(state.isDeletingModel)
+        XCTAssertTrue(state.refinementSettingsLocked)
+        let removed = expectation(description: "Inactive weights removed and inventory refreshed")
+        let deletionObservation = state.$installedLocalModelFiles.first { files in
+            !files.contains { $0.modelIdentifier == original.modelIdentifier }
+        }.sink { _ in removed.fulfill() }
+        await fulfillment(of: [removed], timeout: 2)
+        deletionObservation.cancel()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: originalURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: replacementURL.path))
+        XCTAssertEqual(state.refinementConfiguration.model, replacement)
+        XCTAssertFalse(state.isDeletingModel)
+        XCTAssertFalse(state.canDeleteRefinementModel(original))
+    }
+
     func testTonePipelineWithRefinementOffOnAndFailure() async throws {
         for refinementEnabled in [false, true] {
             for fails in [false, true] where refinementEnabled || !fails {
@@ -665,6 +749,7 @@ private final class RecordingStartupFixture {
         usePipelineModels: Bool = false,
         modelDownloadService: ModelDownloadServiceProtocol? = nil,
         refinementEnabled: Bool? = nil,
+        refinementModel: RefinementModelDescriptor = .recommendedDefault,
         historyStore: HistoryStoreProtocol? = nil,
         promptStore: RefinementPromptStoreProtocol? = nil,
         allowsInsertion: Bool = false
@@ -675,6 +760,7 @@ private final class RecordingStartupFixture {
         settings.saveAutomaticallyChecksForUpdates(false)
         settings.saveRecordingPlaybackBehavior(.lowerSystemVolume)
         var refinementConfiguration = RefinementConfiguration.default
+        refinementConfiguration.model = refinementModel
         refinementConfiguration.isEnabled = refinementEnabled ?? usePipelineModels
         settings.saveRefinementConfiguration(refinementConfiguration)
         try Data("synthetic model".utf8).write(to: directory.appendingPathComponent(settings.whisperConfiguration.model.filename))

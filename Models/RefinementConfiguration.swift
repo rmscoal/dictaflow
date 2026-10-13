@@ -31,7 +31,11 @@ nonisolated struct RefinementConfiguration: Codable, Equatable {
         self.isEnabled = try container.decode(Bool.self, forKey: .isEnabled)
         let savedModelName = try container.decode(String.self, forKey: .model)
         let savedModel = RefinementModelDescriptor(rawValue: savedModelName)
-        if let savedModel, RefinementModelDescriptor.allCases.contains(savedModel) {
+        if savedModel == .llama32ThreeB {
+            // Keep the retired selection visible instead of silently choosing another model.
+            self.model = .llama32ThreeB
+            self.isEnabled = false
+        } else if let savedModel, RefinementModelDescriptor.allCases.contains(savedModel) {
             self.model = savedModel
         } else {
             self.model = .qwen3Small

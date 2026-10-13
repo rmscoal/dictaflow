@@ -13,14 +13,13 @@ final class RefinementIntegrationTests: XCTestCase {
     func testQwen35TwoB() async throws { try await checkModel(.qwen35TwoB) }
     func testQwen35FourB() async throws { try await checkModel(.qwen35FourB) }
     func testQwen3FourB2507() async throws { try await checkModel(.qwen3FourB2507) }
-    func testLlama32ThreeB() async throws { try await checkModel(.llama32ThreeB) }
     func testGemma4E2B() async throws { try await checkModel(.gemma4E2B) }
     func testPhi4Mini() async throws { try await checkModel(.phi4Mini) }
 
-    func testLlama32ThreeBPreservesIndonesianIntent() async throws {
-        let model = RefinementModelDescriptor.llama32ThreeB
+    func testQwen3FourBPreservesIndonesianIntent() async throws {
+        let model = RefinementModelDescriptor.qwen3FourB2507
         guard FileManager.default.fileExists(atPath: fixtures.appendingPathComponent(model.filename).path) else {
-            throw XCTSkip("Pinned Llama weights are not installed for intent-preservation checks")
+            throw XCTSkip("Pinned Qwen3 4B weights are not installed for intent-preservation checks")
         }
         let downloads = WhisperModelDownloadService(modelsDirectoryURL: fixtures)
         let verified = await downloads.verifiedRefinementModelURL(for: model)

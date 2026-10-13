@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RefinementSettingsView: View {
     @ObservedObject var appState: DictaFlowAppState
+    let removeModel: (RefinementModelDescriptor) -> Void
     @State private var selectedTab = 0
     @State private var provider: RefinementProvider = .qwen
     @State private var preview = false
@@ -35,6 +36,10 @@ struct RefinementSettingsView: View {
             .padding(16).background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 9))
             .overlay(RoundedRectangle(cornerRadius: 9).stroke(AppTheme.border))
 
+            if let reason = appState.refinementModelSupport(for: model).unsupportedReason {
+                Text(reason).font(.caption).foregroundStyle(AppTheme.warning)
+            }
+
             sectionTabs
 
             ForEach(appState.visibleRefinementDownloadModels.filter { selectedTab != 0 || $0.provider != provider }, id: \.self) { item in
@@ -45,7 +50,7 @@ struct RefinementSettingsView: View {
                         if appState.isDownloadingRefinementModel(item) {
                             Button("Cancel") { appState.cancelRefinementModelDownload(item) }.controlSize(.small)
                         } else {
-                            Button("Show model") { selectedTab = 0; provider = item.provider }.controlSize(.small)
+                            Button("Show model") { selectedTab = 0; provider = item.provider ?? .qwen }.controlSize(.small)
                         }
                     }
                     if appState.isDownloadingRefinementModel(item) {
@@ -60,7 +65,7 @@ struct RefinementSettingsView: View {
             }.padding(.top, 6)
         }
         .foregroundStyle(AppTheme.primaryText)
-        .onAppear { provider = model.provider }
+        .onAppear { provider = model.provider ?? .qwen }
     }
 
     private var sectionTabs: some View {
@@ -94,13 +99,6 @@ struct RefinementSettingsView: View {
                 ForEach(RefinementModelDescriptor.allCases.filter { $0.provider == provider }, id: \.self) { item in
                     modelRow(item)
                 }
-            }
-            if provider == .meta {
-                HStack {
-                    Text("Built with Llama")
-                    Spacer()
-                    Link("Llama 3.2 license", destination: URL(string: "https://www.llama.com/llama3_2/license/")!)
-                }.font(.caption).foregroundStyle(AppTheme.secondaryText)
             }
             if !appState.isRefinementRuntimeAvailable {
                 Text("Local runtime unavailable. Reinstall DictaFlow to restore llama-server.")
@@ -165,10 +163,11 @@ struct RefinementSettingsView: View {
                     Text("Active").font(.caption).foregroundStyle(AppTheme.accent)
                         .padding(.horizontal, 9).padding(.vertical, 4)
                         .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 5))
+                } else if prepared {
+                    installedModelActions(item)
                 } else {
-                    Button(prepared ? "Use model" : (error == nil ? "Download" : "Retry")) {
-                        if prepared { appState.updateRefinementModel(item) }
-                        else { appState.downloadRefinementModel(item) }
+                    Button(error == nil ? "Download" : "Retry") {
+                        appState.downloadRefinementModel(item)
                     }
                     .buttonStyle(.borderedProminent).controlSize(.small).tint(AppTheme.accent)
                     .disabled(appState.refinementSettingsLocked || !appState.isRefinementModelSupported(item) || !appState.isRefinementRuntimeAvailable)
@@ -193,6 +192,37 @@ struct RefinementSettingsView: View {
     private func modelName(_ item: RefinementModelDescriptor) -> some View {
         Text(item.displayName).font(.system(size: 14, weight: .semibold))
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func installedModelActions(_ item: RefinementModelDescriptor) -> some View {
+        HStack(spacing: 0) {
+            Button("Use model") { appState.updateRefinementModel(item) }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .padding(.horizontal, 11)
+                .frame(height: 29)
+                .disabled(!appState.isRefinementModelSupported(item) || !appState.isRefinementRuntimeAvailable)
+
+            Rectangle().fill(AppTheme.border).frame(width: 1, height: 29)
+
+            Menu {
+                Button("Remove Model…", role: .destructive) { removeModel(item) }
+                    .disabled(!appState.canDeleteRefinementModel(item))
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .medium))
+                    .frame(width: 30, height: 29)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel("Actions for \(item.displayName)")
+        }
+        .foregroundStyle(AppTheme.primaryText)
+        .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.border))
+        .disabled(appState.refinementSettingsLocked)
     }
 
     private var writingStyle: some View {
@@ -333,10 +363,16 @@ struct RefinementSettingsView: View {
 }
 
 private struct ProviderIcon: View {
-    let provider: RefinementProvider
+    let provider: RefinementProvider?
     var size: CGFloat = 28
     var body: some View {
-        Image(provider.iconName).resizable().scaledToFit().padding(3)
+        Group {
+            if let provider {
+                Image(provider.iconName).resizable().scaledToFit().padding(3)
+            } else {
+                Image(systemName: "archivebox").resizable().scaledToFit().padding(5)
+            }
+        }
             .frame(width: size, height: size)
             .background(Color.white.opacity(0.94), in: RoundedRectangle(cornerRadius: 5))
             .accessibilityHidden(true)
