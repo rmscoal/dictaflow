@@ -164,7 +164,7 @@ final class DictaFlowAppState: ObservableObject {
             permissionService: SystemPermissionService(),
             audioRecorderService: audioRecorder,
             audioOutputVolumeService: SystemAudioOutputVolumeService(),
-            soundCueService: SoundCueService(recordingPlayback: audioRecorder),
+            soundCueService: SoundCueService(),
             hotkeyService: CarbonHotkeyService(),
             modelDownloadService: WhisperModelDownloadService(),
             whisperService: WhisperCPPService(),
@@ -772,7 +772,7 @@ final class DictaFlowAppState: ObservableObject {
         removeIncompleteModelDownloads()
         refreshInstalledLocalModelFiles()
         refreshMicrophonePermissionStatus()
-        prepareRecordingAudioIfPermitted()
+        prepareSoundCuesIfEnabled()
         refreshAccessibilityPermissionStatus()
         registerGlobalHotkey()
         refreshRefinementRuntimeAvailability()
@@ -1116,14 +1116,8 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
-    private func prepareRecordingAudioIfPermitted() {
-        guard microphonePermissionState == .granted else { return }
+    private func prepareSoundCuesIfEnabled() {
         if soundCuesEnabled { try? soundCueService.prepare(style: soundCueStyle) }
-        Task { [weak self] in
-            guard let self else { return }
-            do { try await audioRecorderService.warmUp() }
-            catch { logger.error("Audio preparation failed: \(error.localizedDescription, privacy: .public)") }
-        }
     }
 
     func refreshAccessibilityPermissionStatus() {
@@ -1148,7 +1142,6 @@ final class DictaFlowAppState: ObservableObject {
             await MainActor.run {
                 self.microphonePermissionState = permissionState
                 self.isRequestingMicrophonePermission = false
-                self.prepareRecordingAudioIfPermitted()
                 self.updateStatusMessage()
             }
         }

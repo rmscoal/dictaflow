@@ -19,23 +19,6 @@ private final class SilentPlayer: AVAudioPlayer {
     }
 }
 
-@MainActor
-private final class SilentRecordingPlayback: RecordingCuePlaybackProtocol {
-    var isRecording = true
-    var shouldFail = false
-    var buffers: [SoundCuePlaybackBuffer] = []
-    var completions: [@Sendable () -> Void] = []
-    var stops = 0
-
-    func playRecordingCue(_ buffer: SoundCuePlaybackBuffer, completion: @escaping @Sendable () -> Void) throws {
-        guard isRecording, !shouldFail else { throw SoundCueServiceError.playbackFailed }
-        buffers.append(buffer)
-        completions.append(completion)
-    }
-
-    func stopRecordingCue() { stops += 1 }
-}
-
 @main
 private struct PlaybackChecks {
     @MainActor
@@ -69,8 +52,11 @@ private struct PlaybackChecks {
 
         var players: [String: SilentPlayer] = [:]
         var creations = 0
+        var failNextPlayer = false
         let service = SoundCueService(bundle: bundle) { url in
             let player = try SilentPlayer(contentsOf: url)
+            player.shouldPlay = !failNextPlayer
+            failNextPlayer = false
             players[url.deletingPathExtension().lastPathComponent] = player
             creations += 1
             return player
@@ -88,23 +74,22 @@ private struct PlaybackChecks {
         try await stop.value
 
         let repeated = Task { try await service.play(.startRecording, style: .softDigital) }
-        await wait { players["soft-digital-start-recording"]?.starts == 2 }
-        precondition(creations == 2, "Cached cue was recreated")
+        await wait { creations == 3 && players["soft-digital-start-recording"]?.starts == 1 }
         let queued = Task { try await service.play(.stopRecording, style: .softDigital) }
-        // Give the queued request a turn before stopping.
-        try await Task.sleep(for: .milliseconds(10))
+        await wait { creations == 4 && players["soft-digital-stop-recording"] != nil }
+        precondition(players["soft-digital-stop-recording"]?.starts == 0, "Queued cue started before stop")
         service.stop()
         try await repeated.value
         try await queued.value
-        precondition(players["soft-digital-stop-recording"]?.starts == 1, "Muted cue still played")
+        precondition(players["soft-digital-stop-recording"]?.starts == 0, "Muted cue still played")
 
         let changed = Task { try await service.play(.startRecording, style: .mellowPulse) }
         await wait { players["mellow-pulse-start-recording"]?.starts == 1 }
         players["mellow-pulse-start-recording"]?.finish()
         try await changed.value
-        precondition(creations == 3, "Style change did not replace the cache")
+        precondition(creations == 5, "Style change did not create its own player")
 
-        players["mellow-pulse-start-recording"]?.shouldPlay = false
+        failNextPlayer = true
         do {
             try await service.play(.startRecording, style: .mellowPulse)
             fatalError("Failed playback was reported as successful")
@@ -129,55 +114,7 @@ private struct PlaybackChecks {
             fatalError("Missing asset was accepted")
         } catch SoundCueServiceError.missingAsset {}
 
-        let recording = SilentRecordingPlayback()
-        let nativeService = SoundCueService(bundle: bundle, recordingPlayback: recording) { url in
-            let player = try SilentPlayer(contentsOf: url)
-            players[url.deletingPathExtension().lastPathComponent] = player
-            return player
-        }
-        let nativeStart = Task { try await nativeService.play(.startRecording, style: .softDigital) }
-        await wait { recording.buffers.count == 1 }
-        precondition(recording.buffers[0].sampleRate == 48_000)
-        precondition(recording.buffers[0].frameLength > 0)
-        precondition(players["soft-digital-start-recording"]?.starts == 0,
-                     "Start cue bypassed the voice-processing engine")
-        let oldCompletion = recording.completions[0]
-        nativeService.stop()
-        try await nativeStart.value
-        precondition(recording.stops == 1, "Mute did not stop native playback")
-
-        let nextStart = Task { try await nativeService.play(.startRecording, style: .softDigital) }
-        await wait { recording.buffers.count == 2 }
-        precondition(recording.buffers[0] === recording.buffers[1], "Native cue was not cached")
-        oldCompletion()
-        try await Task.sleep(for: .milliseconds(10))
-        precondition(recording.stops == 1, "A stale completion stopped the new cue")
-        recording.completions[1]()
-        try await nextStart.value
-
-        recording.shouldFail = true
-        do {
-            try await nativeService.play(.startRecording, style: .softDigital)
-            fatalError("Native playback failure was accepted")
-        } catch SoundCueServiceError.playbackFailed {}
-        precondition(players["soft-digital-start-recording"]?.starts == 0,
-                     "Native failure fell back to unprocessed speaker playback")
-        recording.shouldFail = false
-
-        let newStyle = Task { try await nativeService.play(.startRecording, style: .mellowPulse) }
-        await wait { recording.buffers.count == 3 }
-        precondition(recording.buffers[0] !== recording.buffers[2], "Native style cache was not replaced")
-        recording.completions[2]()
-        try await newStyle.value
-
-        recording.isRecording = false
-        let preview = Task { try await nativeService.play(.startRecording, style: .mellowPulse) }
-        await wait { players["mellow-pulse-start-recording"]?.starts == 1 }
-        precondition(recording.buffers.count == 3, "Preview accessed the recording engine")
-        players["mellow-pulse-start-recording"]?.finish()
-        try await preview.value
-
-        print("Passed: serialized playback, caching, mute, style change, failures, timeout, recovery, missing assets, native cue routing, stale completion, and standalone previews. No audio played.")
+        print("Passed: serialized playback, caching, mute, style change, failures, timeout, recovery, and missing assets. No audio played.")
     }
 
     @MainActor

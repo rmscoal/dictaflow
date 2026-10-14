@@ -9,8 +9,66 @@ model storage, and download cancellation.
 settings, silent cue playback, and synthetic recorder services. It checks
 capture starting before volume lowering, restoration after an in-flight volume
 change, cancellation during preparation, repeated toggles during recorder
-startup, permission denial, and retry after a failed start. These tests never
+startup, permission denial, and retry after a failed start or preparation. It also
+checks that launch and microphone permission approval do not prepare the recorder
+or lower system volume. These tests never
 record microphone audio, play sound cues, or write to the user's clipboard.
+
+For audio lifecycle verification, use the installed Dev app with continuous
+video or music playback. Launch and idle must leave playback volume unchanged.
+After stop, cancel, or failure, playback must return to its original level and
+the AudioCapture logs must report recorder release. Compare first and repeated
+recording readiness times on the same input/output route; each recording now
+prepares a fresh recorder. Test speakers, headphones, and Bluetooth if available,
+with sound cues and optional volume lowering both enabled and disabled.
+
+`RecordingAudioStatusTests` checks stale delegate callbacks after cancellation,
+unexpected stops, and encoding failures during finalization. These use no audio
+hardware.
+
+`SoundCueServiceTests` uses silent players to check delayed completion/error
+callbacks after cancellation or timeout and queued requests for the same cue.
+Each playback owns a separate player, so old callbacks cannot stop a newer cue.
+
+The opt-in `RecordingAudioIntegrationTests` compares input-only AVAudioEngine
+with the production AVAudioRecorder service. It verifies real AAC output,
+permissions on capture files, output device/rate/master-volume preservation,
+and microphone release after finish, preparation failure, and cancellation.
+It records short samples in a private temporary directory, deletes them afterward,
+and never transcribes or inserts them. Existing microphone permission is required;
+otherwise the checks skip. Run while the input/output route and volume are stable:
+
+```sh
+python3 script/verify_audio_capture.py
+```
+
+These output-property checks cannot detect per-client ducking. Also inspect
+Core Audio's ducking logs and listen with continuous playback in the installed
+app. Bluetooth microphone use can change playback quality through macOS's
+hands-free profile even without app-level ducking; check that route separately.
+
+## Audio startup comparison
+
+See [the audio capture README](../Docs/Audio/README.md) for the current design,
+its tradeoffs, and a future AUHAL evaluation plan. AUHAL has not been benchmarked.
+
+Measured in the Debug Dev app on the built-in microphone and speaker route,
+13 October 2026. Times run from the recording request to the capture API reporting
+ready, with history enabled. They exclude transcription and audible cue latency.
+
+| Capture approach | First recording | Repeated recording | Native ducking |
+| --- | --- | --- | --- |
+| Voice-processing AVAudioEngine, recreated each time | 2,265 ms | 2,126 ms | Observed |
+| Input-only AVAudioEngine, recreated each time | 184 ms | 120 ms | None observed |
+| AVAudioRecorder in a background worker | 149 ms | 88 ms | None observed |
+
+The isolated hardware comparison also favored AVAudioRecorder: 85, 18, and
+16 ms including production service preparation/start, versus 83, 70, and 70 ms
+for an input-only engine. Recorder release took about 6 ms in the installed app.
+These are observations on one route, not guaranteed timings on every device.
+The app keeps a fresh recorder per capture and preserves idle microphone privacy.
+No native echo cancellation is enabled; cue leakage and speech with speaker
+playback need listening/transcription checks.
 
 `HistoryStoreTests` uses isolated SQLite databases and synthetic audio. It checks
 append-only retries, refinement parents, searching earlier results, cancellation,

@@ -6,7 +6,6 @@ protocol AudioRecorderServiceProtocol: AnyObject {
     var isRecording: Bool { get }
     var currentPowerLevel: Double { get }
     var recordingError: Error? { get }
-    func warmUp() async throws
     func shutdown()
     func prepareRecording() async throws
     func prepareRecording(at url: URL) async throws
@@ -18,22 +17,13 @@ protocol AudioRecorderServiceProtocol: AnyObject {
 extension AudioRecorderServiceProtocol {
     var recordingError: Error? { nil }
     func prepareRecording(at url: URL) async throws { try await prepareRecording() }
-    func warmUp() async throws {}
 }
 
-@MainActor
-protocol RecordingCuePlaybackProtocol: AnyObject {
-    var isRecording: Bool { get }
-    func playRecordingCue(_ buffer: SoundCuePlaybackBuffer, completion: @escaping @Sendable () -> Void) async throws
-    func stopRecordingCue()
-}
-
-enum AudioRecorderServiceError: LocalizedError {
+enum AudioRecorderServiceError: LocalizedError, Equatable {
     case alreadyRecording
     case notRecording
     case failedToPrepare
     case failedToStart
-    case voiceProcessingUnavailable
     case audioDeviceChanged
     case failedToWrite
     case temporaryDirectoryCreationFailed
@@ -50,8 +40,6 @@ enum AudioRecorderServiceError: LocalizedError {
             return "The audio recorder could not be prepared."
         case .failedToStart:
             return "The recorder failed to begin capturing microphone audio."
-        case .voiceProcessingUnavailable:
-            return "Echo cancellation could not start. Check your microphone and sound output in System Settings, then try again."
         case .audioDeviceChanged:
             return "The audio device changed or stopped. Check your microphone and sound output, then start a new recording."
         case .failedToWrite:
@@ -67,16 +55,12 @@ enum AudioRecorderServiceError: LocalizedError {
 }
 
 @MainActor
-final class SystemAudioRecorderService: AudioRecorderServiceProtocol, RecordingCuePlaybackProtocol {
-    private let worker = RecordingAudioEngine()
+final class SystemAudioRecorderService: AudioRecorderServiceProtocol {
+    private let worker = RecordingAudioWorker()
     private(set) var isRecording = false
 
     var recordingError: Error? { worker.captureError }
     var currentPowerLevel: Double { isRecording ? worker.currentPowerLevel : 0 }
-
-    func warmUp() async throws {
-        try await worker.perform { try $0.prepareEngine() }
-    }
 
     func prepareRecording() async throws {
         try await worker.perform { try $0.prepareCapture() }
@@ -100,15 +84,6 @@ final class SystemAudioRecorderService: AudioRecorderServiceProtocol, RecordingC
     func discardRecording() async throws {
         defer { isRecording = false }
         try await worker.perform { try $0.discardCapture() }
-    }
-
-    func playRecordingCue(_ buffer: SoundCuePlaybackBuffer, completion: @escaping @Sendable () -> Void) async throws {
-        guard isRecording else { throw SoundCueServiceError.playbackFailed }
-        try await worker.perform { try $0.playCue(buffer, completion: completion) }
-    }
-
-    func stopRecordingCue() {
-        worker.stopCue()
     }
 
     func shutdown() {
