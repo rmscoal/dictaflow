@@ -2,6 +2,8 @@ import AVFoundation
 import Foundation
 import OSLog
 
+// Synthetic checks for the AVAudioEngine candidate. Production capture uses
+// AVAudioRecorder's AAC writer in RecordingAudioWorker.
 // The tap copies into a bounded pool. Encoding and file I/O stay on the writer
 // queue, and the lock only protects short state updates, never file writes.
 final class RecordingAudioBufferSink: @unchecked Sendable {

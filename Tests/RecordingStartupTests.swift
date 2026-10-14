@@ -6,6 +6,73 @@ import XCTest
 
 @MainActor
 final class RecordingStartupTests: XCTestCase {
+    func testLaunchDoesNotPrepareRecorderOrChangeVolume() throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+
+        fixture.state.handleApplicationLaunch()
+
+        XCTAssertEqual(fixture.state.recordingState, .idle)
+        XCTAssertEqual(fixture.recorder.prepareCalls, 0)
+        XCTAssertEqual(fixture.recorder.startCalls, 0)
+        XCTAssertEqual(fixture.volume.beginCalls, 0)
+        XCTAssertEqual(fixture.cues.prepareCalls, fixture.state.soundCuesEnabled ? 1 : 0)
+        XCTAssertTrue(fixture.cues.played.isEmpty)
+    }
+
+    func testPermissionApprovalDoesNotPrepareRecorder() async throws {
+        let fixture = try RecordingStartupFixture(permission: .undetermined)
+        defer { fixture.cleanup() }
+        fixture.permissions.permission = .granted
+        let completed = expectation(description: "Permission approval completes")
+        let observation = fixture.state.$isRequestingMicrophonePermission.dropFirst().sink {
+            if !$0 { completed.fulfill() }
+        }
+
+        fixture.state.requestMicrophonePermissionForOnboarding()
+        await fulfillment(of: [completed], timeout: 2)
+        observation.cancel()
+
+        XCTAssertEqual(fixture.state.microphonePermissionState, .granted)
+        XCTAssertEqual(fixture.recorder.prepareCalls, 0)
+        XCTAssertEqual(fixture.recorder.startCalls, 0)
+        XCTAssertEqual(fixture.volume.beginCalls, 0)
+        XCTAssertTrue(fixture.cues.played.isEmpty)
+    }
+
+    func testPreparationFailureIsDiscardedAndAllowsRetry() async throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        fixture.volume.shouldWait = false
+        fixture.recorder.failNextPreparation = true
+        let failed = expectation(description: "Preparation failure returns to idle")
+        let failedObservation = fixture.state.$recordingState.dropFirst().sink {
+            if $0 == .idle { failed.fulfill() }
+        }
+
+        fixture.state.toggleDictation()
+        await fulfillment(of: [failed], timeout: 2)
+        failedObservation.cancel()
+        XCTAssertEqual(fixture.recorder.prepareCalls, 1)
+        XCTAssertEqual(fixture.recorder.discardCalls, 1)
+        XCTAssertEqual(fixture.recorder.startCalls, 0)
+        XCTAssertEqual(fixture.volume.beginCalls, 0)
+        XCTAssertNil(fixture.overlay.presentation)
+        XCTAssertNotNil(fixture.state.recordingFailureMessage)
+
+        let recording = expectation(description: "A fresh recording succeeds after preparation failure")
+        let recordingObservation = fixture.state.$recordingState.sink {
+            if $0.isRecording { recording.fulfill() }
+        }
+        fixture.state.toggleDictation()
+        await fulfillment(of: [recording], timeout: 2)
+        recordingObservation.cancel()
+        XCTAssertEqual(fixture.recorder.prepareCalls, 2)
+        XCTAssertEqual(fixture.recorder.startCalls, 1)
+        await fixture.state.cancelRecording()
+        XCTAssertEqual(fixture.recorder.discardCalls, 2)
+    }
+
     func testRetentionChangeOnlyRequiresConfirmationForAffectedRecordings() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryRetention-\(UUID())")
         let store = SQLiteHistoryStore(root: root)
@@ -377,6 +444,7 @@ final class RecordingStartupTests: XCTestCase {
         await cancellation.value
         XCTAssertEqual(fixture.state.recordingState, .idle)
         XCTAssertEqual(fixture.recorder.startCalls, 0)
+        XCTAssertEqual(fixture.recorder.discardCalls, 1)
         XCTAssertEqual(fixture.volume.beginCalls, 0)
         XCTAssertTrue(fixture.cues.played.isEmpty)
         XCTAssertNil(fixture.state.recordingFailureMessage)
@@ -545,8 +613,11 @@ private final class StartupRecorderService: AudioRecorderServiceProtocol {
     var currentPowerLevel: Double { 0 }
     var startCalls = 0
     var stopCalls = 0
+    var prepareCalls = 0
+    var discardCalls = 0
     var shouldWait = false
     var failNextStart = false
+    var failNextPreparation = false
     var shouldWaitPreparation = false
     var onPrepare: (() -> Void)?
     private var preparationContinuation: CheckedContinuation<Void, Never>?
@@ -555,6 +626,11 @@ private final class StartupRecorderService: AudioRecorderServiceProtocol {
     private var continuation: CheckedContinuation<Void, Never>?
     init(fileURL: URL) { self.fileURL = fileURL }
     func prepareRecording() async throws {
+        prepareCalls += 1
+        if failNextPreparation {
+            failNextPreparation = false
+            throw AudioRecorderServiceError.failedToPrepare
+        }
         if shouldWaitPreparation {
             await withCheckedContinuation { preparationContinuation = $0; onPrepare?() }
         }
@@ -584,6 +660,7 @@ private final class StartupRecorderService: AudioRecorderServiceProtocol {
         return DictationCapture(fileURL: fileURL, duration: 0, capturedAt: Date())
     }
     func discardRecording() throws {
+        discardCalls += 1
         isRecording = false
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             throw AudioRecorderServiceError.notRecording
@@ -725,6 +802,8 @@ private final class PipelineModelDownloadService: ModelDownloadServiceProtocol {
 @MainActor
 private final class StartupCueService: SoundCueServiceProtocol {
     var played: [SoundCue] = []
+    var prepareCalls = 0
+    func prepare(style: SoundCueStyle) throws { prepareCalls += 1 }
     func play(_ cue: SoundCue, style: SoundCueStyle) async throws { played.append(cue) }
     func stop() {}
 }
