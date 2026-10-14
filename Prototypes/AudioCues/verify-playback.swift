@@ -76,8 +76,8 @@ private struct PlaybackChecks {
         let repeated = Task { try await service.play(.startRecording, style: .softDigital) }
         await wait { creations == 3 && players["soft-digital-start-recording"]?.starts == 1 }
         let queued = Task { try await service.play(.stopRecording, style: .softDigital) }
-        // Give the queued request a turn before stopping.
-        try await Task.sleep(for: .milliseconds(10))
+        await wait { creations == 4 && players["soft-digital-stop-recording"] != nil }
+        precondition(players["soft-digital-stop-recording"]?.starts == 0, "Queued cue started before stop")
         service.stop()
         try await repeated.value
         try await queued.value
