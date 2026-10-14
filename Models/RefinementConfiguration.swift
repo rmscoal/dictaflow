@@ -3,6 +3,7 @@ import Foundation
 nonisolated struct RefinementConfiguration: Codable, Equatable {
     var isEnabled: Bool
     var model: RefinementModelDescriptor
+    var writingStyleVersion = 1
     var mode: RefinementMode
 
     static let `default` = RefinementConfiguration(
@@ -22,9 +23,7 @@ nonisolated struct RefinementConfiguration: Codable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case isEnabled
-        case model
-        case mode
+        case isEnabled, model, mode, writingStyleVersion
     }
 
     init(from decoder: Decoder) throws {
@@ -32,11 +31,16 @@ nonisolated struct RefinementConfiguration: Codable, Equatable {
         self.isEnabled = try container.decode(Bool.self, forKey: .isEnabled)
         let savedModelName = try container.decode(String.self, forKey: .model)
         let savedModel = RefinementModelDescriptor(rawValue: savedModelName)
-        if let savedModel, RefinementModelDescriptor.allCases.contains(savedModel) {
+        if savedModel == .llama32ThreeB {
+            // Keep the retired selection visible instead of silently choosing another model.
+            self.model = .llama32ThreeB
+            self.isEnabled = false
+        } else if let savedModel, RefinementModelDescriptor.allCases.contains(savedModel) {
             self.model = savedModel
         } else {
             self.model = .qwen3Small
         }
         self.mode = try container.decode(RefinementMode.self, forKey: .mode)
+        self.writingStyleVersion = try container.decodeIfPresent(Int.self, forKey: .writingStyleVersion) ?? 0
     }
 }

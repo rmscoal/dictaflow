@@ -1,6 +1,8 @@
 import Foundation
 
 protocol SettingsStoreProtocol: AnyObject {
+    var textTone: TextTone { get }
+    func saveTextTone(_ tone: TextTone)
     var historyRetention: HistoryRetention { get }
     func saveHistoryRetention(_ retention: HistoryRetention)
     var appAppearance: AppAppearance { get }
@@ -30,6 +32,7 @@ protocol SettingsStoreProtocol: AnyObject {
 
 final class UserDefaultsSettingsStore: SettingsStoreProtocol {
     private enum Keys {
+        static let textTone = "dictation.textTone"
         static let historyRetention = "history.retentionDays"
         static let appAppearance = "app.appearance"
         static let hasPresentedInitialWindow = "app.hasPresentedInitialWindow"
@@ -49,6 +52,14 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+    }
+
+    var textTone: TextTone {
+        defaults.string(forKey: Keys.textTone).flatMap(TextTone.init(rawValue:)) ?? .original
+    }
+
+    func saveTextTone(_ tone: TextTone) {
+        defaults.set(tone.rawValue, forKey: Keys.textTone)
     }
 
     var historyRetention: HistoryRetention {

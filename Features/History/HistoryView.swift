@@ -287,10 +287,13 @@ private struct HistoryCardContent: View {
 
     @ViewBuilder
     private var textViewPicker: some View {
-        if !model.refinements.isEmpty {
-            Picker("Text view", selection: $model.showsOriginal) {
-                Text("Original").tag(true)
-                Text("Refined").tag(false)
+        if !model.refinements.isEmpty || model.hasToneFormatting {
+            Picker("Text view", selection: Binding(get: { model.textView }, set: { model.textView = $0 })) {
+                Text("Original").tag(HistoryViewModel.TextView.original)
+                if model.refinement?.result != nil {
+                    Text("Refined").tag(HistoryViewModel.TextView.refined)
+                }
+                Text("Final").tag(HistoryViewModel.TextView.final)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -354,6 +357,7 @@ private struct HistoryCardContent: View {
                 LabeledContent("Model", value: selectedModel.displayName)
                 LabeledContent("Task", value: appState.whisperConfiguration.taskMode.title)
                 LabeledContent("Language", value: appState.whisperConfiguration.inputLanguage.displayName)
+                LabeledContent("Tone", value: appState.textTone.title)
                 LabeledContent("Refinement", value: appState.refinementConfiguration.isEnabled ? "On" : "Off")
             }
             .font(.callout)
@@ -364,7 +368,7 @@ private struct HistoryCardContent: View {
                     .font(.callout).foregroundStyle(AppTheme.warning)
             }
             if appState.refinementConfiguration.isEnabled && !appState.isSelectedRefinementModelPrepared {
-                Text("The refinement model is unavailable. This retry will keep the original text.")
+                Text("The refinement model is unavailable. This retry will use the transcript with your selected tone.")
                     .font(.callout).foregroundStyle(AppTheme.warning)
             }
             HStack {
@@ -417,7 +421,7 @@ private struct HistoryCardContent: View {
     }
 
     private var missingText: String {
-        if model.showsOriginal {
+        if model.showsOriginal || (!model.showsRawRefinement && model.refinement?.result == nil) {
             if model.transcription?.result != nil { return "No speech was detected. Replay the audio or try again." }
             return model.transcription?.errorMessage ?? "No transcription yet. Replay the saved audio or try again."
         }

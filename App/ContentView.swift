@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var isShowingHelp = false
     @State private var isSidebarCollapsed = false
     @State private var isShowingModelPreparationConfirmation = false
+    @State private var downloadIncludesEncoder = false
     @State private var isShowingEncoderDownloadConfirmation = false
     @State private var isShowingRefinementModelPreparationConfirmation = false
     @State private var isShowingWhisperModelDeletionConfirmation = false
@@ -51,18 +52,24 @@ struct ContentView: View {
             Text(appState.recordingFailureMessage ?? "Check your microphone and sound output, then try again.")
         }
         .alert(
-            "Download \(selectedModel.displayName) Model?",
+            "Download \(selectedModel.displayName)\(downloadIncludesEncoder ? " with Encoder" : " Model")?",
             isPresented: $isShowingModelPreparationConfirmation
         ) {
             Button("Cancel", role: .cancel) {}
-            Button("Download Model") {
-                appState.downloadWhisperModel(selectedModel)
+            Button(downloadIncludesEncoder ? "Download Both" : "Download Model") {
+                if downloadIncludesEncoder {
+                    appState.downloadWhisperModelWithEncoder(selectedModel)
+                } else {
+                    appState.downloadWhisperModel(selectedModel)
+                }
             }
         } message: {
-            Text("DictaFlow will download \(selectedModel.displayName) locally in the background. Your current model stays selected until you switch.")
+            Text(downloadIncludesEncoder
+                 ? "DictaFlow will download the \(selectedModel.approximateDiskSizeDescription) model, then its \(selectedModel.encoderApproximateSizeDescription) encoder. Your current model stays selected until you switch."
+                 : "DictaFlow will download \(selectedModel.displayName) locally in the background. Your current model stays selected until you switch.")
         }
         .alert(
-            "Download \(selectedModel.displayName) Neural Engine Encoder?",
+            "Download \(selectedModel.displayName) Encoder?",
             isPresented: $isShowingEncoderDownloadConfirmation
         ) {
             Button("Cancel", role: .cancel) {}
@@ -96,37 +103,53 @@ struct ContentView: View {
             Text(unusedModelDeletionConfirmationText)
         }
         .alert(
-            "Delete \(whisperModelPendingDeletion?.displayName ?? "Whisper Model")?",
+            "Remove \(whisperModelPendingDeletion?.displayName ?? "Whisper Model")\(whisperModelPendingDeletionHasEncoder ? " and its encoder" : "")?",
             isPresented: $isShowingWhisperModelDeletionConfirmation
         ) {
             Button("Cancel", role: .cancel) {
                 whisperModelPendingDeletion = nil
             }
-            Button("Delete Model", role: .destructive) {
+            Button("Remove", role: .destructive) {
                 if let model = whisperModelPendingDeletion {
                     appState.deleteWhisperModel(model)
                 }
                 whisperModelPendingDeletion = nil
             }
         } message: {
-            Text("This permanently deletes the local model file and its Neural Engine encoder, if downloaded. DictaFlow keeps at least one downloaded Whisper model, and the active model cannot be deleted.")
+            Text(whisperModelPendingDeletionHasEncoder
+                 ? "The model and its encoder will be removed from this Mac. You can download them again later."
+                 : "The model will be removed from this Mac. You can download it again later.")
         }
         .alert(
-            "Delete \(refinementModelPendingDeletion?.displayName ?? "Refinement Model")?",
+            "Remove \(refinementModelPendingDeletion?.displayName ?? "Refinement Model")?",
             isPresented: $isShowingRefinementModelDeletionConfirmation
         ) {
             Button("Cancel", role: .cancel) {
                 refinementModelPendingDeletion = nil
             }
-            Button("Delete Model", role: .destructive) {
+            Button("Remove Model", role: .destructive) {
                 if let model = refinementModelPendingDeletion {
                     appState.deleteRefinementModel(model)
                 }
                 refinementModelPendingDeletion = nil
             }
+            .disabled(refinementModelPendingDeletion.map { !appState.canDeleteRefinementModel($0) } ?? true)
         } message: {
-            Text("This permanently deletes the local model file. Only inactive models can be deleted.")
+            Text(refinementModelDeletionConfirmationText)
         }
+    }
+
+    private var whisperModelPendingDeletionHasEncoder: Bool {
+        whisperModelPendingDeletion.map { appState.isWhisperEncoderDownloaded($0) } ?? false
+    }
+
+    private var refinementModelDeletionConfirmationText: String {
+        guard let model = refinementModelPendingDeletion else { return "Select an inactive model to remove." }
+        let file = appState.installedLocalModelFiles.first {
+            $0.category == .refinement && $0.modelIdentifier == model.modelIdentifier
+        }
+        let size = file.map { appState.formattedLocalModelSize($0.byteCount) } ?? model.approximateDiskSizeDescription
+        return "This removes the \(size) model file from this Mac. Saved transcripts and refinement results are kept. You can download the model again later."
     }
 
     @ViewBuilder
@@ -137,7 +160,7 @@ struct ContentView: View {
         case .dictation:
             dictationPage
         case .refinement:
-            refinementPage
+            dictationPage
         case .history:
             HistoryView(appState: appState, model: appState.history)
         case .shortcutAndAudio:
@@ -189,7 +212,6 @@ struct ContentView: View {
             SidebarSection(title: "DICTAFLOW", isCollapsed: isSidebarCollapsed) {
                 SidebarItem(page: .overview, title: "Overview", systemImage: "square.grid.2x2.fill", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
                 SidebarItem(page: .dictation, title: "Dictation", systemImage: "waveform", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
-                SidebarItem(page: .refinement, title: "Refinement", systemImage: "wand.and.sparkles", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
                 SidebarItem(page: .history, title: "History", systemImage: "clock", isCollapsed: isSidebarCollapsed, selection: mainWindowPageBinding)
             }
 
@@ -277,7 +299,7 @@ struct ContentView: View {
                         primaryText: Text(appState.refinementConfiguration.model.displayName).fontWeight(.semibold),
                         secondaryText: "Cleans punctuation and wording locally."
                     ) {
-                        appState.mainWindowPage = .refinement
+                        appState.showMainWindowPage(.refinement)
                     }
                 }
 
@@ -404,6 +426,7 @@ struct ContentView: View {
                                 if appState.isDownloadingWhisperModel(model) {
                                     return
                                 } else if !isPrepared {
+                                    downloadIncludesEncoder = false
                                     isShowingModelPreparationConfirmation = true
                                 } else if !isActive {
                                     appState.updateWhisperModel(model)
@@ -645,139 +668,185 @@ struct ContentView: View {
 
     private var dictationPage: some View {
         DetailPage {
-            VStack(alignment: .leading, spacing: 7) {
-                FormSectionTitle("Transcription defaults")
+            VStack(alignment: .leading, spacing: 18) {
+                dictationTabs
+                switch appState.dictationSettingsTab {
+                case .transcription: transcriptionSettings
+                case .refinement:
+                    RefinementSettingsView(appState: appState, removeModel: { model in
+                        refinementModelPendingDeletion = model
+                        isShowingRefinementModelDeletionConfirmation = true
+                    })
+                case .tone: ToneSettingsView(appState: appState)
+                }
+            }
+        }
+    }
 
-                SettingsFormPanel {
-                    SettingsFormRow(
-                        title: "Task",
-                        detail: "Transcribe speech or translate it to English"
-                    ) {
-                        Picker("Task", selection: taskModeBinding) {
-                            Text("Transcribe").tag(WhisperTaskMode.transcribe)
-                            Text("Translate").tag(WhisperTaskMode.translateToEnglish)
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .frame(width: 166)
-                        .disabled(appState.whisperSettingsLocked)
+    private var dictationTabs: some View {
+        HStack(spacing: 2) {
+            ForEach(DictationSettingsTab.allCases) { tab in
+                let isSelected = appState.dictationSettingsTab == tab
+                Button { appState.dictationSettingsTab = tab } label: {
+                    Text(tab.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                        .foregroundStyle(isSelected ? Color.white : AppTheme.primaryText)
+                        .background(isSelected ? Color(nsColor: .controlAccentColor) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Dictation settings")
+    }
+
+    private var transcriptionSettings: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            FormSectionTitle("Transcription defaults")
+
+            SettingsFormPanel {
+                SettingsFormRow(
+                    title: "Task",
+                    detail: "Transcribe speech or translate it to English"
+                ) {
+                    Picker("Task", selection: taskModeBinding) {
+                        Text("Transcribe").tag(WhisperTaskMode.transcribe)
+                        Text("Translate").tag(WhisperTaskMode.translateToEnglish)
                     }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 166)
+                    .disabled(appState.whisperSettingsLocked)
+                }
 
-                    Divider().overlay(AppTheme.border)
+                Divider().overlay(AppTheme.border)
 
-                    SettingsFormRow(
-                        title: "Input language",
-                        detail: "Automatic works well for mixed-language speech"
-                    ) {
-                        Picker("Input language", selection: inputLanguageBinding) {
-                            Text(WhisperInputLanguage.automatic.displayName).tag(WhisperInputLanguage.automatic)
-                            if !appState.commonWhisperLanguages.isEmpty {
-                                Divider()
-                                Section("Common") {
-                                    ForEach(appState.commonWhisperLanguages) { language in
-                                        Text(language.displayName).tag(language.inputLanguage)
-                                    }
-                                }
-                            }
-                            Section("All") {
-                                ForEach(appState.additionalWhisperLanguages) { language in
+                SettingsFormRow(
+                    title: "Input language",
+                    detail: "Automatic works well for mixed-language speech"
+                ) {
+                    Picker("Input language", selection: inputLanguageBinding) {
+                        Text(WhisperInputLanguage.automatic.displayName).tag(WhisperInputLanguage.automatic)
+                        if !appState.commonWhisperLanguages.isEmpty {
+                            Divider()
+                            Section("Common") {
+                                ForEach(appState.commonWhisperLanguages) { language in
                                     Text(language.displayName).tag(language.inputLanguage)
                                 }
                             }
                         }
+                        Section("All") {
+                            ForEach(appState.additionalWhisperLanguages) { language in
+                                Text(language.displayName).tag(language.inputLanguage)
+                            }
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 142)
+                    .disabled(appState.whisperSettingsLocked)
+                }
+            }
+
+            Divider().overlay(AppTheme.border).padding(.vertical, 10)
+            FormSectionTitle("Speech model")
+            WhisperModelsView(appState: appState, downloadModel: { model in
+                selectedModel = model
+                downloadIncludesEncoder = false
+                isShowingModelPreparationConfirmation = true
+            }, downloadEncoder: { model in
+                selectedModel = model
+                isShowingEncoderDownloadConfirmation = true
+            }, downloadModelWithEncoder: { model in
+                selectedModel = model
+                downloadIncludesEncoder = true
+                isShowingModelPreparationConfirmation = true
+            }, removeModel: { model in
+                whisperModelPendingDeletion = model
+                isShowingWhisperModelDeletionConfirmation = true
+            })
+            Divider().overlay(AppTheme.border).padding(.vertical, 10)
+
+            FormSectionTitle("Sound cues")
+                .padding(.top, 7)
+
+            SettingsFormPanel {
+                SettingsFormRow(
+                    title: "Play sound cues",
+                    detail: "Start, stop, and processing errors"
+                ) {
+                    Toggle("Play sound cues", isOn: soundCuesEnabledBinding)
                         .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: 142)
-                        .disabled(appState.whisperSettingsLocked)
-                    }
-
-                    Divider().overlay(AppTheme.border)
-
-                    SettingsFormRow(
-                        title: "Whisper model",
-                        detail: "Only prepared local models can be selected"
-                    ) {
-                        WhisperModelPickerControl(
-                            selectedModel: appState.whisperConfiguration.model,
-                            isEnabled: !appState.whisperSettingsLocked,
-                            isModelSelectable: { appState.isWhisperModelPrepared($0) },
-                            selectModel: { appState.updateWhisperModel($0) }
-                        )
-                    }
+                        .toggleStyle(.switch)
                 }
 
-                FormSectionTitle("Sound cues")
-                    .padding(.top, 7)
+                Divider().overlay(AppTheme.border)
 
-                SettingsFormPanel {
-                    SettingsFormRow(
-                        title: "Play sound cues",
-                        detail: "Start, stop, and processing errors"
-                    ) {
-                        Toggle("Play sound cues", isOn: soundCuesEnabledBinding)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                    }
-
-                    Divider().overlay(AppTheme.border)
-
-                    SettingsFormRow(
-                        title: "Sound style",
-                        detail: "Choose the tone of your feedback"
-                    ) {
-                        Picker("Sound style", selection: soundCueStyleBinding) {
-                            ForEach(SoundCueStyle.allCases) { style in
-                                Text(style.title).tag(style)
-                            }
+                SettingsFormRow(
+                    title: "Sound style",
+                    detail: "Choose the tone of your feedback"
+                ) {
+                    Picker("Sound style", selection: soundCueStyleBinding) {
+                        ForEach(SoundCueStyle.allCases) { style in
+                            Text(style.title).tag(style)
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(width: 142)
-                        .disabled(!appState.soundCuesEnabled || appState.whisperSettingsLocked)
                     }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 142)
+                    .disabled(!appState.soundCuesEnabled || appState.whisperSettingsLocked)
+                }
 
-                    Divider().overlay(AppTheme.border)
+                Divider().overlay(AppTheme.border)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Preview")
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(AppTheme.primaryText)
-                        HStack(spacing: 8) {
-                            ForEach(SoundCue.allCases) { cue in
-                                Button {
-                                    appState.previewSoundCue(cue)
-                                } label: {
-                                    Label(cue.title, systemImage: "play.fill")
-                                }
-                                .accessibilityLabel("Preview \(cue.title.lowercased()) sound")
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Preview")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(AppTheme.primaryText)
+                    HStack(spacing: 8) {
+                        ForEach(SoundCue.allCases) { cue in
+                            Button {
+                                appState.previewSoundCue(cue)
+                            } label: {
+                                Label(cue.title, systemImage: "play.fill")
                             }
+                            .accessibilityLabel("Preview \(cue.title.lowercased()) sound")
                         }
-                        .controlSize(.small)
-                        .disabled(!appState.soundCuesEnabled || appState.whisperSettingsLocked)
+                    }
+                    .controlSize(.small)
+                    .disabled(!appState.soundCuesEnabled || appState.whisperSettingsLocked)
 
-                        Text(appState.soundCuesEnabled
-                             ? "Recording starts immediately. For best results, speak after the start sound."
-                             : "Speak once recording starts. No sound cue will play.")
+                    Text(appState.soundCuesEnabled
+                         ? "Recording starts immediately. For best results, speak after the start sound."
+                         : "Speak once recording starts. No sound cue will play.")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let message = appState.soundCuePlaybackMessage {
+                        Text(message)
                             .font(.system(size: 10.5))
                             .foregroundStyle(AppTheme.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
-
-                        if let message = appState.soundCuePlaybackMessage {
-                            Text(message)
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
                     }
-                    .padding(13)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-
-                FormSectionTitle("Custom vocabulary")
-                    .padding(.top, 7)
-
-                CustomVocabularyEditor(appState: appState)
+                .padding(13)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            Divider().overlay(AppTheme.border).padding(.vertical, 10)
+
+            FormSectionTitle("Custom vocabulary")
+                .padding(.top, 7)
+
+            CustomVocabularyEditor(appState: appState)
         }
     }
 
@@ -794,7 +863,7 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
-                    Text("Qwen3 0.6B")
+                    Text(model.displayName)
                         .font(.system(size: 13, weight: .semibold))
                     Text(ready ? "Downloaded" : "Download needed")
                         .font(.system(size: 10, weight: .medium))
@@ -814,7 +883,7 @@ struct ContentView: View {
             Spacer(minLength: 8)
             if downloading {
                 ProgressView().controlSize(.small)
-                    .accessibilityLabel("Downloading Qwen3")
+                    .accessibilityLabel("Downloading " + model.displayName)
             } else if !ready {
                 Button(appState.refinementDownloadError(for: model) == nil ? "Download" : "Retry") {
                     selectedRefinementModel = model
@@ -831,96 +900,13 @@ struct ContentView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .disabled(appState.refinementConfiguration.isEnabled || appState.refinementSettingsLocked)
-                .help("Turn off text refinement before removing this model.")
+                .disabled(!appState.canDeleteRefinementModel(model))
+                .help("Select another refinement model before removing this one.")
             }
         }
         .padding(14)
         .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 9))
         .overlay(RoundedRectangle(cornerRadius: 9).stroke(AppTheme.border, lineWidth: 1))
-    }
-
-    private var refinementPage: some View {
-        DetailPage {
-            VStack(alignment: .leading, spacing: 7) {
-                FormSectionTitle("Local text cleanup")
-
-                SettingsFormPanel {
-                    SettingsFormRow(
-                        title: "Refine before insertion",
-                        detail: "Clean punctuation and wording with a local LLM"
-                    ) {
-                        Toggle("Refine before insertion", isOn: refinementEnabledBinding)
-                            .labelsHidden()
-                            .toggleStyle(.switch)
-                            .disabled(appState.refinementSettingsLocked)
-                    }
-
-                }
-
-                FormSectionTitle("Local model")
-                    .padding(.top, 7)
-                refinementModelCard
-
-                if appState.isDownloadingRefinementModel(appState.refinementConfiguration.model) || appState.refinementDownloadError(for: appState.refinementConfiguration.model) != nil {
-                    let model = appState.refinementConfiguration.model
-                    ModelDownloadStatusPanel(
-                        title: "Qwen3 0.6B download",
-                        statusText: appState.refinementDownloadError(for: model) ?? appState.refinementDownloadStatusText(for: model),
-                        isActive: appState.isDownloadingRefinementModel(model),
-                        progress: appState.refinementDownloadProgress(for: model),
-                        hasFailed: appState.refinementDownloadError(for: model) != nil,
-                        cancelAction: { appState.cancelRefinementModelDownload(model) }
-                    )
-                }
-
-                Text("The model loads while you record, stays ready between dictations, and sleeps after five minutes without use.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 4)
-
-                FormSectionTitle("System prompt")
-                    .padding(.top, 7)
-
-                TextEditor(text: refinementPromptTextBinding)
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(AppTheme.primaryText.opacity(0.86))
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 116)
-                    .padding(9)
-                    .background(AppTheme.editorFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(AppTheme.border, lineWidth: 1)
-                    )
-                    .disabled(appState.whisperSettingsLocked)
-
-                HStack(spacing: 8) {
-                    Text(shortRefinementStatusText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(AppTheme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Spacer(minLength: 8)
-
-                    Button("Folder") { appState.openRefinementPromptsFolder() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-
-                    Button("Reset") { appState.resetActiveRefinementPrompt() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(appState.whisperSettingsLocked)
-
-                    Button("Save") { appState.saveRefinementPromptText() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .tint(AppTheme.accent)
-                        .disabled(appState.whisperSettingsLocked || !appState.isRefinementPromptDirty || appState.refinementPromptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-        }
     }
 
     private var permissionsPage: some View {
@@ -1013,7 +999,7 @@ struct ContentView: View {
         switch appState.mainWindowPage {
         case .overview: "Overview"
         case .dictation: "Dictation"
-        case .refinement: "Refinement"
+        case .refinement: "Dictation"
         case .history: "History"
         case .shortcutAndAudio: "Shortcut & Audio"
         case .appearance: "Appearance"
@@ -1027,7 +1013,7 @@ struct ContentView: View {
         switch appState.mainWindowPage {
         case .overview: "Ready for private, local dictation"
         case .dictation: "Choose how speech becomes text."
-        case .refinement: "Clean transcripts locally before insertion."
+        case .refinement: "Choose how speech becomes text."
         case .history: "Replay recordings, review results, and retry locally."
         case .shortcutAndAudio: "Control recording access and audio behavior."
         case .appearance: "Choose how DictaFlow looks."
@@ -1995,7 +1981,7 @@ private struct CustomVocabularyEditor: View {
 
     private var helperText: String {
         let count = appState.whisperConfiguration.customVocabulary.count
-        return "Single words only, up to \(WhisperConfiguration.maxCustomVocabularyTerms). Whisper uses them as context to recognize these words better. \(count) of \(WhisperConfiguration.maxCustomVocabularyTerms) keywords used."
+        return "Single words only · \(count) of \(WhisperConfiguration.maxCustomVocabularyTerms) keywords"
     }
 
     private func commitKeyword() {

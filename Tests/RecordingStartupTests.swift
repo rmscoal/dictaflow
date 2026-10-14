@@ -6,6 +6,187 @@ import XCTest
 
 @MainActor
 final class RecordingStartupTests: XCTestCase {
+    func testRetiredLlamaSelectionCannotBeEnabledAndRemainsRemovable() async throws {
+        let fixture = try RecordingStartupFixture(refinementEnabled: true, refinementModel: .llama32ThreeB)
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        XCTAssertEqual(state.refinementConfiguration.model, .llama32ThreeB)
+        XCTAssertFalse(state.refinementConfiguration.isEnabled)
+        XCTAssertFalse(state.isSelectedRefinementModelSupported)
+        state.updateRefinementEnabled(true)
+        XCTAssertFalse(state.refinementConfiguration.isEnabled)
+        state.downloadRefinementModel(.llama32ThreeB)
+        XCTAssertFalse(state.isDownloadingRefinementModel(.llama32ThreeB))
+
+        let url = fixture.directory.appendingPathComponent(RefinementModelDescriptor.llama32ThreeB.filename)
+        try Data("retired weights".utf8).write(to: url)
+        let refreshed = expectation(description: "Retired weights visible in storage")
+        let observation = state.$installedLocalModelFiles.first { files in
+            files.contains { $0.modelIdentifier == RefinementModelDescriptor.llama32ThreeB.modelIdentifier }
+        }.sink { _ in refreshed.fulfill() }
+        state.refreshInstalledLocalModelFiles()
+        await fulfillment(of: [refreshed], timeout: 2)
+        observation.cancel()
+        XCTAssertTrue(state.canDeleteRefinementModel(.llama32ThreeB))
+        XCTAssertTrue(state.unusedLocalModelFiles.contains { $0.modelIdentifier == RefinementModelDescriptor.llama32ThreeB.modelIdentifier })
+        let removed = expectation(description: "Retired weights removed")
+        let deletionObservation = state.$installedLocalModelFiles.first { files in
+            !files.contains { $0.modelIdentifier == RefinementModelDescriptor.llama32ThreeB.modelIdentifier }
+        }.sink { _ in removed.fulfill() }
+        state.deleteRefinementModel(.llama32ThreeB)
+        await fulfillment(of: [removed], timeout: 2)
+        deletionObservation.cancel()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(state.refinementConfiguration.model, .llama32ThreeB)
+    }
+
+    func testRefinementRemovalProtectsSelectedModelAndDeletesOnlyInactiveWeights() async throws {
+        let fixture = try RecordingStartupFixture(refinementEnabled: false)
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        let original = state.refinementConfiguration.model
+        let replacement = RefinementModelDescriptor.qwen3FourB2507
+        let originalURL = fixture.directory.appendingPathComponent(original.filename)
+        let replacementURL = fixture.directory.appendingPathComponent(replacement.filename)
+        try Data("original weights".utf8).write(to: originalURL)
+        try Data("replacement weights".utf8).write(to: replacementURL)
+
+        let refreshed = expectation(description: "Refinement model files loaded")
+        let observation = state.$installedLocalModelFiles.first { files in
+            files.contains { $0.modelIdentifier == original.modelIdentifier }
+                && files.contains { $0.modelIdentifier == replacement.modelIdentifier }
+        }.sink { _ in refreshed.fulfill() }
+        state.refreshInstalledLocalModelFiles()
+        await fulfillment(of: [refreshed], timeout: 2)
+        observation.cancel()
+
+        XCTAssertFalse(state.canDeleteRefinementModel(original), "Selected weights stay protected even with refinement off")
+        XCTAssertTrue(state.canDeleteRefinementModel(replacement))
+        XCTAssertFalse(state.canDeleteRefinementModel(.phi4Mini), "A missing model cannot be removed")
+        state.deleteRefinementModel(original)
+        XCTAssertFalse(state.isDeletingModel)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: originalURL.path))
+
+        // Recheck selection at deletion time, rather than trusting a previously opened menu.
+        state.updateRefinementModel(replacement)
+        XCTAssertFalse(state.canDeleteRefinementModel(replacement))
+        state.deleteRefinementModel(replacement)
+        XCTAssertFalse(state.isDeletingModel)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: replacementURL.path))
+
+        state.deleteRefinementModel(original)
+        XCTAssertTrue(state.isDeletingModel)
+        XCTAssertTrue(state.refinementSettingsLocked)
+        let removed = expectation(description: "Inactive weights removed and inventory refreshed")
+        let deletionObservation = state.$installedLocalModelFiles.first { files in
+            !files.contains { $0.modelIdentifier == original.modelIdentifier }
+        }.sink { _ in removed.fulfill() }
+        await fulfillment(of: [removed], timeout: 2)
+        deletionObservation.cancel()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: originalURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: replacementURL.path))
+        XCTAssertEqual(state.refinementConfiguration.model, replacement)
+        XCTAssertFalse(state.isDeletingModel)
+        XCTAssertFalse(state.canDeleteRefinementModel(original))
+    }
+
+    func testTonePipelineWithRefinementOffOnAndFailure() async throws {
+        for refinementEnabled in [false, true] {
+            for fails in [false, true] where refinementEnabled || !fails {
+                let root = FileManager.default.temporaryDirectory.appendingPathComponent("TonePipeline-\(UUID())")
+                let store = SQLiteHistoryStore(root: root)
+                let text = "I'm late."
+                let service = PipelineRefinementService(expectedTranscript: text, failsRefinement: fails)
+                let fixture = try RecordingStartupFixture(
+                    whisper: PipelineWhisperService(text: text, languageCode: "en"), refinement: service,
+                    usePipelineModels: true, refinementEnabled: refinementEnabled, historyStore: store, allowsInsertion: true)
+                defer { fixture.cleanup(); try? FileManager.default.removeItem(at: root) }
+                fixture.volume.shouldWait = false
+                fixture.permissions.accessibilityGranted = true
+                fixture.state.updateTextTone(.casual)
+                let recording = expectation(description: "Recording starts")
+                let observation = fixture.state.$recordingState.sink { if $0.isRecording { recording.fulfill() } }
+                fixture.state.toggleDictation()
+                await fulfillment(of: [recording], timeout: 2)
+                observation.cancel()
+                fixture.state.updateTextTone(.formal)
+                XCTAssertEqual(fixture.state.textTone, .casual, "Tone is locked during a recording")
+                fixture.state.toggleDictation()
+                for _ in 0..<200 where !fixture.state.canProcessHistory { try await Task.sleep(for: .milliseconds(10)) }
+                let final = refinementEnabled && !fails ? "im late. refined" : "im late"
+                XCTAssertEqual(fixture.state.lastTranscription?.insertionText, final)
+                XCTAssertEqual(fixture.state.lastTranscription?.text, text)
+                XCTAssertEqual(fixture.insertion.insertedTexts.last, final)
+                fixture.state.copyLastTranscription()
+                XCTAssertEqual(fixture.insertion.copiedTexts.last, final)
+                let calls = await service.refineCalls
+                XCTAssertEqual(calls, refinementEnabled ? 1 : 0)
+                let entries = try await store.entries(search: "", limit: 50, offset: 0)
+                let id = try XCTUnwrap(entries.first?.id)
+                await fixture.state.history.select(id)
+                XCTAssertEqual(fixture.state.history.displayedText, final)
+                fixture.state.updateTextTone(.formal)
+                XCTAssertEqual(fixture.state.lastTranscription?.insertionText, final, "Changing settings never reformats an existing result")
+                XCTAssertEqual(fixture.state.history.displayedText, final)
+                fixture.state.history.textView = .original
+                XCTAssertEqual(fixture.state.history.displayedText, text)
+                fixture.state.insertHistoryText()
+                for _ in 0..<100 where fixture.state.isHistoryProcessing { try await Task.sleep(for: .milliseconds(10)) }
+                XCTAssertEqual(fixture.insertion.insertedTexts.last, text)
+            }
+        }
+    }
+
+    func testWritingDraftsOnlyAffectInferenceAfterSaving() throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        state.updatePresetInstructions("Saved cleanup rule")
+        XCTAssertFalse(state.savedEffectiveRefinementPrompt(taskMode: .transcribe).contains("Saved cleanup rule"))
+        state.savePresetInstructions()
+        XCTAssertTrue(state.savedEffectiveRefinementPrompt(taskMode: .transcribe).contains("Saved cleanup rule"))
+        state.updateRefinementMode(.casualMessaging)
+        XCTAssertEqual(state.currentPresetInstructions, "")
+        state.updatePresetInstructions("Casual draft")
+        state.updateRefinementMode(.smartCleanup)
+        XCTAssertEqual(state.currentPresetInstructions, "Saved cleanup rule")
+        state.updateRefinementMode(.diy)
+        state.updateRefinementPromptText("# DIY draft")
+        XCTAssertFalse(state.savedEffectiveRefinementPrompt(taskMode: .transcribe).contains("# DIY draft"))
+        state.saveRefinementPromptText()
+        XCTAssertTrue(state.savedEffectiveRefinementPrompt(taskMode: .translateToEnglish).contains("# DIY draft"))
+        XCTAssertTrue(state.savedEffectiveRefinementPrompt(taskMode: .translateToEnglish).contains("Output English."))
+        XCTAssertFalse(state.savedEffectiveRefinementPrompt(taskMode: .transcribe).contains("Saved cleanup rule"))
+    }
+
+    func testUnreadablePresetInstructionsAreKeptAndCanBeRecovered() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("preset-instructions.json")
+        let original = Data("{broken JSON with existing instructions".utf8)
+        try original.write(to: file)
+        let promptStore = FileRefinementPromptStore(directoryURL: directory)
+        let fixture = try RecordingStartupFixture(promptStore: promptStore)
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        XCTAssertNotNil(state.refinementWritingError)
+        state.updatePresetInstructions("New cleanup instructions")
+        state.savePresetInstructions()
+        XCTAssertEqual(try Data(contentsOf: file), original)
+        XCTAssertTrue(state.isPresetInstructionsDirty)
+        XCTAssertNotNil(state.refinementWritingError)
+
+        // Repair outside the app, then retry without restarting or losing drafts.
+        try JSONEncoder().encode(["casualMessaging": "Keep emojis."]).write(to: file)
+        state.savePresetInstructions()
+        XCTAssertNil(state.refinementWritingError)
+        XCTAssertFalse(state.isPresetInstructionsDirty)
+        XCTAssertEqual(try promptStore.presetInstructions()["casualMessaging"], "Keep emojis.")
+        state.updateRefinementMode(.casualMessaging)
+        XCTAssertEqual(state.currentPresetInstructions, "Keep emojis.")
+    }
+
     func testLaunchDoesNotPrepareRecorderOrChangeVolume() throws {
         let fixture = try RecordingStartupFixture()
         defer { fixture.cleanup() }
@@ -225,6 +406,9 @@ final class RecordingStartupTests: XCTestCase {
         let detail = try await store.detail(capture.id)
         XCTAssertEqual(detail.transcriptions.count, 2)
         XCTAssertEqual(detail.refinements.count, 1)
+        let prompt = try XCTUnwrap(detail.refinements.first?.prompt)
+        XCTAssertEqual(prompt, fixture.state.savedEffectiveRefinementPrompt(taskMode: .transcribe))
+        XCTAssertFalse(prompt.contains("{{languageInstruction}}"))
     }
 
     func testFailedRefinementRetryPreservesSelectedOlderRefinement() async throws {
@@ -345,6 +529,95 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertNil(fixture.overlay.presentation)
         XCTAssertEqual(fixture.state.transcriptionState, .idle)
         // StartupInsertionService also fails on any insertion or clipboard write.
+    }
+
+    func testCombinedWhisperDownloadStartsEncoderAfterModelSucceeds() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        let encoderStarted = expectation(description: "Encoder starts after verified model download")
+        service.onEncoderDownload = {
+            XCTAssertTrue(service.isWhisperModelPrepared(.tiny))
+            encoderStarted.fulfill()
+        }
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+
+        fixture.state.downloadWhisperModelWithEncoder(.tiny)
+        await fulfillment(of: [encoderStarted], timeout: 2)
+        XCTAssertEqual(service.downloadRequests, ["whisper.tiny", "whisper.tiny.encoder"])
+        XCTAssertEqual(fixture.state.whisperConfiguration.model, .small)
+    }
+
+    func testFailedCombinedModelDownloadDoesNotQueueEncoderOnPlainRetry() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        service.onModelDownload = { throw ModelDownloadServiceError.checksumMismatch }
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+        let failed = expectation(description: "Model verification failure is surfaced")
+        let failureObservation = fixture.state.$whisperDownloadErrors.sink {
+            if $0[.tiny] != nil { failed.fulfill() }
+        }
+        fixture.state.downloadWhisperModelWithEncoder(.tiny)
+        await fulfillment(of: [failed], timeout: 2)
+        failureObservation.cancel()
+        XCTAssertEqual(service.downloadRequests, ["whisper.tiny"])
+
+        service.onModelDownload = nil
+        let completed = expectation(description: "Plain model retry completes")
+        let completionObservation = fixture.state.$whisperDownloads.sink {
+            if $0[.tiny] == nil && service.isWhisperModelPrepared(.tiny) { completed.fulfill() }
+        }
+        fixture.state.downloadWhisperModel(.tiny)
+        await fulfillment(of: [completed], timeout: 2)
+        completionObservation.cancel()
+        XCTAssertEqual(service.downloadRequests, ["whisper.tiny", "whisper.tiny"])
+    }
+
+    func testCancellingCombinedDownloadPreventsEncoderEvenIfModelFinishes() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        var continuation: CheckedContinuation<Void, Never>?
+        let started = expectation(description: "Model download is in flight")
+        service.onModelDownload = {
+            await withCheckedContinuation { continuation = $0; started.fulfill() }
+        }
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+        fixture.state.downloadWhisperModelWithEncoder(.tiny)
+        await fulfillment(of: [started], timeout: 2)
+        fixture.state.cancelWhisperModelDownload(.tiny)
+        let completed = expectation(description: "Late completion is handled")
+        let observation = fixture.state.$whisperDownloads.sink {
+            if $0[.tiny] == nil { completed.fulfill() }
+        }
+        continuation?.resume()
+        await fulfillment(of: [completed], timeout: 2)
+        observation.cancel()
+        XCTAssertEqual(service.downloadRequests, ["whisper.tiny"])
+    }
+
+    func testCombinedEncoderFailureKeepsDownloadedModelForEncoderRetry() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        service.encoderDownloadError = ModelDownloadServiceError.checksumMismatch
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+        let failed = expectation(description: "Encoder failure is surfaced")
+        let observation = fixture.state.$whisperEncoderDownloadErrors.sink {
+            if $0[.tiny] != nil { failed.fulfill() }
+        }
+        fixture.state.downloadWhisperModelWithEncoder(.tiny)
+        await fulfillment(of: [failed], timeout: 2)
+        observation.cancel()
+        XCTAssertTrue(fixture.state.isWhisperModelPrepared(.tiny))
+        service.encoderDownloadError = nil
+        let retried = expectation(description: "Only encoder is retried")
+        service.onEncoderDownload = { retried.fulfill() }
+        fixture.state.downloadWhisperModelWithEncoder(.tiny)
+        await fulfillment(of: [retried], timeout: 2)
+        XCTAssertEqual(service.downloadRequests, ["whisper.tiny", "whisper.tiny.encoder", "whisper.tiny.encoder"])
+        XCTAssertEqual(fixture.state.whisperConfiguration.model, .small)
     }
 
     func testEncoderDownloadUsesDedicatedWarmupInsteadOfTranscription() async throws {
@@ -535,14 +808,19 @@ private final class RecordingStartupFixture {
     let overlay = StartupOverlayRouter()
     let cues = StartupCueService()
     let state: DictaFlowAppState
+    let insertion: StartupInsertionService
 
     init(
         permission: MicrophonePermissionState = .granted,
         whisper: WhisperServiceProtocol = WhisperCPPService(),
         refinement: TranscriptRefinementServiceProtocol = LlamaCLITranscriptRefinementService(),
         usePipelineModels: Bool = false,
+        modelDownloadService: ModelDownloadServiceProtocol? = nil,
         refinementEnabled: Bool? = nil,
-        historyStore: HistoryStoreProtocol? = nil
+        refinementModel: RefinementModelDescriptor = .recommendedDefault,
+        historyStore: HistoryStoreProtocol? = nil,
+        promptStore: RefinementPromptStoreProtocol? = nil,
+        allowsInsertion: Bool = false
     ) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -550,23 +828,25 @@ private final class RecordingStartupFixture {
         settings.saveAutomaticallyChecksForUpdates(false)
         settings.saveRecordingPlaybackBehavior(.lowerSystemVolume)
         var refinementConfiguration = RefinementConfiguration.default
+        refinementConfiguration.model = refinementModel
         refinementConfiguration.isEnabled = refinementEnabled ?? usePipelineModels
         settings.saveRefinementConfiguration(refinementConfiguration)
         try Data("synthetic model".utf8).write(to: directory.appendingPathComponent(settings.whisperConfiguration.model.filename))
         permissions = StartupPermissionService(permission: permission)
+        insertion = StartupInsertionService(allowsInsertion: allowsInsertion)
         recorder = StartupRecorderService(fileURL: directory.appendingPathComponent("capture.m4a"))
         state = DictaFlowAppState(
             settingsStore: settings, permissionService: permissions,
             audioRecorderService: recorder, audioOutputVolumeService: volume,
             soundCueService: cues,
             hotkeyService: StartupHotkeyService(),
-            modelDownloadService: usePipelineModels
+            modelDownloadService: modelDownloadService ?? (usePipelineModels
                 ? PipelineModelDownloadService(modelsDirectoryURL: directory)
-                : WhisperModelDownloadService(modelsDirectoryURL: directory),
+                : WhisperModelDownloadService(modelsDirectoryURL: directory)),
             whisperService: whisper,
             transcriptRefinementService: refinement,
-            refinementPromptStore: StartupPromptStore(directory: directory),
-            textInsertionService: StartupInsertionService(),
+            refinementPromptStore: promptStore ?? StartupPromptStore(directory: directory),
+            textInsertionService: insertion,
             localNotificationService: StartupNotificationService(),
             appUpdateService: GitHubReleaseUpdateService(),
             historyStore: historyStore
@@ -703,15 +983,26 @@ private final class StartupPromptStore: RefinementPromptStoreProtocol {
     func hasCustomPromptTemplate() -> Bool { false }
     func savePromptTemplate(_ template: String) throws {}
     func resetPromptTemplate() throws {}
+    private var instructions: [String: String] = [:]
+    func presetInstructions() throws -> [String: String] { instructions }
+    func savePresetInstructions(_ instructions: [String: String]) throws { self.instructions = instructions }
 }
 
 @MainActor
 private final class StartupInsertionService: TextInsertionServiceProtocol {
+    let allowsInsertion: Bool
+    var insertedTexts: [String] = []
+    var copiedTexts: [String] = []
+    init(allowsInsertion: Bool = false) { self.allowsInsertion = allowsInsertion }
     func insertText(_ text: String, targetApplication: InsertionTargetApplication?, allowAccessibilityFeatures: Bool) async -> TextInsertionResult {
-        XCTFail("No insertion is expected")
+        if !allowsInsertion { XCTFail("No insertion is expected") }
+        insertedTexts.append(text)
         return TextInsertionResult(text: text, method: .copyPanel, targetApplicationName: nil, completedAt: Date(), isInsertionConfirmed: false)
     }
-    func copyTextToPasteboard(_ text: String) { XCTFail("No clipboard writes are expected") }
+    func copyTextToPasteboard(_ text: String) {
+        if !allowsInsertion { XCTFail("No clipboard writes are expected") }
+        copiedTexts.append(text)
+    }
 }
 
 @MainActor
@@ -725,10 +1016,12 @@ private actor PipelineWhisperService: WhisperServiceProtocol {
     let onWarmup: @Sendable () -> Void
     let failsTranscription: Bool
     let text: String
-    init(onWarmup: @escaping @Sendable () -> Void = {}, failsTranscription: Bool = false, text: String = " \n") {
+    let languageCode: String?
+    init(onWarmup: @escaping @Sendable () -> Void = {}, failsTranscription: Bool = false, text: String = " \n", languageCode: String? = nil) {
         self.onWarmup = onWarmup
         self.failsTranscription = failsTranscription
         self.text = text
+        self.languageCode = languageCode
     }
     func prepare(modelURL: URL) async throws {}
     func unloadModel() async {}
@@ -738,7 +1031,7 @@ private actor PipelineWhisperService: WhisperServiceProtocol {
     func transcribe(audioFileURL: URL, modelURL: URL, configuration: WhisperConfiguration) async throws -> WhisperTranscriptionResult {
         transcribeCalls += 1
         if failsTranscription { throw NSError(domain: "com.apple.coreaudio.avfaudio", code: 1954115647) }
-        return WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: nil,
+        return WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: languageCode,
             model: configuration.model, taskMode: configuration.taskMode, completedAt: Date())
     }
 }
@@ -770,24 +1063,35 @@ private actor PipelineRefinementService: TranscriptRefinementServiceProtocol {
 @MainActor
 private final class PipelineModelDownloadService: ModelDownloadServiceProtocol {
     let modelsDirectoryURL: URL
+    var preparedModels: Set<WhisperModelDescriptor>?
+    var downloadRequests: [String] = []
+    var onModelDownload: (() async throws -> Void)?
+    var onEncoderDownload: (() -> Void)?
+    var encoderDownloadError: Error?
     init(modelsDirectoryURL: URL) { self.modelsDirectoryURL = modelsDirectoryURL }
     func installedModelFiles() -> [LocalModelFile] { [] }
     func deleteModelFiles(_ files: [LocalModelFile]) async throws -> Int64 { 0 }
     func cancelDownload(modelIdentifier: String) {}
     func removeIncompleteDownloads() -> Int64 { 0 }
-    func isWhisperModelPrepared(_ model: WhisperModelDescriptor) -> Bool { true }
+    func isWhisperModelPrepared(_ model: WhisperModelDescriptor) -> Bool { preparedModels?.contains(model) ?? true }
     func verifiedWhisperModelURL(for model: WhisperModelDescriptor) async -> URL? {
         modelsDirectoryURL.appendingPathComponent(model.filename)
     }
     func ensureModelAvailable(_ model: WhisperModelDescriptor, progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void) async throws -> URL {
-        modelsDirectoryURL.appendingPathComponent(model.filename)
+        downloadRequests.append(model.modelIdentifier)
+        try await onModelDownload?()
+        preparedModels?.insert(model)
+        return modelsDirectoryURL.appendingPathComponent(model.filename)
     }
     func isWhisperEncoderPrepared(_ model: WhisperModelDescriptor) -> Bool { true }
     func isWhisperEncoderDownloaded(_ model: WhisperModelDescriptor) -> Bool { false }
     func setWhisperEncoderEnabled(_ enabled: Bool, for model: WhisperModelDescriptor) async throws {}
     func removeOrphanedEncoders() -> Int64 { 0 }
     func ensureWhisperEncoderAvailable(_ model: WhisperModelDescriptor, progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void) async throws -> URL {
-        modelsDirectoryURL.appendingPathComponent(model.encoderDirectoryName)
+        downloadRequests.append(model.encoderModelIdentifier)
+        if let encoderDownloadError { throw encoderDownloadError }
+        onEncoderDownload?()
+        return modelsDirectoryURL.appendingPathComponent(model.encoderDirectoryName)
     }
     func deleteWhisperEncoder(_ model: WhisperModelDescriptor) async throws -> Int64 { 0 }
     func isRefinementModelPrepared(_ model: RefinementModelDescriptor) -> Bool { true }

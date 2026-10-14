@@ -48,6 +48,10 @@ struct RefinementModelRecommendation: Equatable, Sendable {
         hardwareProfile: MacHardwareProfile,
         isPrepared: Bool
     ) -> RefinementModelSupport {
+        guard RefinementModelDescriptor.allCases.contains(model) else {
+            return .unsupported("This refinement model is no longer supported. Select another model in Dictation > Refinement. Old downloads can be removed in Storage.")
+        }
+
         if hardwareProfile.physicalMemoryGB < model.minimumMemoryGB {
             return .unsupported("Needs at least \(model.minimumMemoryGB) GB memory.")
         }

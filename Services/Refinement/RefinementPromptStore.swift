@@ -2,10 +2,17 @@ import Foundation
 
 protocol RefinementPromptStoreProtocol: AnyObject {
     var promptsDirectoryURL: URL { get }
+    var loadError: String? { get }
     func promptTemplate() -> String
     func hasCustomPromptTemplate() -> Bool
     func savePromptTemplate(_ template: String) throws
     func resetPromptTemplate() throws
+    func presetInstructions() throws -> [String: String]
+    func savePresetInstructions(_ instructions: [String: String]) throws
+}
+
+extension RefinementPromptStoreProtocol {
+    var loadError: String? { nil }
 }
 
 enum RefinementPromptStoreError: LocalizedError {
@@ -27,24 +34,40 @@ enum RefinementPromptStoreError: LocalizedError {
 
 final class FileRefinementPromptStore: RefinementPromptStoreProtocol {
     let promptsDirectoryURL: URL
+    private(set) var loadError: String?
 
     private let fileManager: FileManager
 
-    init(fileManager: FileManager = .default) {
+    init(fileManager: FileManager = .default, directoryURL: URL? = nil) {
         self.fileManager = fileManager
-        self.promptsDirectoryURL = Self.makePromptsDirectoryURL(fileManager: fileManager)
-        try? migrateLegacyStandardPromptIfNeeded()
+        self.promptsDirectoryURL = directoryURL ?? Self.makePromptsDirectoryURL(fileManager: fileManager)
+        do {
+            // Earlier Dev builds shared the release prompt folder. Copy once, never remove it.
+            if directoryURL == nil, Bundle.main.bundleIdentifier != "com.dictaflow" {
+                let legacy = fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/DictaFlow/Prompts/refinement.txt")
+                if !fileManager.fileExists(atPath: promptURL.path), Self.isRegularPromptFile(at: legacy) {
+                    try savePromptTemplate(String(contentsOf: legacy, encoding: .utf8))
+                }
+            }
+            try migrateLegacyStandardPromptIfNeeded()
+        } catch {
+            loadError = "Could not migrate the local prompt. " + error.localizedDescription
+        }
     }
 
     func promptTemplate() -> String {
-        let promptURL = promptURL
-        guard Self.isRegularPromptFile(at: promptURL),
-              let prompt = try? String(contentsOf: promptURL, encoding: .utf8),
-              !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard fileManager.fileExists(atPath: promptURL.path) else { return RefinementPromptTemplate.defaultTemplate }
+        do {
+            guard Self.isRegularPromptFile(at: promptURL) else { throw RefinementPromptStoreError.invalidPromptFile }
+            let prompt = try String(contentsOf: promptURL, encoding: .utf8)
+            guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw RefinementPromptStoreError.emptyPrompt
+            }
+            return prompt
+        } catch {
+            loadError = "Could not load the local prompt. " + error.localizedDescription
             return RefinementPromptTemplate.defaultTemplate
         }
-
-        return prompt
     }
 
     func hasCustomPromptTemplate() -> Bool {
@@ -89,6 +112,27 @@ final class FileRefinementPromptStore: RefinementPromptStoreProtocol {
         try fileManager.removeItem(at: promptURL)
     }
 
+    func presetInstructions() throws -> [String: String] {
+        let url = promptsDirectoryURL.appendingPathComponent("preset-instructions.json")
+        guard fileManager.fileExists(atPath: url.path) else { return [:] }
+        guard Self.isRegularPromptFile(at: url) else { throw RefinementPromptStoreError.invalidPromptFile }
+        return try JSONDecoder().decode([String: String].self, from: Data(contentsOf: url))
+    }
+
+    func savePresetInstructions(_ instructions: [String: String]) throws {
+        try Self.ensurePromptsDirectoryExists(at: promptsDirectoryURL, using: fileManager)
+        let url = promptsDirectoryURL.appendingPathComponent("preset-instructions.json")
+        if fileManager.fileExists(atPath: url.path), !Self.isRegularPromptFile(at: url) {
+            throw RefinementPromptStoreError.invalidPromptFile
+        }
+        // Callers must not accidentally overwrite an unreadable existing file.
+        _ = try presetInstructions()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(instructions).write(to: url, options: .atomic)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
     private var promptURL: URL {
         promptsDirectoryURL.appendingPathComponent("refinement.txt", isDirectory: false)
     }
@@ -112,7 +156,7 @@ final class FileRefinementPromptStore: RefinementPromptStoreProtocol {
         fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("DictaFlow", isDirectory: true)
+            .appendingPathComponent(Bundle.main.bundleIdentifier == "com.dictaflow" ? "DictaFlow" : "DictaFlow Dev", isDirectory: true)
             .appendingPathComponent("Prompts", isDirectory: true)
     }
 

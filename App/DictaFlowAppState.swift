@@ -39,6 +39,9 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isMainWindowVisible = false
     @Published private(set) var isSettingsWindowVisible = false
     @Published private(set) var appAppearance: AppAppearance
+    @Published var dictationSettingsTab: DictationSettingsTab = .transcription
+    @Published private(set) var textTone: TextTone
+    private var recordingTone: TextTone = .original
     @Published var mainWindowPage: MainWindowPage = .overview
     @Published private(set) var microphonePermissionState: MicrophonePermissionState
     @Published private(set) var accessibilityPermissionState: AccessibilityPermissionState
@@ -145,8 +148,12 @@ final class DictaFlowAppState: ObservableObject {
     private var pendingInsertionTargetApplication: InsertionTargetApplication?
     private var isOnboardingPracticeSession = false
     private var preservedStatusMessage: String?
+    @Published private(set) var presetInstructionDrafts: [String: String] = [:]
+    @Published private(set) var refinementWritingError: String?
+    private var savedPresetInstructions: [String: String] = [:]
     private var savedRefinementPromptText: String
     private var activeWhisperDownloadTokens: [WhisperModelDescriptor: UUID] = [:]
+    private var whisperModelsPendingEncoderDownload: Set<WhisperModelDescriptor> = []
     private var activeRefinementDownloadTokens: [RefinementModelDescriptor: UUID] = [:]
     private var activeWhisperEncoderDownloadTokens: [WhisperModelDescriptor: UUID] = [:]
 
@@ -186,7 +193,16 @@ final class DictaFlowAppState: ObservableObject {
         appUpdateService: AppUpdateChecking,
         historyStore: HistoryStoreProtocol? = nil
     ) {
-        let initialRefinementConfiguration = settingsStore.refinementConfiguration
+        var initialRefinementConfiguration = settingsStore.refinementConfiguration
+        if initialRefinementConfiguration.writingStyleVersion == 0 {
+            if refinementPromptStore.hasCustomPromptTemplate() { initialRefinementConfiguration.mode = .diy }
+            initialRefinementConfiguration.writingStyleVersion = 1
+            settingsStore.saveRefinementConfiguration(initialRefinementConfiguration)
+        }
+        if !RefinementModelDescriptor.allCases.contains(initialRefinementConfiguration.model), initialRefinementConfiguration.isEnabled {
+            initialRefinementConfiguration.isEnabled = false
+            settingsStore.saveRefinementConfiguration(initialRefinementConfiguration)
+        }
         let initialPromptText = refinementPromptStore.promptTemplate()
 
         self.historyStore = historyStore
@@ -208,6 +224,7 @@ final class DictaFlowAppState: ObservableObject {
         self.appUpdateService = appUpdateService
         self.launchExperience = settingsStore.shouldShowMainWindowOnLaunch ? .firstLaunch : .returningUser
         self.whisperConfiguration = settingsStore.whisperConfiguration
+        self.textTone = settingsStore.textTone
         self.refinementConfiguration = initialRefinementConfiguration
         self.refinementPromptText = initialPromptText
         self.savedRefinementPromptText = initialPromptText
@@ -241,6 +258,13 @@ final class DictaFlowAppState: ObservableObject {
         self.automaticallyChecksForUpdates = settingsStore.automaticallyChecksForUpdates
         self.preservedStatusMessage = nil
         self.lastKnownExternalTargetApplication = Self.makeInsertionTargetApplication(from: NSWorkspace.shared.frontmostApplication)
+        refinementWritingError = refinementPromptStore.loadError
+        do {
+            savedPresetInstructions = try refinementPromptStore.presetInstructions()
+            presetInstructionDrafts = savedPresetInstructions
+        } catch {
+            refinementWritingError = "Could not load additional instructions. " + error.localizedDescription
+        }
         configureWorkspaceObservers()
         updateStatusMessage()
     }
@@ -423,7 +447,7 @@ final class DictaFlowAppState: ObservableObject {
 
     var refinementStatusText: String {
         if isRefinementServerPreparing {
-            return "Preparing Qwen3 0.6B for this recording…"
+            return "Preparing \(refinementConfiguration.model.displayName) for this recording…"
         }
 
         if let unsupportedReason = refinementModelSupport(for: refinementConfiguration.model).unsupportedReason {
@@ -435,13 +459,13 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         if !isSelectedRefinementModelPrepared {
-            return "Download Qwen3 0.6B for standard refinement. Your original transcript is used until it is ready."
+            return "Download \(refinementConfiguration.model.displayName) for local refinement. Your selected tone still applies until it is ready."
         }
         if refinementConfiguration.isEnabled {
             return "Loads when recording starts and sleeps after five minutes without use."
         }
 
-        return "Refinement is off. DictaFlow will insert the raw Whisper transcript."
+        return "Refinement is off. Your selected tone still applies before insertion."
     }
 
     var hasPreparedRefinementModel: Bool {
@@ -637,6 +661,14 @@ final class DictaFlowAppState: ObservableObject {
         modelDownloadService.isRefinementModelPrepared(model)
     }
 
+    func canDeleteRefinementModel(_ model: RefinementModelDescriptor) -> Bool {
+        !refinementSettingsLocked && !isDownloadingRefinementModel(model)
+            && (model != refinementConfiguration.model || !RefinementModelDescriptor.allCases.contains(model))
+            && installedLocalModelFiles.contains {
+                $0.category == .refinement && $0.modelIdentifier == model.modelIdentifier
+            }
+    }
+
     var unusedLocalModelFiles: [LocalModelFile] {
         installedLocalModelFiles.filter { !isActiveLocalModelFile($0) }
     }
@@ -678,11 +710,14 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private var activeLocalModelIdentifiers: Set<String> {
-        [
+        var identifiers: Set<String> = [
             whisperConfiguration.model.modelIdentifier,
-            whisperConfiguration.model.encoderModelIdentifier,
-            refinementConfiguration.model.modelIdentifier
+            whisperConfiguration.model.encoderModelIdentifier
         ]
+        if RefinementModelDescriptor.allCases.contains(refinementConfiguration.model) {
+            identifiers.insert(refinementConfiguration.model.modelIdentifier)
+        }
+        return identifiers
     }
 
     var textInsertionStatusText: String {
@@ -766,7 +801,8 @@ final class DictaFlowAppState: ObservableObject {
             cancelGlobalShortcutEditing()
         }
 
-        mainWindowPage = page
+        if page == .refinement { dictationSettingsTab = .refinement }
+        mainWindowPage = page == .refinement ? .dictation : page
         mainWindowRouter?.showMainWindow()
 
         if page == .models {
@@ -776,6 +812,12 @@ final class DictaFlowAppState: ObservableObject {
 
     func openSettingsWindow() {
         showMainWindowPage(.shortcutAndAudio)
+    }
+
+    func updateTextTone(_ tone: TextTone) {
+        guard !whisperSettingsLocked, !refinementSettingsLocked else { return }
+        textTone = tone
+        settingsStore.saveTextTone(tone)
     }
 
     func updateAutomaticallyChecksForUpdates(_ isEnabled: Bool) {
@@ -947,12 +989,12 @@ final class DictaFlowAppState: ObservableObject {
         guard !whisperSettingsLocked, refinementConfiguration.isEnabled != isEnabled else { return }
         if isEnabled {
             guard isSelectedRefinementModelSupported, isRefinementRuntimeAvailable else {
-                setPreservedStatusMessage("Local refinement is unavailable. Check the Refinement page.")
+                setPreservedStatusMessage("Local refinement is unavailable. Check Dictation > Refinement.")
                 showMainWindowPage(.refinement)
                 return
             }
             guard isSelectedRefinementModelPrepared else {
-                setPreservedStatusMessage("Download Qwen3 0.6B before turning on text refinement.")
+                setPreservedStatusMessage("Download \(refinementConfiguration.model.displayName) before turning on text refinement.")
                 showMainWindowPage(.refinement)
                 return
             }
@@ -986,21 +1028,71 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    func updateRefinementMode(_ mode: RefinementMode) {
+        guard !refinementSettingsLocked else { return }
+        refinementConfiguration.mode = mode
+        persistRefinementConfiguration()
+    }
+
+    var currentPresetInstructions: String {
+        presetInstructionDrafts[refinementConfiguration.mode.rawValue] ?? ""
+    }
+
+    var isPresetInstructionsDirty: Bool {
+        currentPresetInstructions != (savedPresetInstructions[refinementConfiguration.mode.rawValue] ?? "")
+    }
+
+    func updatePresetInstructions(_ text: String) {
+        guard !refinementSettingsLocked else { return }
+        presetInstructionDrafts[refinementConfiguration.mode.rawValue] = text
+    }
+
+    func savePresetInstructions() {
+        guard !refinementSettingsLocked, refinementConfiguration.mode != .diy else { return }
+        do {
+            // Never replace instructions that failed to load. Re-read on Save so
+            // repairing the file allows a retry without restarting the app.
+            var updated = try refinementPromptStore.presetInstructions()
+            updated[refinementConfiguration.mode.rawValue] = currentPresetInstructions
+            try refinementPromptStore.savePresetInstructions(updated)
+            savedPresetInstructions = updated
+            for (key, value) in updated where presetInstructionDrafts[key] == nil {
+                presetInstructionDrafts[key] = value
+            }
+            refinementWritingError = nil
+        } catch {
+            refinementWritingError = "Could not save additional instructions. Check preset-instructions.json in the local Prompts folder and retry. " + error.localizedDescription
+        }
+    }
+
+    private var savedRefinementPromptTemplate: String {
+        RefinementPromptTemplate.template(for: refinementConfiguration.mode,
+            additionalInstructions: savedPresetInstructions[refinementConfiguration.mode.rawValue] ?? "",
+            diyPrompt: savedRefinementPromptText)
+    }
+
+    func savedEffectiveRefinementPrompt(taskMode: WhisperTaskMode) -> String {
+        RefinementPromptTemplate.renderedInstructions(from: savedRefinementPromptTemplate, whisperTaskMode: taskMode)
+    }
+
     func updateRefinementPromptText(_ promptText: String) {
+        guard !refinementSettingsLocked else { return }
         refinementPromptText = promptText
         isRefinementPromptDirty = promptText != savedRefinementPromptText
     }
 
     func saveRefinementPromptText() {
+        guard !refinementSettingsLocked else { return }
         do {
             try refinementPromptStore.savePromptTemplate(refinementPromptText)
             savedRefinementPromptText = refinementPromptText
             isRefinementPromptDirty = false
             hasCustomRefinementPrompt = true
+            refinementWritingError = nil
             setPreservedStatusMessage("Saved the refinement system prompt in Application Support.")
             updateStatusMessage()
         } catch {
-            setPreservedStatusMessage("Could not save the refinement system prompt. \(error.localizedDescription)")
+            refinementWritingError = "Could not save the system prompt. " + error.localizedDescription
             showMainWindow()
             updateStatusMessage()
         }
@@ -1175,6 +1267,18 @@ final class DictaFlowAppState: ObservableObject {
             try Task.checkCancellation()
             return modelURL
         }
+    }
+
+    func downloadWhisperModelWithEncoder(_ model: WhisperModelDescriptor) {
+        if isWhisperModelPrepared(model) {
+            downloadWhisperEncoder(model)
+            return
+        }
+
+        guard !isDownloadingWhisperModel(model) else { return }
+        // Use the existing verified downloads, with the encoder starting only after the model succeeds.
+        whisperModelsPendingEncoderDownload.insert(model)
+        downloadWhisperModel(model)
     }
 
     func downloadWhisperModel(_ model: WhisperModelDescriptor) {
@@ -1591,6 +1695,7 @@ final class DictaFlowAppState: ObservableObject {
         let previousText = history.displayedText
         history.retryMessages[id] = nil
         history.errorMessage = nil
+        let retryTone = textTone
         let previousLatestAttemptID = history.detail?.transcriptions.first?.id
         var configuration = whisperConfiguration
         if let model { configuration.model = model }
@@ -1604,13 +1709,13 @@ final class DictaFlowAppState: ObservableObject {
                 let url = try await historyStore.acquireAudio(id)
                 acquired = true
                 let entry = try await historyStore.detail(id).entry
-                await transcribe(capture: DictationCapture(fileURL: url, duration: entry.duration, capturedAt: entry.capturedAt), historyID: id, insertResult: false, configuration: configuration)
+                await transcribe(capture: DictationCapture(fileURL: url, duration: entry.duration, capturedAt: entry.capturedAt), historyID: id, insertResult: false, configuration: configuration, tone: retryTone)
                 await historyStore.releaseAudio(id)
                 acquired = false
                 let updated = try await historyStore.detail(id)
                 if let latest = updated.transcriptions.first, latest.id != previousLatestAttemptID, let result = latest.result {
-                    let refined = updated.refinements.first { $0.transcriptionID == latest.id && $0.result != nil }?.result?.refinedText
-                    let newText = (refined ?? result.text).trimmingCharacters(in: .whitespacesAndNewlines)
+                    let refined = updated.refinements.first { $0.transcriptionID == latest.id && $0.result != nil }?.result?.insertionText
+                    let newText = (refined ?? result.insertionText).trimmingCharacters(in: .whitespacesAndNewlines)
                     let unchanged = newText == (previousText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                     history.retryMessages[id] = unchanged ? "Retry complete. Text unchanged." : "Retry complete. Text updated."
                 } else {
@@ -1635,9 +1740,12 @@ final class DictaFlowAppState: ObservableObject {
 
     func retryHistoryRefinement() {
         guard canProcessHistory, let id = history.selectedID,
-              let attempt = history.transcription, let result = attempt.result, let historyStore else { return }
+              let attempt = history.transcription, var result = attempt.result, let historyStore else { return }
         history.retryMessages[id] = nil
         history.errorMessage = nil
+        result.toneFormatting = TextToneFormatter.format(result.text, tone: textTone,
+            isEnglish: result.taskMode == .translateToEnglish || result.detectedLanguageCode == "en",
+            protectedTerms: attempt.configuration.customVocabulary)
         let previousLatestRefinementID = history.refinements.first?.id
         processingHistoryID = id
         isHistoryProcessing = true
@@ -1648,7 +1756,7 @@ final class DictaFlowAppState: ObservableObject {
             do {
                 try await historyStore.acquireRecording(id)
                 acquired = true
-                _ = await refinedTranscriptionIfNeeded(result, historyTranscriptionID: attempt.id, forceEnabled: true)
+                _ = await refinedTranscriptionIfNeeded(result, historyTranscriptionID: attempt.id, forceEnabled: true, protectedTerms: attempt.configuration.customVocabulary)
                 transcriptionState = .idle
                 await historyStore.releaseAudio(id)
                 acquired = false
@@ -1678,6 +1786,8 @@ final class DictaFlowAppState: ObservableObject {
         guard canProcessHistory, let result = history.transcription?.result else { return }
         var selected = result
         selected.refinement = history.showsOriginal ? nil : history.refinement?.result
+        if history.showsOriginal { selected.toneFormatting = nil }
+        if history.showsRawRefinement { selected.refinement?.toneFormatting = nil }
         isHistoryProcessing = true
         historyRetryTask = Task { [weak self] in
             guard let self else { return }
@@ -1729,6 +1839,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func cancelWhisperModelDownload(_ model: WhisperModelDescriptor) {
+        whisperModelsPendingEncoderDownload.remove(model)
         guard whisperDownloads[model] != nil else {
             return
         }
@@ -1808,18 +1919,22 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
+        guard model != refinementConfiguration.model || !RefinementModelDescriptor.allCases.contains(model) else {
+            setPreservedStatusMessage("Select another refinement model before removing this one.")
+            return
+        }
+
+        guard !isDownloadingRefinementModel(model) else {
+            setPreservedStatusMessage("Cancel the model download before removing it.")
+            return
+        }
+
         guard let file = installedLocalModelFiles.first(where: {
             $0.category == .refinement && $0.modelIdentifier == model.modelIdentifier
         }) else {
             setPreservedStatusMessage("The \(model.displayName) model is not downloaded.")
             return
         }
-
-        if refinementConfiguration.model == model, refinementConfiguration.isEnabled {
-            setPreservedStatusMessage("Turn off text refinement before removing its model.")
-            return
-        }
-        if refinementConfiguration.model == model { stopRefinement() }
 
         isDeletingModel = true
         clearPreservedStatusMessage()
@@ -2045,6 +2160,9 @@ final class DictaFlowAppState: ObservableObject {
 
         updateStatusMessage()
         refreshInstalledLocalModelFiles()
+        if whisperModelsPendingEncoderDownload.remove(model) != nil {
+            downloadWhisperEncoder(model)
+        }
     }
 
     private func discardWhisperDownload(_ model: WhisperModelDescriptor, token: UUID) {
@@ -2053,6 +2171,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         activeWhisperDownloadTokens[model] = nil
+        whisperModelsPendingEncoderDownload.remove(model)
         whisperDownloads[model] = nil
         setPreservedStatusMessage("Cancelled the \(model.displayName) download. The partial file was removed. Downloading again starts from the beginning.")
         updateStatusMessage()
@@ -2064,6 +2183,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         activeWhisperDownloadTokens[model] = nil
+        whisperModelsPendingEncoderDownload.remove(model)
         whisperDownloads[model] = nil
         let message = "Could not download \(model.displayName). \(error.localizedDescription)"
         whisperDownloadErrors[model] = message
@@ -2415,6 +2535,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func beginRecordingFlow() async {
+        recordingTone = textTone
         let requestedAt = ProcessInfo.processInfo.systemUptime
         recordingFailureMessage = nil
         clearPreservedStatusMessage()
@@ -2534,7 +2655,7 @@ final class DictaFlowAppState: ObservableObject {
             microphonePermissionState = permissionService.currentMicrophonePermissionStatus()
             recordingState = .idle
             updateStatusMessage()
-            await transcribe(capture: capture, historyID: historyID)
+            await transcribe(capture: capture, historyID: historyID, tone: recordingTone)
             if let historyID { await historyStore?.releaseAudio(historyID) }
             await history.refresh()
         } catch {
@@ -2821,8 +2942,9 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func transcribe(capture: DictationCapture, historyID: UUID? = nil, insertResult: Bool = true, configuration override: WhisperConfiguration? = nil) async {
+    private func transcribe(capture: DictationCapture, historyID: UUID? = nil, insertResult: Bool = true, configuration override: WhisperConfiguration? = nil, tone: TextTone? = nil) async {
         let configuration = override ?? whisperConfiguration
+        let selectedTone = tone ?? textTone
         var historyAttempt: UUID?
         if let historyID, let historyStore {
             do { historyAttempt = try await historyStore.startTranscription(historyID, configuration: configuration) }
@@ -2854,19 +2976,23 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         do {
-            let transcription = try await whisperService.transcribe(
+            var transcription = try await whisperService.transcribe(
                 audioFileURL: capture.fileURL,
                 modelURL: modelURL,
                 configuration: configuration
             )
 
+            transcription.toneFormatting = TextToneFormatter.format(
+                transcription.text, tone: selectedTone,
+                isEnglish: transcription.taskMode == .translateToEnglish || transcription.detectedLanguageCode == "en",
+                protectedTerms: configuration.customVocabulary)
             if let attempt = historyAttempt {
                 do { try await historyStore?.finishTranscription(attempt, result: transcription, error: nil) }
                 catch { history.report(error); historyAttempt = nil }
             }
             lastTranscription = transcription
             clearPreservedStatusMessage()
-            let insertionTranscription = await refinedTranscriptionIfNeeded(transcription, historyTranscriptionID: historyAttempt)
+            let insertionTranscription = await refinedTranscriptionIfNeeded(transcription, historyTranscriptionID: historyAttempt, protectedTerms: configuration.customVocabulary)
             guard !isTerminating else { return }
 
             if isOnboardingPracticeSession {
@@ -2939,7 +3065,7 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func refinedTranscriptionIfNeeded(_ transcription: WhisperTranscriptionResult, historyTranscriptionID: UUID? = nil, forceEnabled: Bool = false) async -> WhisperTranscriptionResult {
+    private func refinedTranscriptionIfNeeded(_ transcription: WhisperTranscriptionResult, historyTranscriptionID: UUID? = nil, forceEnabled: Bool = false, protectedTerms: [String] = []) async -> WhisperTranscriptionResult {
         guard !isTerminating, refinementConfiguration.isEnabled || forceEnabled else {
             return transcription
         }
@@ -2955,7 +3081,7 @@ final class DictaFlowAppState: ObservableObject {
 
         guard isSelectedRefinementModelPrepared else {
             var skippedTranscription = transcription
-            skippedTranscription.refinementStatus = .skipped(reason: "Download Qwen3 0.6B from the Refinement page.")
+            skippedTranscription.refinementStatus = .skipped(reason: "Download \(model.displayName) in Dictation > Refinement.")
             lastTranscription = skippedTranscription
             playSoundCue(.error)
             return skippedTranscription
@@ -2966,7 +3092,7 @@ final class DictaFlowAppState: ObservableObject {
             var skippedTranscription = transcription
             skippedTranscription.refinementStatus = .skipped(reason: message)
             lastTranscription = skippedTranscription
-            setPreservedStatusMessage("Could not refine the transcript locally, so DictaFlow will use the raw Whisper text. \(message)")
+            setPreservedStatusMessage("Could not refine the transcript locally, so DictaFlow will use the transcript with your selected tone. \(message)")
             playSoundCue(.error)
             showMainWindow()
             updateStatusMessage()
@@ -2978,23 +3104,24 @@ final class DictaFlowAppState: ObservableObject {
 
         var configuration = refinementConfiguration
         if forceEnabled { configuration.isEnabled = true }
-        let prompt = refinementPromptText
+        let prompt = savedRefinementPromptTemplate
+        let effectivePrompt = RefinementPromptTemplate.renderedInstructions(from: prompt, whisperTaskMode: transcription.taskMode)
         prewarmRefinementModel(forceEnabled: forceEnabled)
         // Persistence yields to the preparation task. Keep its result even if
         // preparation finishes and clears the coordinator's in-flight handle.
         let preparation = refinementPreparationTask
         var historyAttempt: UUID?
         if let historyTranscriptionID, let historyStore {
-            do { historyAttempt = try await historyStore.startRefinement(historyTranscriptionID, configuration: configuration, prompt: prompt) }
+            do { historyAttempt = try await historyStore.startRefinement(historyTranscriptionID, configuration: configuration, prompt: effectivePrompt) }
             catch { history.report(error) }
         }
         do {
             guard let preparation else {
-                throw TranscriptRefinementServiceError.failedToRun("Download Qwen3 0.6B from the Refinement page.")
+                throw TranscriptRefinementServiceError.failedToRun("Download \(model.displayName) in Dictation > Refinement.")
             }
             let modelURL = try await preparation.value
             guard !isTerminating else { return transcription }
-            let refinement = try await transcriptRefinementService.refine(
+            var refinement = try await transcriptRefinementService.refine(
                 transcript: transcription.text,
                 whisperTaskMode: transcription.taskMode,
                 modelURL: modelURL,
@@ -3002,6 +3129,10 @@ final class DictaFlowAppState: ObservableObject {
                 promptTemplate: prompt
             )
 
+            refinement.toneFormatting = TextToneFormatter.format(
+                refinement.refinedText, tone: transcription.toneFormatting?.tone ?? textTone,
+                isEnglish: transcription.taskMode == .translateToEnglish || transcription.detectedLanguageCode == "en",
+                protectedTerms: protectedTerms)
             if let historyAttempt {
                 do { try await historyStore?.finishRefinement(historyAttempt, result: refinement, error: nil) }
                 catch { history.report(error) }
@@ -3024,7 +3155,7 @@ final class DictaFlowAppState: ObservableObject {
             }
             guard !isTerminating else { return transcription }
             if forceEnabled { history.report(error) }
-            let message = "Could not refine the transcript locally, so DictaFlow will use the raw Whisper text. \(error.localizedDescription)"
+            let message = "Could not refine the transcript locally, so DictaFlow will use the transcript with your selected tone. \(error.localizedDescription)"
             var failedTranscription = transcription
             failedTranscription.refinementStatus = .failed(
                 model: model,
@@ -3036,7 +3167,7 @@ final class DictaFlowAppState: ObservableObject {
             playSoundCue(.error)
             localNotificationService.show(
                 title: "DictaFlow refinement failed",
-                body: "Using the raw Whisper transcript instead."
+                body: "Using the transcript with your selected tone instead."
             )
             showMainWindowPage(forceEnabled ? .history : .overview)
             updateStatusMessage()

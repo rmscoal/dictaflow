@@ -195,7 +195,7 @@ an actionable error instead of an unfiltered transcript.
 Use the Dev app in `/Applications`, with its separate Dev preferences and
 permissions. Check the Refinement and Models pages at the minimum window size,
 with both downloaded and missing model states. The
-single model card should remain readable, download progress should be
+provider tabs and model rows should remain readable, download progress should be
 continuous, and switches should lock during recording or inference.
 
 Enabling refinement and launching the app must not load a model. Starting a
@@ -235,3 +235,89 @@ background apps. Measure latency, idle CPU, resident memory, and CPU/GPU power.
 Power measurements cover the whole machine and do not establish output quality.
 Review questions, requests, names, numbers, self-corrections, and mixed-language
 text separately for preservation of meaning.
+
+
+## Multiple refinement models and writing styles
+
+`RefinementWritingStyleTests` checks preset composition, DIY replacement, language
+requirements, model preference round trips, pinned download revisions, private
+prompt persistence, and corrupt/symlink storage rejection. Coordinator tests
+check that unsaved drafts never reach inference and that additions stay separate
+per preset. Lifecycle tests cover ordered long-transcript chunks and rejection
+of the entire rewrite when a later chunk is incomplete. Context-aware fixtures
+check corrections across source boundaries, continuous list numbering, and no
+duplicated earlier output. Storage tests check that a failed load cannot overwrite
+existing additions and that repairing the file permits a retry without restarting.
+
+Optional real-model tests cover every model in `RefinementModelDescriptor.allCases`.
+Supply their checksum-pinned filenames in `/tmp/DictaFlowRefinementFixtures/`.
+These tests do not download models. A slow connection is sufficient for manual
+start/progress/cancel checks, but cannot establish inference quality or RAM usage
+for new weights. Verify all three provider tabs, the active-model summary, download
+status across tabs, preset switching, per-preset saving, DIY Write/Preview, and
+narrow-window light/dark layouts in the installed Dev app.
+
+`testQwen3FourBPreservesIndonesianIntent` runs each Indonesian case three times
+with Qwen3-4B-Instruct-2507 and Casual Text Messaging. It checks mixed construction facts
+and a question, an unanswered RAB question with a request, a questionnaire, and
+statements with negation and uncertainty. Supply the pinned
+`Qwen3-4B-Instruct-2507-Q4_K_M.gguf` fixture to run it. Missing weights skip the
+check. Term and punctuation assertions catch the reported failures but do not
+prove complete semantic fidelity; review the outputs in the installed app too.
+
+For a before/after comparison, select the same original transcript in History
+and use **Refine Again** with the same model and writing style. Rebuild and
+relaunch after changing built-in prompts or the source wrapper. Compare the
+**Refined** view and keep earlier attempts available through Previous Results.
+
+`testVerifiedQwenLongTranscriptQualityProbe` records an unresolved Qwen3 0.6B
+limitation: it can omit a corrected date or retain the superseded date among
+many repetitive technical facts. This known-failing quality probe is explicitly
+excluded from normal test runs. When enabled, both date assertions and all
+runtime and identifier/number checks fail normally; there are no expected failures.
+Supply the pinned Qwen3 0.6B fixture and run:
+
+```sh
+TEST_RUNNER_DICTAFLOW_RUN_QUALITY_PROBES=1 xcodebuild \
+  -project DictaFlow.xcodeproj -scheme "DictaFlow Dev" \
+  -configuration Debug -derivedDataPath .build/DerivedData test \
+  -only-testing:DictaFlowTests/RefinementIntegrationTests/testVerifiedQwenLongTranscriptQualityProbe
+```
+
+Xcode forwards the `TEST_RUNNER_` variable to the test process as
+`DICTAFLOW_RUN_QUALITY_PROBES`. A passing normal suite does not resolve this
+limitation. Do not interpret passing structural chunk tests as proof that every
+model preserves every fact.
+
+## Dictation tone and combined settings
+
+`TextToneFormatterTests` checks conservative English rules, protected structured
+text and vocabulary, non-English behavior, empty output, idempotence, settings
+persistence, and legacy result decoding. `RecordingStartupTests` verifies the
+pipeline with refinement off, on, and failing, including the locked tone snapshot,
+inserted/copied text, and retrieving the original. `HistoryStoreTests` checks raw
+and final search/preview, saved rule versions, and upgrade from the v2 schema.
+
+In the installed Dev app, check Dictation's three tabs, all six Whisper cards,
+split download buttons and installed-model menus, and the existing
+refinement provider/model and DIY controls. Check narrow-window layouts and
+that sound cues and custom vocabulary remain below speech models. Tone preview
+should update without enabling refinement. Verify download/progress/cancel and
+encoder on/off with real artifacts when available.
+
+“Download with Encoder” downloads and verifies the speech model first, then
+downloads its encoder through the existing encoder path. Check cancellation in
+both stages and retry after a model or encoder failure. Cancelling the model
+stage must not start the encoder; an encoder failure must keep the downloaded
+model. The installed-model menu offers “Download Encoder” when missing and
+“Use Encoder” when installed. While an encoder downloads for an inactive,
+downloaded model, “Use model” must remain available. Selecting the model must
+leave the encoder downloading, and “Cancel encoder” must stop only the encoder
+download. Removal must confirm and remove the model together
+with its encoder, including a disabled encoder. Switch away from the active
+model before removing it; keep at least one downloaded speech model.
+
+`RecordingStartupTests` also checks combined download order, cancellation with
+late completion, model failure followed by a plain retry, and encoder failure
+followed by an encoder-only retry. These checks use synthetic download services
+and do not download weights.
