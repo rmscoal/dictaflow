@@ -2,28 +2,49 @@ import SwiftUI
 
 struct ToneSettingsView: View {
     @ObservedObject var appState: DictaFlowAppState
-    private let example = "Hmm, I'm gonna be late. There's a cute dog outside. I can't just walk past him."
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Tone").font(.headline)
-            Picker("Tone", selection: Binding(get: { appState.textTone }, set: { appState.updateTextTone($0) })) {
-                ForEach(TextTone.allCases) { tone in Text(tone.title).tag(tone) }
+        VStack(alignment: .leading, spacing: 0) {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                ForEach(TextTone.allCases) { tone in
+                    Button { appState.updateTextTone(tone) } label: {
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack {
+                                Text(glyph(tone)).font(.system(size: 27, weight: .medium))
+                                Spacer()
+                                if appState.textTone == tone { Image(systemName: "checkmark").font(.system(size: 12)) }
+                            }
+                            .padding(.bottom, 9)
+                            Text(tone.title).font(.system(size: 13, weight: .medium))
+                            Text(detail(tone)).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+                        }
+                        .padding(18).frame(maxWidth: .infinity, minHeight: 135, alignment: .topLeading)
+                        .foregroundStyle(appState.textTone == tone ? AppTheme.accent : AppTheme.primaryText)
+                        .background(appState.textTone == tone ? AppTheme.selectedFill : AppTheme.tileFill,
+                                    in: RoundedRectangle(cornerRadius: 20))
+                        .overlay { RoundedRectangle(cornerRadius: 20).stroke(appState.textTone == tone ? AppTheme.accent : AppTheme.border, lineWidth: 1) }
+                        .contentShape(RoundedRectangle(cornerRadius: 20))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(appState.whisperSettingsLocked || appState.refinementSettingsLocked)
+                    .accessibilityLabel("\(tone.title), \(detail(tone))")
+                    .accessibilityAddTraits(appState.textTone == tone ? .isSelected : [])
+                }
             }
-            .pickerStyle(.segmented).labelsHidden()
-            .disabled(appState.whisperSettingsLocked || appState.refinementSettingsLocked)
-            Text("Available with or without refinement.")
-                .font(.caption).foregroundStyle(AppTheme.secondaryText)
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Preview").font(.caption).foregroundStyle(AppTheme.secondaryText)
-                Text(TextToneFormatter.format(example, tone: appState.textTone, isEnglish: true).text)
-                    .font(.system(size: 14)).fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 9))
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke(AppTheme.border))
-            Text("Tone adjusts formatting using fixed rules. Names and structured text are preserved where possible; rewriting uses refinement.")
-                .font(.caption).foregroundStyle(AppTheme.secondaryText).fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .contain).accessibilityLabel("Text tone")
+        }
+    }
+
+    private func glyph(_ tone: TextTone) -> String {
+        switch tone { case .original, .formal: "Aa"; case .casual: "aa"; case .balanced: "Aa." }
+    }
+
+    private func detail(_ tone: TextTone) -> String {
+        switch tone {
+        case .original: "Keep as dictated"
+        case .casual: "Relaxed casing"
+        case .balanced: "Keep formatting"
+        case .formal: "Expand contractions"
         }
     }
 }

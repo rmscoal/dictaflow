@@ -1,20 +1,31 @@
 import SwiftUI
 
-/// Shared main-window colors. Dark values preserve the existing DictaFlow palette.
+/// Ember's semantic sRGB colors, shared by windows, menus, and transient panels.
 enum AppTheme {
-    static let background = ThemeColor.adaptive(light: 0xF7F7F8, dark: 0x17191D)
-    static let sidebar = ThemeColor.adaptive(light: 0xECEFF3, dark: 0x202A38)
-    static let sidebarBorder = ThemeColor.adaptive(light: 0xD5D9DF, dark: 0x313A47)
-    static let barFill = ThemeColor.adaptive(light: 0xF7F7F8, dark: 0x1C1E22)
-    static let tileFill = ThemeColor.adaptive(light: 0xFFFFFF, dark: 0x23252A)
-    static let controlFill = ThemeColor.adaptive(light: 0xE9EBEE, dark: 0x303237)
-    static let editorFill = ThemeColor.adaptive(light: 0xF2F3F5, dark: 0x1F2125)
-    static let accent = ThemeColor.adaptive(light: 0x3D63DB, dark: 0x4D78FB)
-    static let modelActive = ThemeColor.adaptive(light: 0x247A43, dark: 0x46B471)
-    static let warning = ThemeColor.adaptive(light: 0x976018, dark: 0xF0AB4F)
-    static let destructive = ThemeColor.adaptive(light: 0xBE3042, dark: 0xD53C49)
-    static let border = ThemeColor.adaptive(light: 0xDCDFE4, dark: 0x36383C)
-    static let primaryText = ThemeColor.adaptive(light: 0x202124, dark: 0xF5F6F8)
-    static let secondaryText = ThemeColor.adaptive(light: 0x636871, dark: 0x9499A3)
-    static let tertiaryText = ThemeColor.adaptive(light: 0x6B707A, dark: 0x9298A3)
+    static let background = ThemeColor.adaptive(light: 0xF3F0E9, dark: 0x171816)
+    static let sidebar = ThemeColor.adaptive(light: 0xE9E4D8, dark: 0x262722)
+    static let glass = ThemeColor.adaptive(light: 0xF9F5EC, dark: 0x2D2E28)
+    static let sidebarBorder = border
+    static let barFill = background
+    static let tileFill = ThemeColor.adaptive(light: 0xFFFDF8, dark: 0x242521)
+    static let controlFill = ThemeColor.adaptive(light: 0xEAE6DC, dark: 0x2E3029)
+    static let editorFill = tileFill
+    static let accent = ThemeColor.adaptive(light: 0x785422, dark: 0xE6BE83)
+    static let selectedFill = ThemeColor.adaptive(light: 0xE8DDCA, dark: 0x393226)
+    static let actionFill = ThemeColor.adaptive(light: 0x765126, dark: 0xE6BE83)
+    static let actionText = ThemeColor.adaptive(light: 0xFFFAF0, dark: 0x27251F)
+    static let modelActive = ThemeColor.adaptive(light: 0x426745, dark: 0xB3C7A7)
+    static let warning = ThemeColor.adaptive(light: 0x85510C, dark: 0xE6BE83)
+    static let destructive = ThemeColor.adaptive(light: 0xAD3B38, dark: 0xF2A6A2)
+    static let border = ThemeColor.adaptive(light: 0xD8D4C8, dark: 0x414239)
+    static let primaryText = ThemeColor.adaptive(light: 0x2F322B, dark: 0xF0EDE5)
+    static let secondaryText = ThemeColor.adaptive(light: 0x66695F, dark: 0xB6B4A8)
+    static let tertiaryText = secondaryText
+    static let paper = ThemeColor.adaptive(light: 0xEAE1CF, dark: 0x34352E)
+    static let paperBorder = ThemeColor.adaptive(light: 0xCFC3AD, dark: 0x535447)
+    static let paperText = ThemeColor.adaptive(light: 0x37392F, dark: 0xF4EDDD)
+    static let paperSecondaryText = ThemeColor.adaptive(light: 0x626354, dark: 0xC3BFAE)
+    static let errorFill = ThemeColor.adaptive(light: 0xF7E6E2, dark: 0x392824)
+    static let errorBorder = ThemeColor.adaptive(light: 0xD5A49A, dark: 0x81514A)
+    static let errorText = ThemeColor.adaptive(light: 0x8E3029, dark: 0xF0B6AA)
 }

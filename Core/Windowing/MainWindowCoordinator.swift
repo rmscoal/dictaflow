@@ -49,8 +49,11 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
         }
 
         let hostingController = NSHostingController(rootView: ContentView(appState: appState))
+        let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1168, height: 868)
+        let initialSize = NSSize(width: min(1120, max(660, visibleFrame.width - 48)),
+                                 height: min(820, max(520, visibleFrame.height - 48)))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 560),
+            contentRect: NSRect(origin: .zero, size: initialSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -63,7 +66,7 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
         window.minSize = NSSize(width: 660, height: 520)
         window.center()
         window.isOpaque = true
-        window.backgroundColor = ThemeColor.adaptiveNSColor(light: 0xF7F7F8, dark: 0x17191D)
+        window.backgroundColor = ThemeColor.adaptiveNSColor(light: 0xF3F0E9, dark: 0x171816)
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.setFrameAutosaveName("DictaFlowMainWindowSidebar")

@@ -1,530 +1,113 @@
-import AppKit
 import SwiftUI
 
 struct MenuBarView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var appState: DictaFlowAppState
+    private var listening: Bool { appState.recordingState.isRecording }
+    private var processing: Bool { appState.transcriptionState.isBusy || appState.textInsertionState.isBusy || appState.isHistoryProcessing }
+    private var preparing: Bool { appState.recordingState != .idle && !listening }
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-
-            VStack(spacing: 8) {
-                recordingCard
-                modelsCard
+            HStack(spacing: 9) {
+                EmberAppMark(size: 24)
+                Text("DictaFlow").font(.system(size: 13, weight: .medium))
+                Spacer()
+                Button { dismiss() } label: { Image(systemName: "xmark") }
+                    .buttonStyle(EmberIconButtonStyle()).accessibilityLabel("Close DictaFlow menu")
             }
-            .padding(10)
-
-            footerActions
-        }
-        .frame(width: MenuLayout.width)
-        .foregroundStyle(MenuTheme.primaryText)
-        .background(MenuTheme.background)
-    }
-
-    private var header: some View {
-        HStack(spacing: 9) {
-            DictaFlowMenuMark()
-
-            Text("DictaFlow")
-                .font(.system(size: 18, weight: .semibold))
-                .tracking(-0.15)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .frame(height: MenuLayout.headerHeight)
-        .background(MenuTheme.headerFill)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(MenuTheme.strongDivider)
-                .frame(height: 1)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("DictaFlow")
-    }
-
-    private var recordingCard: some View {
-        HStack(spacing: 13) {
-            Button {
-                appState.toggleDictation()
-            } label: {
-                Image(systemName: appState.recordingState.isRecording ? "stop.fill" : "mic.fill")
-                    .font(.system(size: appState.recordingState.isRecording ? 16 : 20, weight: .medium))
-                    .frame(width: 54, height: 54)
+            .padding(.horizontal, 4).padding(.bottom, 14)
+            capturePanel
+            VStack(spacing: 0) {
+                pipelineRow(.transcription, title: "Transcription", detail: "Whisper \(appState.whisperConfiguration.model.displayName)", asset: "provider-openai")
+                EmberDivider()
+                pipelineRow(.refinement, title: "Refinement", detail: appState.refinementConfiguration.isEnabled ? appState.refinementConfiguration.model.displayName : "Off", asset: appState.refinementConfiguration.model.provider?.iconName)
+                EmberDivider()
+                pipelineRow(.tone, title: "Tone", detail: appState.textTone.title, asset: nil)
             }
-            .buttonStyle(RecordControlButtonStyle(isRecording: appState.recordingState.isRecording))
-            .disabled(isRecordControlDisabled)
-            .help(appState.dictationActionTitle)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(appState.recordingState.isRecording ? "Listening…" : "Ready to dictate")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(MenuTheme.primaryText)
-
-                recordingDetail
+            .padding(.top, 7)
+            EmberDivider()
+            HStack {
+                Button { dismiss(); appState.showMainWindowPage(.history) } label: { Label("History", systemImage: "clock") }
+                Spacer()
+                Button { dismiss(); appState.openSettingsWindow() } label: { Label("Settings…", systemImage: "slider.horizontal.3") }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.horizontal, 14)
-        .frame(maxWidth: .infinity, minHeight: MenuLayout.recordingCardHeight, alignment: .leading)
-        .background(
-            LinearGradient(
-                colors: [MenuTheme.recordingCardTop, MenuTheme.recordingCardBottom],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            ),
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(MenuTheme.cardBorder, lineWidth: 1)
-        }
-    }
-
-    @ViewBuilder
-    private var recordingDetail: some View {
-        if appState.transcriptionState.isBusy || appState.textInsertionState.isBusy {
-            Text(appState.menuBarStatusText)
-                .font(.system(size: 9.5))
-                .foregroundStyle(MenuTheme.secondaryText)
-                .lineLimit(1)
-        } else {
-            HStack(spacing: 4) {
-                Text(appState.recordingState.isRecording ? "Click stop or press" : "Click the microphone or press")
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(MenuTheme.secondaryText)
-                    .lineLimit(1)
-
-                CompactShortcutKeycap(shortcut: appState.globalShortcut)
-            }
-        }
-    }
-
-    private var modelsCard: some View {
-        VStack(spacing: 0) {
-            ModelRow(
-                icon: "waveform",
-                title: "Whisper model",
-                subtitle: "\(appState.whisperConfiguration.model.displayName) · Multilingual",
-                trailing: {
-                    Menu {
-                        ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
-                            Button {
-                                appState.updateWhisperModel(model)
-                            } label: {
-                                if model == appState.whisperConfiguration.model {
-                                    Label(model.displayName, systemImage: "checkmark")
-                                } else {
-                                    Text(model.displayName)
-                                }
-                            }
-                            .disabled(!appState.isWhisperModelPrepared(model))
-                        }
-                    } label: {
-                        ChevronButtonLabel()
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(appState.whisperSettingsLocked)
-                }
-            )
-
-            Divider()
-                .overlay(MenuTheme.divider)
-
-            ModelRow(
-                icon: "sparkles",
-                title: "Text refinement",
-                subtitle: refinementSubtitle,
-                trailing: {
-                    HStack(spacing: 6) {
-                        Toggle("Text refinement", isOn: refinementEnabledBinding)
-                            .labelsHidden()
-                            .toggleStyle(AccentSwitchStyle())
-                            .disabled(appState.refinementSettingsLocked)
-
-                        Button {
-                            appState.showMainWindowPage(.refinement)
-                        } label: {
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.system(size: 11))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open text refinement settings")
-                        .accessibilityLabel("Text refinement settings")
-                    }
-                }
-            )
-        }
-        .background(MenuTheme.modelsFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .stroke(MenuTheme.modelsBorder, lineWidth: 1)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-    }
-
-    private var footerActions: some View {
-        HStack(spacing: 6) {
-            Button {
-                dismiss()
-                appState.openSettingsWindow()
-            } label: {
-                HStack(spacing: 7) {
-                    Text("Open Settings")
-                    Spacer(minLength: 4)
-                    Image(systemName: "arrow.up.right")
-                        .foregroundStyle(MenuTheme.tertiaryText)
-                }
-                .font(.system(size: 10.5, weight: .semibold))
-                .padding(.horizontal, 10)
-                .frame(maxWidth: .infinity, minHeight: 30)
-            }
-            .buttonStyle(GhostButtonStyle(emphasized: true))
-
-            if let availableUpdate = appState.availableUpdate {
+            .buttonStyle(.plain).font(.system(size: 12)).padding(.horizontal, 7).padding(.vertical, 17)
+            EmberDivider()
+            HStack {
                 Button {
-                    appState.openAvailableUpdate()
-                } label: {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.system(size: 13, weight: .medium))
-                        .frame(width: 30, height: 30)
+                    dismiss()
+                    appState.showMainWindowPage(.updates)
+                    appState.checkForUpdates()
+                } label: { Label("Check for updates…", systemImage: "arrow.triangle.2.circlepath") }
+                Spacer()
+                Button("Quit") { appState.quit() }
+            }
+            .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+            .padding(.horizontal, 7).padding(.top, 16).padding(.bottom, 4)
+        }
+        .padding(14).frame(width: 360)
+        .foregroundStyle(AppTheme.primaryText).background { EmberMaterialFill(tint: AppTheme.glass) }.tint(AppTheme.accent)
+    }
+
+    private var capturePanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(listening ? "Recording" : processing ? "Processing" : preparing ? "Preparing" : "Ready")
+                        .font(.system(size: 19, weight: .medium))
+                    if processing || preparing {
+                        Text(appState.menuBarStatusText).font(.system(size: 11)).foregroundStyle(AppTheme.paperSecondaryText)
+                    } else {
+                        HStack(spacing: 4) {
+                            ForEach(appState.globalShortcut.displayParts) { part in
+                                if let symbol = part.symbol { Image(systemName: symbol) }
+                                else { Text(part.title) }
+                            }
+                            Text(listening ? "to stop" : "to start")
+                        }
+                        .font(.system(size: 11)).foregroundStyle(AppTheme.paperSecondaryText)
+                        .accessibilityLabel("\(appState.hotkeyDisplayText) to \(listening ? "stop" : "start")")
+                    }
                 }
-                .buttonStyle(GhostButtonStyle())
-                .help("Version \(availableUpdate.version.displayString) is available")
-            }
-
-            Button {
-                appState.quit()
-            } label: {
-                Text("Quit")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .padding(.horizontal, 8)
-                    .frame(minHeight: 30)
-            }
-            .buttonStyle(GhostButtonStyle())
-            .help("Quit DictaFlow")
-        }
-        .padding(.horizontal, 10)
-        .frame(height: MenuLayout.footerHeight)
-        .background(MenuTheme.footerFill)
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(MenuTheme.strongDivider)
-                .frame(height: 1)
-        }
-    }
-
-    private var isRecordControlDisabled: Bool {
-        appState.isDictationActionDisabled
-    }
-
-    private var refinementEnabledBinding: Binding<Bool> {
-        Binding(
-            get: { appState.refinementConfiguration.isEnabled },
-            set: { appState.updateRefinementEnabled($0) }
-        )
-    }
-
-    private var refinementSubtitle: String {
-        guard appState.refinementConfiguration.isEnabled else {
-            return "Off · Raw Whisper output"
-        }
-
-        return appState.isSelectedRefinementModelPrepared ? "Qwen3 0.6B · Local" : "Qwen3 · Download needed"
-    }
-}
-
-struct MenuBarIconView: View {
-    var body: some View {
-        Image(nsImage: Self.templateImage)
-            .renderingMode(.template)
-            .accessibilityLabel("DictaFlow")
-    }
-
-    private static let templateImage: NSImage = {
-        let imageSize = NSSize(width: 18, height: 18)
-        let barWidth: CGFloat = 2
-        let barSpacing: CGFloat = 1.5
-        let barHeights: [CGFloat] = [6, 10, 15, 10, 6]
-        let markWidth = CGFloat(barHeights.count) * barWidth
-            + CGFloat(barHeights.count - 1) * barSpacing
-        let leadingInset = (imageSize.width - markWidth) / 2
-
-        let image = NSImage(size: imageSize, flipped: false) { _ in
-            NSColor.black.setFill()
-
-            for (index, height) in barHeights.enumerated() {
-                let x = leadingInset + CGFloat(index) * (barWidth + barSpacing)
-                let y = (imageSize.height - height) / 2
-                let barRect = NSRect(x: x, y: y, width: barWidth, height: height)
-                NSBezierPath(
-                    roundedRect: barRect,
-                    xRadius: barWidth / 2,
-                    yRadius: barWidth / 2
-                ).fill()
-            }
-
-            return true
-        }
-        image.isTemplate = true
-        return image
-    }()
-}
-
-private struct DictaFlowMenuMark: View {
-    var body: some View {
-        DictaFlowWaveformMark(
-            barWidth: 2.3,
-            spacing: 2,
-            barHeights: [8, 14, 20, 14, 8]
-        )
-        .foregroundStyle(MenuTheme.logoBar)
-        .frame(width: 29, height: 29)
-        .background(MenuTheme.primaryText, in: Circle())
-        .shadow(color: .black.opacity(0.18), radius: 6.5, x: 0, y: 2.5)
-        .accessibilityHidden(true)
-    }
-}
-
-private struct DictaFlowWaveformMark: View {
-    let barWidth: CGFloat
-    let spacing: CGFloat
-    let barHeights: [CGFloat]
-
-    var body: some View {
-        HStack(alignment: .center, spacing: spacing) {
-            ForEach(Array(barHeights.enumerated()), id: \.offset) { _, height in
-                Capsule(style: .continuous)
-                    .fill(.foreground)
-                    .frame(width: barWidth, height: height)
-            }
-        }
-    }
-}
-
-private struct CompactShortcutKeycap: View {
-    let shortcut: GlobalShortcutDescriptor
-
-    var body: some View {
-        Text(compactText)
-            .font(.system(size: 8.5, weight: .semibold))
-            .foregroundStyle(MenuTheme.keycapText)
-            .padding(.horizontal, 5)
-            .frame(minHeight: 17)
-            .background(MenuTheme.controlFill, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .stroke(MenuTheme.controlBorder, lineWidth: 1)
-            }
-            .accessibilityLabel(shortcut.displayValue)
-    }
-
-    private var compactText: String {
-        shortcut.displayParts.map { part in
-            switch part.symbol {
-            case "command":
-                return "⌘"
-            case "option":
-                return "⌥"
-            case "control":
-                return "⌃"
-            case "shift":
-                return "⇧"
-            default:
-                return part.title
-            }
-        }
-        .joined(separator: " ")
-    }
-}
-
-private struct ModelRow<Trailing: View>: View {
-    let icon: String
-    let title: String
-    let subtitle: String
-    @ViewBuilder var trailing: Trailing
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(MenuTheme.accentTint)
-                .frame(width: 25, height: 25)
-                .background(MenuTheme.accentFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(MenuTheme.accentBorder, lineWidth: 1)
+                Spacer(minLength: 0)
+                Button { appState.toggleDictation() } label: {
+                    Image(systemName: listening ? "stop" : "mic").font(.system(size: 21))
+                        .frame(width: 54, height: 54)
+                        .foregroundStyle(AppTheme.actionText).background(AppTheme.actionFill, in: Circle())
+                        .contentShape(Circle())
                 }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(MenuTheme.primaryText)
-                    .lineLimit(1)
-
-                Text(subtitle)
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(MenuTheme.secondaryText)
-                    .lineLimit(1)
+                .buttonStyle(.plain).disabled(appState.isDictationActionDisabled)
+                .accessibilityLabel(listening ? "Stop recording" : "Start dictation")
             }
-
-            Spacer(minLength: 6)
-            trailing
-        }
-        .padding(.horizontal, 10)
-        .frame(minHeight: MenuLayout.modelRowHeight)
-    }
-}
-
-private struct ChevronButtonLabel: View {
-    var body: some View {
-        Image(systemName: "chevron.down")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(MenuTheme.chevronText)
-            .frame(width: 25, height: 24)
-            .background(MenuTheme.controlFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(MenuTheme.controlBorder, lineWidth: 1)
-            }
-    }
-}
-
-private struct RecordControlButtonStyle: ButtonStyle {
-    let isRecording: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(Color.white)
-            .background(
-                isRecording ? MenuTheme.recording : MenuTheme.accent,
-                in: Circle()
-            )
-            .overlay {
-                Circle()
-                    .stroke(Color.white.opacity(0.17), lineWidth: 1)
-            }
-            .shadow(
-                color: (isRecording ? MenuTheme.recording : MenuTheme.accent).opacity(0.38),
-                radius: 11,
-                x: 0,
-                y: 5
-            )
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-            .animation(.easeInOut(duration: 0.14), value: configuration.isPressed)
-    }
-}
-
-private struct GhostButtonStyle: ButtonStyle {
-    var emphasized = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        GhostButtonBody(configuration: configuration, emphasized: emphasized)
-    }
-
-    private struct GhostButtonBody: View {
-        let configuration: ButtonStyle.Configuration
-        let emphasized: Bool
-        @State private var isHovering = false
-
-        var body: some View {
-            configuration.label
-                .foregroundStyle(foregroundColor)
-                .background(backgroundColor, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(borderColor, lineWidth: 1)
+            HStack(spacing: 3) {
+                ForEach(Array([12.0, 22, 14, 25, 9, 17, 23, 13, 19, 10, 25, 18, 12, 20, 15, 22, 11, 18, 26, 15, 20, 10, 16, 12].enumerated()), id: \.offset) { _, height in
+                    Capsule().fill(AppTheme.accent.opacity(listening ? 0.85 : 0.4)).frame(width: 3, height: height)
                 }
-                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .onHover { isHovering = $0 }
-                .animation(.easeInOut(duration: 0.12), value: isHovering)
-                .animation(.easeInOut(duration: 0.12), value: configuration.isPressed)
-        }
-
-        private var foregroundColor: Color {
-            if isHovering || configuration.isPressed {
-                return MenuTheme.primaryText
+                Spacer(minLength: 0)
             }
-
-            return emphasized ? MenuTheme.footerPrimaryText : MenuTheme.footerText
+            .frame(height: 27).accessibilityHidden(true)
         }
-
-        private var backgroundColor: Color {
-            if configuration.isPressed {
-                return MenuTheme.hoverFill.opacity(0.085)
-            }
-
-            return isHovering ? MenuTheme.hoverFill.opacity(0.055) : Color.clear
-        }
-
-        private var borderColor: Color {
-            isHovering || configuration.isPressed ? MenuTheme.hoverFill.opacity(0.065) : Color.clear
-        }
+        .padding(20).frame(maxWidth: .infinity, alignment: .leading)
+        .foregroundStyle(AppTheme.paperText)
+        .background(AppTheme.paper, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(AppTheme.paperBorder, lineWidth: 1) }
     }
-}
 
-private struct AccentSwitchStyle: ToggleStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Button {
-            withAnimation(.spring(response: 0.22, dampingFraction: 0.78)) {
-                configuration.isOn.toggle()
+    private func pipelineRow(_ tab: DictationSettingsTab, title: String, detail: String, asset: String?) -> some View {
+        Button { dismiss(); appState.showDictationSettings(tab) } label: {
+            HStack(spacing: 10) {
+                if let asset { EmberProviderIcon(asset: asset, size: 23) }
+                else { EmberAppMark(size: 23) }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).font(.system(size: 12))
+                    Text(detail).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
             }
-        } label: {
-            Capsule(style: .continuous)
-                .fill(configuration.isOn ? MenuTheme.accent : MenuTheme.switchOffFill)
-                .frame(width: 31, height: 17)
-                .overlay(alignment: configuration.isOn ? .trailing : .leading) {
-                    Circle()
-                        .fill(configuration.isOn ? Color.white : MenuTheme.switchOffThumb)
-                        .frame(width: 11, height: 11)
-                        .padding(2)
-                        .shadow(color: .black.opacity(0.4), radius: 1.5, y: 1)
-                }
-                .overlay {
-                    Capsule(style: .continuous)
-                        .stroke(MenuTheme.controlBorder, lineWidth: 1)
-                }
+            .padding(.horizontal, 7).padding(.vertical, 13).contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain).accessibilityLabel("Open \(title). \(detail)")
     }
-}
-
-private enum MenuLayout {
-    static let width: CGFloat = 318
-    static let headerHeight: CGFloat = 56
-    static let recordingCardHeight: CGFloat = 86
-    static let modelRowHeight: CGFloat = 51
-    static let footerHeight: CGFloat = 47
-}
-
-private enum MenuTheme {
-    static let background = AppTheme.background
-    static let headerFill = AppTheme.sidebar
-    static let footerFill = ThemeColor.adaptive(light: 0xF2F3F5, dark: 0x1B1D21)
-    static let recordingCardTop = ThemeColor.adaptive(light: 0xFFFFFF, dark: 0x23252A)
-    static let recordingCardBottom = ThemeColor.adaptive(light: 0xF8F9FB, dark: 0x1F2125)
-    static let modelsFill = ThemeColor.adaptive(light: 0xFFFFFF, dark: 0x1C1E22)
-    static let accent = AppTheme.accent
-    static let recording = ThemeColor.adaptive(light: 0xC43A49, dark: 0xE0525F)
-    static let cardBorder = ThemeColor.adaptive(light: 0xDCDFE4, dark: 0x303238)
-    static let modelsBorder = ThemeColor.adaptive(light: 0xDCDFE4, dark: 0x2D3035)
-    static let controlFill = ThemeColor.adaptive(light: 0xECEEF1, dark: 0x292B30)
-    static let controlBorder = ThemeColor.adaptive(light: 0xD3D7DD, dark: 0x3A3D43)
-    static let divider = ThemeColor.adaptive(light: 0xE0E3E8, dark: 0x2A2D32)
-    static let strongDivider = ThemeColor.adaptive(light: 0xD5D9DF, dark: 0x090A0C)
-    static let primaryText = AppTheme.primaryText
-    static let secondaryText = ThemeColor.adaptive(light: 0x636871, dark: 0x858B94)
-    static let tertiaryText = secondaryText
-    static let keycapText = ThemeColor.adaptive(light: 0x535964, dark: 0xB9BEC6)
-    static let chevronText = ThemeColor.adaptive(light: 0x535964, dark: 0xBDC2C9)
-    static let footerPrimaryText = ThemeColor.adaptive(light: 0x333943, dark: 0xCDD1D7)
-    static let footerText = ThemeColor.adaptive(light: 0x535964, dark: 0xAEB3BB)
-    static let accentTint = ThemeColor.adaptive(light: 0x345BC9, dark: 0x7699FF)
-    static let accentFill = accent.opacity(0.10)
-    static let accentBorder = accent.opacity(0.18)
-    static let logoBar = ThemeColor.adaptive(light: 0xFFFFFF, dark: 0x101319)
-    static let switchOffFill = ThemeColor.adaptive(light: 0xD3D7DD, dark: 0x3A3D43)
-    static let switchOffThumb = ThemeColor.adaptive(light: 0xFFFFFF, dark: 0xA9ADB4)
-    static let hoverFill = ThemeColor.adaptive(light: 0x000000, dark: 0xFFFFFF)
 }

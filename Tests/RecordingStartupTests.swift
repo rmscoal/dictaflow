@@ -6,6 +6,48 @@ import XCTest
 
 @MainActor
 final class RecordingStartupTests: XCTestCase {
+    func testEmberNavigationPreservesDestinationAndRoutesModelRecovery() throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        XCTAssertEqual(state.mainWindowPage, .dictation)
+        state.showMainWindowPage(.history)
+        state.showMainWindow()
+        XCTAssertEqual(state.mainWindowPage, .history, "Reopening must not send the user to a removed Overview page")
+        state.showSettingsCategory(.general)
+        state.beginGlobalShortcutEditing()
+        XCTAssertTrue(state.isEditingGlobalShortcut)
+        state.settingsCategory = .appearance
+        XCTAssertFalse(state.isEditingGlobalShortcut)
+        state.showRefinementModels(focusing: .gemma4E2B)
+        XCTAssertEqual(state.mainWindowPage, .dictation)
+        XCTAssertEqual(state.dictationSettingsTab, .refinement)
+        XCTAssertEqual(state.modelPickerPresentation?.kind, .refinement)
+        XCTAssertEqual(state.modelPickerPresentation?.modelIdentifier, RefinementModelDescriptor.gemma4E2B.modelIdentifier)
+        state.showSpeechModels(focusing: .small)
+        XCTAssertEqual(state.dictationSettingsTab, .transcription)
+        XCTAssertEqual(state.modelPickerPresentation?.kind, .speech)
+        XCTAssertEqual(state.modelPickerPresentation?.modelIdentifier, WhisperModelDescriptor.small.modelIdentifier)
+    }
+
+    func testMissingSpeechModelOpensItsPickerWithoutStartingCapture() async throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        try FileManager.default.removeItem(at: fixture.directory.appendingPathComponent(state.whisperConfiguration.model.filename))
+        state.showSettingsCategory(.appearance)
+        let routed = expectation(description: "Missing speech model recovery")
+        let observation = state.$modelPickerPresentation.first { $0?.kind == .speech }.sink { _ in routed.fulfill() }
+        state.toggleDictation()
+        await fulfillment(of: [routed], timeout: 2)
+        observation.cancel()
+        XCTAssertEqual(state.mainWindowPage, .dictation)
+        XCTAssertEqual(state.dictationSettingsTab, .transcription)
+        XCTAssertEqual(state.recordingState, .idle)
+        XCTAssertNil(state.lastCapture)
+        XCTAssertEqual(state.interfaceIssue?.title, "Speech model is missing")
+    }
+
     func testRetiredLlamaSelectionCannotBeEnabledAndRemainsRemovable() async throws {
         let fixture = try RecordingStartupFixture(refinementEnabled: true, refinementModel: .llama32ThreeB)
         defer { fixture.cleanup() }
@@ -528,6 +570,8 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertNil(fixture.state.lastTextInsertion)
         XCTAssertNil(fixture.overlay.presentation)
         XCTAssertEqual(fixture.state.transcriptionState, .idle)
+        XCTAssertEqual(fixture.state.interfaceIssue?.title, "No speech detected")
+        XCTAssertEqual(fixture.state.interfaceIssue?.severity, .information, "No-speech guidance must remain visible without the removed idle footer")
         // StartupInsertionService also fails on any insertion or clipboard write.
     }
 
@@ -766,6 +810,9 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(fixture.recorder.startCalls, 0)
         XCTAssertEqual(fixture.volume.beginCalls, 0)
         XCTAssertNil(fixture.overlay.presentation)
+
+        XCTAssertEqual(fixture.state.mainWindowPage, .settings)
+        XCTAssertEqual(fixture.state.settingsCategory, .permissions)
 
         fixture.permissions.permission = .granted
         fixture.volume.shouldWait = false
