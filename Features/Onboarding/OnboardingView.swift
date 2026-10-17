@@ -253,6 +253,7 @@ struct OnboardingView: View {
                                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                                     .stroke(appState.isEditingGlobalShortcut ? OnboardingTheme.accent : OnboardingTheme.border, lineWidth: 1)
                             }
+                            .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .disabled(appState.onboardingPracticeIsBusy)

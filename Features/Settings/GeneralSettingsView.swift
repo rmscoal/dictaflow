@@ -46,7 +46,7 @@ struct GeneralSettingsView: View {
                     }
                     EmberDivider()
                     ForEach(appState.installedLocalModelFiles) { file in
-                        EmberRow(title: file.displayName, detail: "\(file.category.title) · \(appState.isActiveLocalModelFile(file) ? "Selected" : "Unused")") {
+                        EmberRow(title: file.displayName, detail: "\(file.category.title) · \(appState.isActiveLocalModelFile(file) ? "Selected" : "Unused")", asset: file.providerAssetName) {
                             Text(appState.formattedLocalModelSize(file.byteCount))
                                 .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
                         }

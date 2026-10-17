@@ -49,4 +49,16 @@ struct LocalModelFile: Identifiable, Equatable, Sendable {
     var id: String {
         modelIdentifier
     }
+
+    /// Asset name for the model provider's logo, if known.
+    var providerAssetName: String? {
+        switch category {
+        case .whisper, .whisperEncoder:
+            return "provider-openai"
+        case .refinement:
+            return RefinementModelDescriptor.storedModels
+                .first { $0.modelIdentifier == modelIdentifier }?
+                .provider?.iconName
+        }
+    }
 }
