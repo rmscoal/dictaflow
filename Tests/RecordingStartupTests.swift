@@ -82,6 +82,41 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(state.refinementConfiguration.model, .llama32ThreeB)
     }
 
+    func testBulkCleanupRemovesRetiredWeightsAndProtectsSelectedModels() async throws {
+        let fixture = try RecordingStartupFixture(refinementEnabled: true, refinementModel: .llama32ThreeB)
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        let url = fixture.directory.appendingPathComponent(RefinementModelDescriptor.llama32ThreeB.filename)
+        try Data("retired weights".utf8).write(to: url)
+        let refreshed = expectation(description: "Retired weights visible in storage")
+        let observation = state.$installedLocalModelFiles.first { files in
+            files.contains { $0.modelIdentifier == RefinementModelDescriptor.llama32ThreeB.modelIdentifier }
+        }.sink { _ in refreshed.fulfill() }
+        state.refreshInstalledLocalModelFiles()
+        await fulfillment(of: [refreshed], timeout: 2)
+        observation.cancel()
+        XCTAssertTrue(state.canDeleteRefinementModel(.llama32ThreeB))
+        XCTAssertTrue(state.unusedLocalModelFiles.contains { $0.modelIdentifier == RefinementModelDescriptor.llama32ThreeB.modelIdentifier })
+        let removed = expectation(description: "Retired weights removed")
+        let deletionObservation = state.$installedLocalModelFiles.first { files in
+            !files.contains { $0.modelIdentifier == RefinementModelDescriptor.llama32ThreeB.modelIdentifier }
+        }.sink { _ in removed.fulfill() }
+        let selectedSpeechURL = fixture.directory.appendingPathComponent(state.whisperConfiguration.model.filename)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: selectedSpeechURL.path))
+        // Even an overbroad confirmation snapshot must not remove a selected model.
+        state.deleteUnusedModelFiles(matching: state.installedLocalModelFiles)
+        XCTAssertTrue(state.isDeletingModel)
+        XCTAssertTrue(state.refinementSettingsLocked)
+        XCTAssertFalse(state.canReviewUnusedModelDeletion)
+        state.deleteUnusedModelFiles(matching: state.installedLocalModelFiles)
+        await fulfillment(of: [removed], timeout: 2)
+        deletionObservation.cancel()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: selectedSpeechURL.path))
+        XCTAssertFalse(state.isDeletingModel)
+        XCTAssertEqual(state.interfaceIssue?.title, "Model cleanup complete")
+    }
+
     func testRefinementRemovalProtectsSelectedModelAndDeletesOnlyInactiveWeights() async throws {
         let fixture = try RecordingStartupFixture(refinementEnabled: false)
         defer { fixture.cleanup() }

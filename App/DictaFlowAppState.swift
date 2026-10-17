@@ -1915,10 +1915,14 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
+        isDeletingModel = true
+
         Task { [weak self, transcriptRefinementService] in
             guard let self else {
                 return
             }
+
+            defer { self.isDeletingModel = false }
 
             do {
                 await self.refinementShutdownTask?.value
@@ -1930,12 +1934,13 @@ final class DictaFlowAppState: ObservableObject {
 
                 await MainActor.run {
                     let fileCount = filesToDelete.count
-                    self.setPreservedStatusMessage("Deleted \(fileCount) unused \(fileCount == 1 ? "model" : "models") and freed \(self.formattedLocalModelSize(deletedByteCount)).")
+                    self.setPreservedStatusMessage("Deleted \(fileCount) unused \(fileCount == 1 ? "model" : "models") and freed \(self.formattedLocalModelSize(deletedByteCount)).", issueTitle: "Model cleanup complete", severity: .information)
                     self.refreshInstalledLocalModelFiles()
                 }
             } catch {
                 await MainActor.run {
-                    self.setPreservedStatusMessage("Could not delete unused models. \(error.localizedDescription)")
+                    self.setPreservedStatusMessage("Could not delete unused models. \(error.localizedDescription)", issueTitle: "Could not remove unused models")
+                    self.refreshInstalledLocalModelFiles()
                 }
             }
         }

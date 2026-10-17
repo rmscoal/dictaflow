@@ -35,7 +35,8 @@ struct SelectedModelCard: View {
             }
             .font(.system(size: 11))
             .padding(.horizontal, 20).padding(.vertical, 12)
-            .background(AppTheme.background)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppTheme.background, in: Rectangle())
         }
     }
 

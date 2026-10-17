@@ -8,7 +8,7 @@ struct OutputExampleView: View {
     private var isTone: Bool { appState.dictationSettingsTab == .tone }
     private var result: String {
         let source = isTone ? toneExample : appState.refinementConfiguration.isEnabled && appState.refinementConfiguration.mode != .diy ? appState.refinementConfiguration.mode.writingExample : original
-        return TextToneFormatter.format(source, tone: appState.textTone, isEnglish: true).text
+        return isTone ? TextToneFormatter.format(source, tone: appState.textTone, isEnglish: true).text : source
     }
 
     var body: some View {
@@ -30,12 +30,14 @@ struct OutputExampleView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 10).padding(.bottom, 30)
                 Spacer(minLength: 0)
-                Rectangle().fill(AppTheme.paperBorder).frame(height: 1)
-                HStack {
-                    Label("\(appState.textTone.title) tone", systemImage: "slider.horizontal.3")
-                    Spacer()
+                if isTone {
+                    Rectangle().fill(AppTheme.paperBorder).frame(height: 1)
+                    HStack {
+                        Label("\(appState.textTone.title) tone", systemImage: "slider.horizontal.3")
+                        Spacer()
+                    }
+                    .font(.system(size: 11)).foregroundStyle(AppTheme.paperSecondaryText).padding(.top, 16)
                 }
-                .font(.system(size: 11)).foregroundStyle(AppTheme.paperSecondaryText).padding(.top, 16)
             }
             .padding(24).frame(maxWidth: .infinity, minHeight: 410, alignment: .topLeading)
             .background(AppTheme.paper, in: RoundedRectangle(cornerRadius: 24, style: .continuous))

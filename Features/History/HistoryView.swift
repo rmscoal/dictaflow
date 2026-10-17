@@ -3,6 +3,7 @@ import SwiftUI
 struct HistoryView: View {
     @ObservedObject var appState: DictaFlowAppState
     @ObservedObject var model: HistoryViewModel
+    @State private var showsCompactDetail = false
     @State private var showsSettings = false
     @State private var confirmsDelete = false
     @State private var confirmsDeleteAll = false
@@ -28,18 +29,26 @@ struct HistoryView: View {
             .padding(.bottom, 16)
             GeometryReader { geometry in
                 if geometry.size.width < 620 {
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            recordingList.frame(height: 220)
+                    if showsCompactDetail, model.selectedID != nil {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Button {
+                                showsCompactDetail = false
+                                Task { await model.stopPlayback() }
+                            } label: {
+                                Label("All recordings", systemImage: "chevron.left")
+                            }
+                            .buttonStyle(EmberButtonStyle()).padding(14)
                             EmberDivider()
-                            recordingDetail.frame(height: 470)
+                            recordingDetail(compact: true)
                         }
+                    } else {
+                        recordingList
                     }
                 } else {
                     HStack(spacing: 0) {
                         recordingList.frame(width: min(330, max(240, geometry.size.width * 0.32)))
                         Rectangle().fill(AppTheme.border).frame(width: 1)
-                        recordingDetail.frame(maxWidth: .infinity, maxHeight: .infinity)
+                        recordingDetail().frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
             }
@@ -95,7 +104,10 @@ struct HistoryView: View {
                             Text(dayTitle(day)).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
                                 .padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 4)
                             ForEach(model.entries.filter { Calendar.current.isDate($0.capturedAt, inSameDayAs: day) }) { entry in
-                                Button { Task { await model.select(entry.id) } } label: {
+                                Button {
+                                    showsCompactDetail = true
+                                    Task { await model.select(entry.id) }
+                                } label: {
                                     VStack(alignment: .leading, spacing: 6) {
                                         Text(entry.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
                                         Text("\(entry.capturedAt.formatted(date: .omitted, time: .shortened)) · \(formatDuration(entry.duration))")
@@ -122,11 +134,11 @@ struct HistoryView: View {
         }
     }
 
-    @ViewBuilder private var recordingDetail: some View {
+    @ViewBuilder private func recordingDetail(compact: Bool = false) -> some View {
         if model.isLoading && model.isReplacingSearchResults {
             ProgressView("Searching history…").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let detail = model.detail, detail.entry.id == model.selectedID {
-            HistoryDetailView(appState: appState, model: model, detail: detail, confirmsDelete: $confirmsDelete).id(detail.entry.id)
+            HistoryDetailView(appState: appState, model: model, detail: detail, confirmsDelete: $confirmsDelete, scrollsEntireDetail: compact).id(detail.entry.id)
         } else if model.selectedID != nil {
             ProgressView("Loading recording…").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {

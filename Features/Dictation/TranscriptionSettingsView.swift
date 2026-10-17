@@ -21,17 +21,18 @@ struct TranscriptionSettingsView: View {
                 appState.showSpeechModels()
             }
             .padding(.bottom, 18)
-            EmberColumns(ratio: 1, gap: 12, stackingWidth: 420) {
-                field(title: "Task") {
+            EmberPanel {
+                EmberRow(title: "Task") {
                     Picker("Task", selection: Binding(get: { appState.whisperConfiguration.taskMode }, set: { appState.updateTaskMode($0) })) {
                         Text("Transcribe").tag(WhisperTaskMode.transcribe)
-                        Text("To English").tag(WhisperTaskMode.translateToEnglish)
+                        Text("Translate to English").tag(WhisperTaskMode.translateToEnglish)
                     }
-                    .pickerStyle(.segmented).labelsHidden()
+                    .pickerStyle(.menu).labelsHidden()
                 }
-                field(title: "Input language") {
+                EmberDivider()
+                EmberRow(title: "Input language") {
                     Picker("Input language", selection: Binding(get: { appState.whisperConfiguration.inputLanguage }, set: { appState.updateInputLanguage($0) })) {
-                        Text("Automatic").tag(WhisperInputLanguage.automatic)
+                        Text("Auto Detect").tag(WhisperInputLanguage.automatic)
                         Section("Common") {
                             ForEach(appState.commonWhisperLanguages) { Text($0.displayName).tag($0.inputLanguage) }
                         }
@@ -70,17 +71,6 @@ struct TranscriptionSettingsView: View {
                 .font(.system(size: 12)).padding(17)
             }
         }
-    }
-
-    private func field<Control: View>(title: String, @ViewBuilder control: () -> Control) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.system(size: 13, weight: .medium))
-            Spacer(minLength: 0)
-            control().font(.system(size: 12)).frame(maxWidth: .infinity)
-        }
-        .padding(18).frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
-        .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 20))
-        .overlay { RoundedRectangle(cornerRadius: 20).stroke(AppTheme.border, lineWidth: 1) }
     }
 
     private var soundCues: some View {

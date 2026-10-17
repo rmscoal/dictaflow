@@ -5,6 +5,7 @@ struct HistoryDetailView: View {
     @ObservedObject var model: HistoryViewModel
     let detail: HistoryDetail
     @Binding var confirmsDelete: Bool
+    var scrollsEntireDetail = false
     @State private var showsPreviousResults = false
     @State private var showsRetryConfirmation = false
     @State private var retryModel: WhisperModelDescriptor?
@@ -15,6 +16,14 @@ struct HistoryDetailView: View {
     private var hasPreviousResults: Bool { detail.transcriptions.count > 1 || model.refinements.count > 1 }
 
     var body: some View {
+        if scrollsEntireDetail {
+            ScrollView { content }
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(detail.entry.title).font(.system(size: 17, weight: .medium)).lineLimit(2)
@@ -42,15 +51,21 @@ struct HistoryDetailView: View {
             if !hasText {
                 EmberErrorBanner(title: "No text result", message: missingText)
             }
-            ScrollView {
-                Text(model.displayedText ?? "").font(.system(size: 16)).lineSpacing(7).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            if scrollsEntireDetail {
+                transcript.fixedSize(horizontal: false, vertical: true)
+            } else {
+                ScrollView { transcript }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             sourceLabel
             if showsPreviousResults { previousResults }
         }
         .padding(24)
+    }
+
+    private var transcript: some View {
+        Text(model.displayedText ?? "").font(.system(size: 16)).lineSpacing(7).textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder private var primaryActions: some View {

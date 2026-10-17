@@ -33,40 +33,43 @@ struct ModelPickerSheet: View {
             }
             EmberDivider()
             ScrollViewReader { proxy in
-                ScrollView {
-                    Group {
-                        if presentation.kind == .speech {
-                            WhisperModelsView(appState: appState,
-                                downloadModel: { downloadRequest = .speech($0, includeEncoder: false) },
-                                downloadEncoder: { downloadRequest = .encoder($0) },
-                                removeModel: { removalRequest = .speech($0) })
-                        } else {
-                            RefinementModelsView(appState: appState, provider: $provider,
-                                downloadModel: { downloadRequest = .refinement($0) },
-                                removeModel: { removalRequest = .refinement($0) })
+                VStack(spacing: 0) {
+                    ScrollView {
+                        Group {
+                            if presentation.kind == .speech {
+                                WhisperModelsView(appState: appState,
+                                    downloadModel: { downloadRequest = .speech($0, includeEncoder: false) },
+                                    downloadEncoder: { downloadRequest = .encoder($0) },
+                                    removeModel: { removalRequest = .speech($0) })
+                            } else {
+                                RefinementModelsView(appState: appState, provider: $provider,
+                                    downloadModel: { downloadRequest = .refinement($0) },
+                                    removeModel: { removalRequest = .refinement($0) })
+                            }
                         }
+                        .padding(22).frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(22).frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .scrollBounceBehavior(.basedOnSize)
-                .onAppear { focus(presentation.modelIdentifier, proxy: proxy) }
-                .onChange(of: appState.modelPickerPresentation?.modelIdentifier) { _, identifier in
-                    focus(identifier, proxy: proxy)
-                }
-                EmberDivider()
-                HStack(spacing: 12) {
-                    if let activity = appState.modelDownloadActivity {
-                        Button { appState.openDownloadActivity(activity) } label: {
-                            Label(activity.title, systemImage: activity.hasFailed ? "exclamationmark.circle" : "arrow.down.circle")
-                                .font(.system(size: 11)).lineLimit(2)
+                    .scrollBounceBehavior(.basedOnSize)
+                    .onAppear { focus(presentation.modelIdentifier, proxy: proxy) }
+                    .onChange(of: appState.modelPickerPresentation?.modelIdentifier) { _, identifier in
+                        focus(identifier, proxy: proxy)
+                    }
+                    EmberDivider()
+                    HStack(spacing: 12) {
+                        if let activity = appState.modelDownloadActivity {
+                            Button { appState.openDownloadActivity(activity) } label: {
+                                Label(activity.title, systemImage: activity.hasFailed ? "exclamationmark.circle" : "arrow.down.circle")
+                                    .font(.system(size: 11)).lineLimit(2)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(activity.hasFailed ? AppTheme.errorText : AppTheme.secondaryText)
                         }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(activity.hasFailed ? AppTheme.errorText : AppTheme.secondaryText)
+                        Spacer(minLength: 0)
+                        Button("Done") { dismiss() }.buttonStyle(EmberButtonStyle()).keyboardShortcut(.cancelAction)
                     }
-                    Spacer(minLength: 0)
-                    Button("Done") { dismiss() }.buttonStyle(EmberButtonStyle()).keyboardShortcut(.cancelAction)
+                    .padding(.horizontal, 22).padding(.vertical, 14)
+                    .background(AppTheme.background, in: Rectangle())
                 }
-                .padding(.horizontal, 22).padding(.vertical, 14).background(AppTheme.background)
             }
         }
         .frame(width: 610, height: 650)
@@ -154,7 +157,7 @@ private struct ModelDownloadConfirmation: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Download \(request.name)?").font(.system(size: 21, weight: .medium))
-            Text("\(request.size) of storage is required. Downloading does not replace an already usable selected model.")
+            Text("\(request.size) of storage is required. Your current model stays selected while this model downloads.")
                 .font(.system(size: 13)).foregroundStyle(AppTheme.secondaryText)
             if case .speech(let model, _) = request {
                 Toggle(isOn: $includeEncoder) {
