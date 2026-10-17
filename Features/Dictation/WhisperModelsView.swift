@@ -131,9 +131,18 @@ struct WhisperModelsView: View {
             if appState.isDownloadingWhisperEncoder(model) {
                 Text("The encoder download is shown in the model row above.").font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
             } else if appState.isWhisperEncoderDownloaded(model) {
-                Toggle("Use encoder", isOn: Binding(get: { appState.isWhisperEncoderEnabled(model) }, set: { appState.setWhisperEncoderEnabled($0, for: model) }))
-                    .toggleStyle(.switch).controlSize(.mini)
-                Button("Remove encoder…") { encoderPendingRemoval = model }.buttonStyle(EmberButtonStyle())
+                HStack {
+                    Toggle("Use encoder", isOn: Binding(get: { appState.isWhisperEncoderEnabled(model) }, set: { appState.setWhisperEncoderEnabled($0, for: model) }))
+                        .toggleStyle(.switch).controlSize(.mini)
+                    Spacer(minLength: 12)
+                    if !appState.isWhisperEncoderEnabled(model) {
+                        Button("Remove encoder…") { encoderPendingRemoval = model }.buttonStyle(EmberButtonStyle())
+                    }
+                }
+                if appState.isWhisperEncoderEnabled(model) {
+                    Text("Turn off the encoder to remove it.")
+                        .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+                }
             } else {
                 Button(appState.whisperEncoderDownloadError(for: model) == nil ? "Download encoder…" : "Retry encoder…") { downloadEncoder(model) }
                     .buttonStyle(EmberButtonStyle())
