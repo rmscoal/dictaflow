@@ -2,6 +2,7 @@ import SwiftUI
 
 struct TranscriptionSettingsView: View {
     @ObservedObject var appState: DictaFlowAppState
+    private let pickerWidth: CGFloat = 200
     private var model: WhisperModelDescriptor { appState.whisperConfiguration.model }
     private var prepared: Bool { appState.isWhisperModelPrepared(model) }
 
@@ -23,24 +24,28 @@ struct TranscriptionSettingsView: View {
             .padding(.bottom, 18)
             EmberPanel {
                 EmberRow(title: "Task") {
-                    Picker("Task", selection: Binding(get: { appState.whisperConfiguration.taskMode }, set: { appState.updateTaskMode($0) })) {
-                        Text("Transcribe").tag(WhisperTaskMode.transcribe)
-                        Text("Translate to English").tag(WhisperTaskMode.translateToEnglish)
+                    selectionMenu(label: "Task", title: appState.whisperConfiguration.taskMode == .transcribe ? "Transcribe" : "Translate to English") {
+                        Picker("Task", selection: Binding(get: { appState.whisperConfiguration.taskMode }, set: { appState.updateTaskMode($0) })) {
+                            Text("Transcribe").tag(WhisperTaskMode.transcribe)
+                            Text("Translate to English").tag(WhisperTaskMode.translateToEnglish)
+                        }
+                        .pickerStyle(.inline).labelsHidden()
                     }
-                    .pickerStyle(.menu).labelsHidden()
                 }
                 EmberDivider()
                 EmberRow(title: "Input language") {
-                    Picker("Input language", selection: Binding(get: { appState.whisperConfiguration.inputLanguage }, set: { appState.updateInputLanguage($0) })) {
-                        Text("Auto Detect").tag(WhisperInputLanguage.automatic)
-                        Section("Common") {
-                            ForEach(appState.commonWhisperLanguages) { Text($0.displayName).tag($0.inputLanguage) }
+                    selectionMenu(label: "Input language", title: appState.whisperConfiguration.inputLanguage.displayName) {
+                        Picker("Input language", selection: Binding(get: { appState.whisperConfiguration.inputLanguage }, set: { appState.updateInputLanguage($0) })) {
+                            Text("Auto Detect").tag(WhisperInputLanguage.automatic)
+                            Section("Common") {
+                                ForEach(appState.commonWhisperLanguages) { Text($0.displayName).tag($0.inputLanguage) }
+                            }
+                            Section("All supported languages") {
+                                ForEach(appState.additionalWhisperLanguages) { Text($0.displayName).tag($0.inputLanguage) }
+                            }
                         }
-                        Section("All supported languages") {
-                            ForEach(appState.additionalWhisperLanguages) { Text($0.displayName).tag($0.inputLanguage) }
-                        }
+                        .pickerStyle(.inline).labelsHidden()
                     }
-                    .pickerStyle(.menu).labelsHidden()
                 }
             }
             .disabled(appState.whisperSettingsLocked)
@@ -71,6 +76,24 @@ struct TranscriptionSettingsView: View {
                 .font(.system(size: 12)).padding(17)
             }
         }
+    }
+
+    private func selectionMenu<Content: View>(label: String, title: String, @ViewBuilder content: () -> Content) -> some View {
+        Menu(content: content) {
+            HStack(spacing: 8) {
+                Text(title).lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold))
+                    .accessibilityHidden(true)
+            }
+            .font(.system(size: 12))
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .frame(width: pickerWidth)
+            .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6))
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label).accessibilityValue(title)
     }
 
     private var soundCues: some View {
