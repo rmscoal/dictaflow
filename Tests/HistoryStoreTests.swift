@@ -172,7 +172,14 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(model.detail?.transcriptions.count, 2)
         XCTAssertEqual(model.entries.first { $0.id == oldest.id }?.preview, "retried older recording")
         XCTAssertFalse(model.hasMore)
-
+        model.updateSearchQuery("older saved transcript")
+        await model.refresh()
+        XCTAssertEqual(model.entries.map(\.id), [oldest.id], "A search must reach recordings beyond the first page")
+        XCTAssertEqual(model.selectedTranscriptionID, original)
+        model.updateSearchQuery("")
+        await model.refresh()
+        XCTAssertEqual(model.entries.count, 50, "Changing the query resets pagination")
+        XCTAssertTrue(model.hasMore)
 
     }
 
@@ -187,6 +194,32 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertNil(model.selectedID)
         XCTAssertNil(model.detail)
         XCTAssertNotNil(model.errorMessage)
+    }
+
+    @MainActor
+    func testSearchPreservesEarlierAttemptAndClearsUnrelatedDetail() async throws {
+        let capture = try await recording()
+        let older = try await store.startTranscription(capture.id, configuration: .default)
+        try await store.finishTranscription(older, result: result("Searchable original phrase."), error: nil)
+        let newer = try await store.startTranscription(capture.id, configuration: .default)
+        try await store.finishTranscription(newer, result: result("Different revised words."), error: nil)
+        await store.releaseAudio(capture.id)
+        let model = HistoryViewModel(store: store)
+        await model.refresh()
+        await model.select(capture.id)
+        model.selectedTranscriptionID = older
+        model.selectTranscription()
+        model.updateSearchQuery("Searchable original")
+        await model.refresh()
+        XCTAssertEqual(model.entries.map(\.id), [capture.id], "Search includes earlier persisted attempts")
+        XCTAssertEqual(model.selectedTranscriptionID, older)
+        XCTAssertEqual(model.displayedText, "Searchable original phrase.")
+        model.updateSearchQuery("no matching recording")
+        await model.refresh()
+        XCTAssertTrue(model.entries.isEmpty)
+        XCTAssertNil(model.selectedID)
+        XCTAssertNil(model.detail)
+        XCTAssertNil(model.displayedText)
     }
 
     func testWarmCapturePersistenceLatency() async throws {

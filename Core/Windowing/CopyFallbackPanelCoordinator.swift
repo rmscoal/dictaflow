@@ -60,37 +60,40 @@ private struct CopyFallbackPanelView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("DictaFlow couldn’t insert the transcript automatically.")
-                .font(.headline)
+                .font(.system(size: 17, weight: .medium))
 
             Text(descriptionText)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 12))
+                .foregroundStyle(AppTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
 
             ScrollView {
                 Text(text)
+                    .font(.system(size: 14))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
                     .padding(12)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .background(AppTheme.paper)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay { RoundedRectangle(cornerRadius: 16).stroke(AppTheme.paperBorder, lineWidth: 1) }
 
             HStack {
                 Button("Copy Again") {
                     onCopyAgain()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(EmberButtonStyle(primary: true))
 
                 Button("Close") {
                     onClose()
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(EmberButtonStyle())
             }
         }
-        .padding(18)
+        .padding(22)
         .frame(minWidth: 460, minHeight: 320)
+        .foregroundStyle(AppTheme.primaryText).background(AppTheme.background)
     }
 
     private var descriptionText: String {

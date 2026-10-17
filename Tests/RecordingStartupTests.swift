@@ -6,6 +6,48 @@ import XCTest
 
 @MainActor
 final class RecordingStartupTests: XCTestCase {
+    func testEmberNavigationPreservesDestinationAndRoutesModelRecovery() throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        XCTAssertEqual(state.mainWindowPage, .dictation)
+        state.showMainWindowPage(.history)
+        state.showMainWindow()
+        XCTAssertEqual(state.mainWindowPage, .history, "Reopening must not send the user to a removed Overview page")
+        state.showSettingsCategory(.general)
+        state.beginGlobalShortcutEditing()
+        XCTAssertTrue(state.isEditingGlobalShortcut)
+        state.settingsCategory = .appearance
+        XCTAssertFalse(state.isEditingGlobalShortcut)
+        state.showRefinementModels(focusing: .gemma4E2B)
+        XCTAssertEqual(state.mainWindowPage, .dictation)
+        XCTAssertEqual(state.dictationSettingsTab, .refinement)
+        XCTAssertEqual(state.modelPickerPresentation?.kind, .refinement)
+        XCTAssertEqual(state.modelPickerPresentation?.modelIdentifier, RefinementModelDescriptor.gemma4E2B.modelIdentifier)
+        state.showSpeechModels(focusing: .small)
+        XCTAssertEqual(state.dictationSettingsTab, .transcription)
+        XCTAssertEqual(state.modelPickerPresentation?.kind, .speech)
+        XCTAssertEqual(state.modelPickerPresentation?.modelIdentifier, WhisperModelDescriptor.small.modelIdentifier)
+    }
+
+    func testMissingSpeechModelOpensItsPickerWithoutStartingCapture() async throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        try FileManager.default.removeItem(at: fixture.directory.appendingPathComponent(state.whisperConfiguration.model.filename))
+        state.showSettingsCategory(.appearance)
+        let routed = expectation(description: "Missing speech model recovery")
+        let observation = state.$modelPickerPresentation.first { $0?.kind == .speech }.sink { _ in routed.fulfill() }
+        state.toggleDictation()
+        await fulfillment(of: [routed], timeout: 2)
+        observation.cancel()
+        XCTAssertEqual(state.mainWindowPage, .dictation)
+        XCTAssertEqual(state.dictationSettingsTab, .transcription)
+        XCTAssertEqual(state.recordingState, .idle)
+        XCTAssertNil(state.lastCapture)
+        XCTAssertEqual(state.interfaceIssue?.title, "Speech model is missing")
+    }
+
     func testRetiredLlamaSelectionCannotBeEnabledAndRemainsRemovable() async throws {
         let fixture = try RecordingStartupFixture(refinementEnabled: true, refinementModel: .llama32ThreeB)
         defer { fixture.cleanup() }
@@ -38,6 +80,55 @@ final class RecordingStartupTests: XCTestCase {
         deletionObservation.cancel()
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
         XCTAssertEqual(state.refinementConfiguration.model, .llama32ThreeB)
+    }
+
+    func testCancellingShortcutEditingWithFailingHotkeyDoesNotNavigateToSettings() throws {
+        let fixture = try RecordingStartupFixture(hotkeyService: FailingHotkeyService())
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        state.showMainWindowPage(.history)
+        state.beginGlobalShortcutEditing()
+        XCTAssertTrue(state.isEditingGlobalShortcut)
+        state.cancelGlobalShortcutEditing()
+        XCTAssertFalse(state.isEditingGlobalShortcut)
+        XCTAssertFalse(state.isHotkeyRegistered)
+        XCTAssertEqual(state.mainWindowPage, .history)
+        XCTAssertEqual(state.settingsCategory, .general)
+    }
+
+    func testBulkCleanupRemovesRetiredWeightsAndProtectsSelectedModels() async throws {
+        let fixture = try RecordingStartupFixture(refinementEnabled: true, refinementModel: .llama32ThreeB)
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        let url = fixture.directory.appendingPathComponent(RefinementModelDescriptor.llama32ThreeB.filename)
+        try Data("retired weights".utf8).write(to: url)
+        let refreshed = expectation(description: "Retired weights visible in storage")
+        let observation = state.$installedLocalModelFiles.first { files in
+            files.contains { $0.modelIdentifier == RefinementModelDescriptor.llama32ThreeB.modelIdentifier }
+        }.sink { _ in refreshed.fulfill() }
+        state.refreshInstalledLocalModelFiles()
+        await fulfillment(of: [refreshed], timeout: 2)
+        observation.cancel()
+        XCTAssertTrue(state.canDeleteRefinementModel(.llama32ThreeB))
+        XCTAssertTrue(state.unusedLocalModelFiles.contains { $0.modelIdentifier == RefinementModelDescriptor.llama32ThreeB.modelIdentifier })
+        let removed = expectation(description: "Retired weights removed")
+        let deletionObservation = state.$installedLocalModelFiles.first { files in
+            !files.contains { $0.modelIdentifier == RefinementModelDescriptor.llama32ThreeB.modelIdentifier }
+        }.sink { _ in removed.fulfill() }
+        let selectedSpeechURL = fixture.directory.appendingPathComponent(state.whisperConfiguration.model.filename)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: selectedSpeechURL.path))
+        // Even an overbroad confirmation snapshot must not remove a selected model.
+        state.deleteUnusedModelFiles(matching: state.installedLocalModelFiles)
+        XCTAssertTrue(state.isDeletingModel)
+        XCTAssertTrue(state.refinementSettingsLocked)
+        XCTAssertFalse(state.canReviewUnusedModelDeletion)
+        state.deleteUnusedModelFiles(matching: state.installedLocalModelFiles)
+        await fulfillment(of: [removed], timeout: 2)
+        deletionObservation.cancel()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: selectedSpeechURL.path))
+        XCTAssertFalse(state.isDeletingModel)
+        XCTAssertEqual(state.interfaceIssue?.title, "Model cleanup complete")
     }
 
     func testRefinementRemovalProtectsSelectedModelAndDeletesOnlyInactiveWeights() async throws {
@@ -528,6 +619,8 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertNil(fixture.state.lastTextInsertion)
         XCTAssertNil(fixture.overlay.presentation)
         XCTAssertEqual(fixture.state.transcriptionState, .idle)
+        XCTAssertEqual(fixture.state.interfaceIssue?.title, "No speech detected")
+        XCTAssertEqual(fixture.state.interfaceIssue?.severity, .information, "No-speech guidance must remain visible without the removed idle footer")
         // StartupInsertionService also fails on any insertion or clipboard write.
     }
 
@@ -767,6 +860,9 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(fixture.volume.beginCalls, 0)
         XCTAssertNil(fixture.overlay.presentation)
 
+        XCTAssertEqual(fixture.state.mainWindowPage, .settings)
+        XCTAssertEqual(fixture.state.settingsCategory, .permissions)
+
         fixture.permissions.permission = .granted
         fixture.volume.shouldWait = false
         fixture.recorder.failNextStart = true
@@ -820,7 +916,8 @@ private final class RecordingStartupFixture {
         refinementModel: RefinementModelDescriptor = .recommendedDefault,
         historyStore: HistoryStoreProtocol? = nil,
         promptStore: RefinementPromptStoreProtocol? = nil,
-        allowsInsertion: Bool = false
+        allowsInsertion: Bool = false,
+        hotkeyService: HotkeyServiceProtocol? = nil
     ) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -839,7 +936,7 @@ private final class RecordingStartupFixture {
             settingsStore: settings, permissionService: permissions,
             audioRecorderService: recorder, audioOutputVolumeService: volume,
             soundCueService: cues,
-            hotkeyService: StartupHotkeyService(),
+            hotkeyService: hotkeyService ?? StartupHotkeyService(),
             modelDownloadService: modelDownloadService ?? (usePipelineModels
                 ? PipelineModelDownloadService(modelsDirectoryURL: directory)
                 : WhisperModelDownloadService(modelsDirectoryURL: directory)),
@@ -965,6 +1062,14 @@ private final class StartupPermissionService: PermissionServiceProtocol {
 @MainActor
 private final class StartupHotkeyService: HotkeyServiceProtocol {
     func registerToggleHotkey(_ shortcut: GlobalShortcutDescriptor, handler: @escaping () -> Void) throws {}
+    func unregisterToggleHotkey() {}
+}
+
+@MainActor
+private final class FailingHotkeyService: HotkeyServiceProtocol {
+    func registerToggleHotkey(_ shortcut: GlobalShortcutDescriptor, handler: @escaping () -> Void) throws {
+        throw NSError(domain: "DictaFlowTests", code: 1)
+    }
     func unregisterToggleHotkey() {}
 }
 

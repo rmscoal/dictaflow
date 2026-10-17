@@ -10,6 +10,7 @@ final class HistoryViewModel: ObservableObject {
     @Published private(set) var isMutating = false
     @Published private(set) var hasMore = false
     @Published private(set) var isPlaybackLoading = false
+    @Published private(set) var searchQuery = ""
     @Published var retryMessages: [UUID: String] = [:]
     @Published var errorMessage: String?
     @Published var selectedTranscriptionID: UUID?
@@ -31,7 +32,10 @@ final class HistoryViewModel: ObservableObject {
     private var playbackGeneration = 0
     private var loadGeneration = 0
     private var selectionGeneration = 0
+    private var needsSearchReset = false
     private var cleanupTimer: Timer?
+
+    var isReplacingSearchResults: Bool { needsSearchReset }
 
     init(store: HistoryStoreProtocol?) {
         self.store = store
@@ -105,28 +109,44 @@ final class HistoryViewModel: ObservableObject {
         }
     }
 
+    func updateSearchQuery(_ query: String) {
+        guard searchQuery != query else { return }
+        searchQuery = query
+        guard store != nil else { return }
+        loadGeneration += 1
+        needsSearchReset = true
+        hasMore = false
+        isLoading = true
+        if let id = detachPlayback() {
+            Task { [store] in await store?.releaseAudio(id) }
+        }
+    }
+
     func refresh(loadMore: Bool = false) async {
         guard let store else { return }
         loadGeneration += 1
         let generation = loadGeneration
-        let appendsPage = loadMore
+        let query = searchQuery
+        let resetsSearch = needsSearchReset
+        let appendsPage = loadMore && !resetsSearch
         let offset = appendsPage ? entries.count : 0
         // The store bounds each query. Refresh all previously loaded pages so
         // retrying an older recording does not remove its card from the feed.
-        let pageCount = appendsPage ? 1 : max(1, (entries.count + 49) / 50)
+        let pageCount = appendsPage || resetsSearch ? 1 : max(1, (entries.count + 49) / 50)
         isLoading = true
         do {
             var refreshed: [HistoryEntry] = []
             var lastPageCount = 0
             for _ in 0..<pageCount {
-                let page = try await store.entries(search: "", limit: 50, offset: offset + refreshed.count)
-                guard generation == loadGeneration else { return }
+                let page = try await store.entries(search: query, limit: 50, offset: offset + refreshed.count)
+                guard generation == loadGeneration, query == searchQuery, !Task.isCancelled else { return }
                 refreshed += page
                 lastPageCount = page.count
                 if page.count < 50 { break }
             }
             entries = appendsPage ? entries + refreshed : refreshed
             hasMore = lastPageCount == 50
+            needsSearchReset = false
             isLoading = false
             if let selectedID {
                 if entries.contains(where: { $0.id == selectedID }) {
@@ -136,9 +156,15 @@ final class HistoryViewModel: ObservableObject {
                 }
             }
         } catch {
-            guard generation == loadGeneration else { return }
+            guard generation == loadGeneration, query == searchQuery, !Task.isCancelled else { return }
+            needsSearchReset = false
             isLoading = false
             report(error)
+            if resetsSearch {
+                entries = []
+                hasMore = false
+                await clearSelection()
+            }
         }
     }
 
@@ -210,11 +236,15 @@ final class HistoryViewModel: ObservableObject {
     }
 
     func stopPlayback() async {
+        if let id = detachPlayback() { await store?.releaseAudio(id) }
+    }
+
+    private func detachPlayback() -> UUID? {
         playbackGeneration += 1
         player.stop()
         let id = playbackID
         playbackID = nil
-        if let id { await store?.releaseAudio(id) }
+        return id
     }
 
     func deleteSelected() async {

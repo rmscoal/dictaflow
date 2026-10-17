@@ -22,18 +22,6 @@ protocol RecordingOverlayRouting: AnyObject {
     )
 }
 
-enum MainWindowPage {
-    case overview
-    case dictation
-    case refinement
-    case history
-    case shortcutAndAudio
-    case appearance
-    case models
-    case permissions
-    case updates
-}
-
 @MainActor
 final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isMainWindowVisible = false
@@ -42,7 +30,14 @@ final class DictaFlowAppState: ObservableObject {
     @Published var dictationSettingsTab: DictationSettingsTab = .transcription
     @Published private(set) var textTone: TextTone
     private var recordingTone: TextTone = .original
-    @Published var mainWindowPage: MainWindowPage = .overview
+    @Published var mainWindowPage: MainWindowPage = .dictation {
+        didSet { if mainWindowPage != .settings { cancelGlobalShortcutEditing() } }
+    }
+    @Published var settingsCategory: SettingsCategory = .general {
+        didSet { if settingsCategory != .general { cancelGlobalShortcutEditing() } }
+    }
+    @Published var modelPickerPresentation: ModelPickerPresentation?
+    @Published private(set) var interfaceIssue: InterfaceIssue?
     @Published private(set) var microphonePermissionState: MicrophonePermissionState
     @Published private(set) var accessibilityPermissionState: AccessibilityPermissionState
     @Published private(set) var onboardingPresentation: OnboardingPresentation?
@@ -432,7 +427,7 @@ final class DictaFlowAppState: ObservableObject {
             if isWhisperModelPrepared(whisperConfiguration.model) {
                 return "\(whisperConfiguration.model.displayName) model stored in \(modelsDirectoryPath)"
             }
-            return "\(whisperConfiguration.model.displayName) is not prepared. Prepare it from the Models page."
+            return "\(whisperConfiguration.model.displayName) is not prepared. Download it in Dictation → Transcription."
         case .transcribing(let model):
             return "Using \(model.displayName) from \(modelsDirectoryPath)"
         case .refining(let model):
@@ -774,7 +769,7 @@ final class DictaFlowAppState: ObservableObject {
         refreshMicrophonePermissionStatus()
         prepareSoundCuesIfEnabled()
         refreshAccessibilityPermissionStatus()
-        registerGlobalHotkey()
+        registerGlobalHotkey { [weak self] in self?.showMainWindow() }
         refreshRefinementRuntimeAvailability()
         restoreCachedAvailableUpdate()
         checkForUpdatesIfNeeded()
@@ -792,26 +787,50 @@ final class DictaFlowAppState: ObservableObject {
 
     func showMainWindow() {
         cancelGlobalShortcutEditing()
-        mainWindowPage = .overview
         mainWindowRouter?.showMainWindow()
     }
 
     func showMainWindowPage(_ page: MainWindowPage) {
-        if page != .shortcutAndAudio {
+        if page != .dictation { modelPickerPresentation = nil }
+        if page != .settings {
             cancelGlobalShortcutEditing()
         }
 
-        if page == .refinement { dictationSettingsTab = .refinement }
-        mainWindowPage = page == .refinement ? .dictation : page
+        mainWindowPage = page
         mainWindowRouter?.showMainWindow()
-
-        if page == .models {
-            refreshInstalledLocalModelFiles()
-        }
     }
 
     func openSettingsWindow() {
-        showMainWindowPage(.shortcutAndAudio)
+        showMainWindowPage(.settings)
+    }
+
+    func showSettingsCategory(_ category: SettingsCategory) {
+        settingsCategory = category
+        showMainWindowPage(.settings)
+    }
+
+    func showDictationSettings(_ tab: DictationSettingsTab) {
+        modelPickerPresentation = nil
+        dictationSettingsTab = tab
+        showMainWindowPage(.dictation)
+    }
+
+    func showSpeechModels(focusing model: WhisperModelDescriptor? = nil) {
+        dictationSettingsTab = .transcription
+        showMainWindowPage(.dictation)
+        refreshInstalledLocalModelFiles()
+        modelPickerPresentation = ModelPickerPresentation(kind: .speech, modelIdentifier: model?.modelIdentifier)
+    }
+
+    func showRefinementModels(focusing model: RefinementModelDescriptor? = nil) {
+        dictationSettingsTab = .refinement
+        showMainWindowPage(.dictation)
+        refreshInstalledLocalModelFiles()
+        modelPickerPresentation = ModelPickerPresentation(kind: .refinement, modelIdentifier: model?.modelIdentifier)
+    }
+
+    func dismissInterfaceIssue() {
+        interfaceIssue = nil
     }
 
     func updateTextTone(_ tone: TextTone) {
@@ -990,12 +1009,12 @@ final class DictaFlowAppState: ObservableObject {
         if isEnabled {
             guard isSelectedRefinementModelSupported, isRefinementRuntimeAvailable else {
                 setPreservedStatusMessage("Local refinement is unavailable. Check Dictation > Refinement.")
-                showMainWindowPage(.refinement)
+                showDictationSettings(.refinement)
                 return
             }
             guard isSelectedRefinementModelPrepared else {
                 setPreservedStatusMessage("Download \(refinementConfiguration.model.displayName) before turning on text refinement.")
-                showMainWindowPage(.refinement)
+                showDictationSettings(.refinement)
                 return
             }
         }
@@ -1099,13 +1118,14 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func resetActiveRefinementPrompt() {
+        guard !refinementSettingsLocked else { return }
         do {
             try refinementPromptStore.resetPromptTemplate()
             reloadRefinementPromptText()
             setPreservedStatusMessage("Reset the refinement system prompt to the built-in default.")
             updateStatusMessage()
         } catch {
-            setPreservedStatusMessage("Could not reset the refinement system prompt. \(error.localizedDescription)")
+            setPreservedStatusMessage("Could not reset the refinement system prompt. \(error.localizedDescription)", issueTitle: "Could not reset the prompt")
             showMainWindow()
             updateStatusMessage()
         }
@@ -1414,7 +1434,7 @@ final class DictaFlowAppState: ObservableObject {
                 }
             } catch {
                 await MainActor.run { [weak self] in
-                    self?.setPreservedStatusMessage("Could not change the \(model.displayName) encoder setting. \(error.localizedDescription)")
+                    self?.setPreservedStatusMessage("Could not change the \(model.displayName) encoder setting. \(error.localizedDescription)", issueTitle: "Could not change encoder settings")
                     self?.updateStatusMessage()
                 }
             }
@@ -1459,7 +1479,7 @@ final class DictaFlowAppState: ObservableObject {
                 }
             } catch {
                 await MainActor.run { [weak self] in
-                    self?.setPreservedStatusMessage("Could not remove the \(model.displayName) encoder. \(error.localizedDescription)")
+                    self?.setPreservedStatusMessage("Could not remove the \(model.displayName) encoder. \(error.localizedDescription)", issueTitle: "Could not remove the encoder")
                     self?.updateStatusMessage()
                 }
             }
@@ -1472,7 +1492,8 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         guard isWhisperModelPrepared(model) else {
-            setPreservedStatusMessage("Prepare \(model.displayName) from the Models page before selecting it.")
+            setPreservedStatusMessage("Download \(model.displayName) in Dictation → Transcription before selecting it.", issueTitle: "Speech model is missing")
+            showSpeechModels(focusing: model)
             return
         }
 
@@ -1490,7 +1511,7 @@ final class DictaFlowAppState: ObservableObject {
 
         guard isRefinementRuntimeAvailable else {
             setPreservedStatusMessage(missingRefinementRuntimeActionMessage)
-            showMainWindowPage(.models)
+            showRefinementModels(focusing: model)
             return
         }
 
@@ -1584,7 +1605,7 @@ final class DictaFlowAppState: ObservableObject {
 
         isEditingGlobalShortcut = false
         globalShortcutEditingMessage = nil
-        registerGlobalHotkey()
+        registerGlobalHotkey { [weak self] in self?.settingsCategory = .general }
         updateStatusMessage()
     }
 
@@ -1644,7 +1665,7 @@ final class DictaFlowAppState: ObservableObject {
             pendingInsertionTargetApplication = nil
             isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
-            setPreservedStatusMessage("Could not cancel recording cleanly. \(error.localizedDescription)")
+            setPreservedStatusMessage("Could not cancel recording cleanly. \(error.localizedDescription)", issueTitle: "Could not cancel recording")
             showMainWindow()
             updateStatusMessage()
         }
@@ -1828,8 +1849,15 @@ final class DictaFlowAppState: ObservableObject {
 
     func openModelsFolder() {
         let modelsDirectoryURL = modelDownloadService.modelsDirectoryURL
-        try? FileManager.default.createDirectory(at: modelsDirectoryURL, withIntermediateDirectories: true)
-        NSWorkspace.shared.open(modelsDirectoryURL)
+        do {
+            try FileManager.default.createDirectory(at: modelsDirectoryURL, withIntermediateDirectories: true)
+            guard NSWorkspace.shared.open(modelsDirectoryURL) else {
+                setPreservedStatusMessage("Finder could not open the model storage folder. Try again.", issueTitle: "Could not open storage")
+                return
+            }
+        } catch {
+            setPreservedStatusMessage("Could not open model storage. \(error.localizedDescription)", issueTitle: "Could not open storage")
+        }
     }
 
     func openRefinementPromptsFolder() {
@@ -1887,6 +1915,8 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
+        isDeletingModel = true
+
         Task { [weak self, transcriptRefinementService] in
             guard let self else {
                 return
@@ -1901,13 +1931,18 @@ final class DictaFlowAppState: ObservableObject {
                 }
 
                 await MainActor.run {
+                    self.isDeletingModel = false
                     let fileCount = filesToDelete.count
-                    self.setPreservedStatusMessage("Deleted \(fileCount) unused \(fileCount == 1 ? "model" : "models") and freed \(self.formattedLocalModelSize(deletedByteCount)).")
+                    self.setPreservedStatusMessage("Deleted \(fileCount) unused \(fileCount == 1 ? "model" : "models") and freed \(self.formattedLocalModelSize(deletedByteCount)).", issueTitle: "Model cleanup complete", severity: .information)
+                    self.updateStatusMessage()
                     self.refreshInstalledLocalModelFiles()
                 }
             } catch {
                 await MainActor.run {
-                    self.setPreservedStatusMessage("Could not delete unused models. \(error.localizedDescription)")
+                    self.isDeletingModel = false
+                    self.setPreservedStatusMessage("Could not delete unused models. \(error.localizedDescription)", issueTitle: "Could not remove unused models")
+                    self.updateStatusMessage()
+                    self.refreshInstalledLocalModelFiles()
                 }
             }
         }
@@ -1961,8 +1996,8 @@ final class DictaFlowAppState: ObservableObject {
             } catch {
                 await MainActor.run {
                     self.isDeletingModel = false
-                    self.setPreservedStatusMessage("Could not delete \(model.displayName). \(error.localizedDescription)")
-                    self.showMainWindowPage(.models)
+                    self.setPreservedStatusMessage("Could not delete \(model.displayName). \(error.localizedDescription)", issueTitle: "Could not remove the model")
+                    self.showRefinementModels(focusing: model)
                     self.updateStatusMessage()
                 }
             }
@@ -2015,7 +2050,8 @@ final class DictaFlowAppState: ObservableObject {
                     await MainActor.run {
                         self.isDeletingModel = false
                         self.setPreservedStatusMessage(
-                            "Deleted \(model.displayName), but could not delete its Neural Engine encoder. \(error.localizedDescription)"
+                            "Deleted \(model.displayName), but could not delete its Neural Engine encoder. \(error.localizedDescription)",
+                            issueTitle: "Could not remove the encoder"
                         )
                         self.updateStatusMessage()
                         self.refreshInstalledLocalModelFiles()
@@ -2035,8 +2071,8 @@ final class DictaFlowAppState: ObservableObject {
             } catch {
                 await MainActor.run {
                     self.isDeletingModel = false
-                    self.setPreservedStatusMessage("Could not delete \(model.displayName). \(error.localizedDescription)")
-                    self.showMainWindowPage(.models)
+                    self.setPreservedStatusMessage("Could not delete \(model.displayName). \(error.localizedDescription)", issueTitle: "Could not remove the model")
+                    self.showSpeechModels(focusing: model)
                     self.updateStatusMessage()
                 }
             }
@@ -2089,14 +2125,14 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
-    private func registerGlobalHotkey() {
+    private func registerGlobalHotkey(onFailure: () -> Void) {
         do {
             try registerToggleHotkey(globalShortcut)
             isHotkeyRegistered = true
         } catch {
             isHotkeyRegistered = false
-            setPreservedStatusMessage(error.localizedDescription)
-            showMainWindow()
+            setPreservedStatusMessage(error.localizedDescription, issueTitle: "Recording shortcut is unavailable")
+            onFailure()
         }
     }
 
@@ -2535,6 +2571,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func beginRecordingFlow() async {
+        interfaceIssue = nil
         recordingTone = textTone
         let requestedAt = ProcessInfo.processInfo.systemUptime
         recordingFailureMessage = nil
@@ -2544,8 +2581,8 @@ final class DictaFlowAppState: ObservableObject {
 
         guard isWhisperModelPrepared(whisperConfiguration.model) else {
             isOnboardingPracticeSession = false
-            setPreservedStatusMessage("\(whisperConfiguration.model.displayName) is not prepared. Open Models and prepare it before recording.")
-            showMainWindowPage(.models)
+            setPreservedStatusMessage("\(whisperConfiguration.model.displayName) is not prepared. Open Transcription and download it before recording.", issueTitle: "Speech model is missing")
+            showSpeechModels(focusing: whisperConfiguration.model)
             return
         }
 
@@ -2568,7 +2605,7 @@ final class DictaFlowAppState: ObservableObject {
             isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
             updateStatusMessage()
-            showMainWindow()
+            showSettingsCategory(.permissions)
             return
         }
 
@@ -2704,7 +2741,7 @@ final class DictaFlowAppState: ObservableObject {
             try await audioOutputVolumeService.beginDucking()
         } catch {
             logger.error("Could not lower system output volume: \(error.localizedDescription, privacy: .public)")
-            setPreservedStatusMessage("Could not lower system output volume. Recording will continue at its current volume.")
+            setPreservedStatusMessage("Could not lower system output volume. Recording will continue at its current volume.", issueTitle: "Could not lower audio volume")
         }
     }
 
@@ -2713,7 +2750,7 @@ final class DictaFlowAppState: ObservableObject {
             try await audioOutputVolumeService.restoreDucking()
         } catch {
             logger.error("Could not restore system output volume: \(error.localizedDescription, privacy: .public)")
-            setPreservedStatusMessage("Could not restore the system output volume automatically. Check your Mac's sound volume.")
+            setPreservedStatusMessage("Could not restore the system output volume automatically. Check your Mac's sound volume.", issueTitle: "Check audio volume")
         }
     }
 
@@ -2968,8 +3005,8 @@ final class DictaFlowAppState: ObservableObject {
             transcriptionState = .idle
             isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
-            setPreservedStatusMessage("\(model.displayName) is not prepared. Open Models and prepare it before recording.")
-            showMainWindowPage(.models)
+            setPreservedStatusMessage("\(model.displayName) is not prepared. Open Transcription and download it before recording.", issueTitle: "Speech model is missing")
+            showSpeechModels(focusing: model)
             await whisperService.unloadModel()
             resetWhisperIdleTimer()
             return
@@ -3029,10 +3066,10 @@ final class DictaFlowAppState: ObservableObject {
             transcriptionState = .idle
             isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
-            setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)")
+            setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)", issueTitle: insertResult ? "Transcription failed" : nil)
             if !insertResult { history.report(error) }
             playSoundCue(.error)
-            showMainWindowPage(insertResult ? .overview : .history)
+            showMainWindowPage(insertResult ? .dictation : .history)
             resetWhisperIdleTimer()
         }
     }
@@ -3054,7 +3091,7 @@ final class DictaFlowAppState: ObservableObject {
                 "Could not delete temporary recording \(captureURL.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
             )
             if shouldSurfaceFailure {
-                setPreservedStatusMessage("DictaFlow could not delete its temporary recording. Check the temporary recordings folder if you need to remove it manually.")
+                setPreservedStatusMessage("DictaFlow could not delete its temporary recording. Check the temporary recordings folder if you need to remove it manually.", issueTitle: "Could not remove temporary audio")
                 updateStatusMessage()
             }
             return
@@ -3092,7 +3129,7 @@ final class DictaFlowAppState: ObservableObject {
             var skippedTranscription = transcription
             skippedTranscription.refinementStatus = .skipped(reason: message)
             lastTranscription = skippedTranscription
-            setPreservedStatusMessage("Could not refine the transcript locally, so DictaFlow will use the transcript with your selected tone. \(message)")
+            setPreservedStatusMessage("Could not refine the transcript locally, so DictaFlow will use the transcript with your selected tone. \(message)", issueTitle: "Refinement was skipped")
             playSoundCue(.error)
             showMainWindow()
             updateStatusMessage()
@@ -3163,13 +3200,13 @@ final class DictaFlowAppState: ObservableObject {
                 completedAt: Date()
             )
             lastTranscription = failedTranscription
-            setPreservedStatusMessage(message)
+            setPreservedStatusMessage(message, issueTitle: "Refinement failed")
             playSoundCue(.error)
             localNotificationService.show(
                 title: "DictaFlow refinement failed",
                 body: "Using the transcript with your selected tone instead."
             )
-            showMainWindowPage(forceEnabled ? .history : .overview)
+            showMainWindowPage(forceEnabled ? .history : .dictation)
             updateStatusMessage()
             return failedTranscription
         }
@@ -3181,7 +3218,7 @@ final class DictaFlowAppState: ObservableObject {
             transcriptionState = .idle
             pendingInsertionTargetApplication = nil
             setRecordingOverlaySessionActive(false)
-            setPreservedStatusMessage("No speech was detected, so there was nothing to insert.")
+            setPreservedStatusMessage("No speech was detected, so there was nothing to insert.", issueTitle: "No speech detected", severity: .information)
             showMainWindow()
             resetWhisperIdleTimer()
             return
@@ -3245,9 +3282,10 @@ final class DictaFlowAppState: ObservableObject {
         )
     }
 
-    private func setPreservedStatusMessage(_ message: String) {
+    private func setPreservedStatusMessage(_ message: String, issueTitle: String? = nil, severity: InterfaceIssue.Severity = .error) {
         preservedStatusMessage = message
         statusMessage = message
+        if let issueTitle { interfaceIssue = InterfaceIssue(title: issueTitle, message: message, severity: severity) }
     }
 
     private func clearPreservedStatusMessage() {
@@ -3502,7 +3540,7 @@ final class DictaFlowAppState: ObservableObject {
 
         switch launchExperience {
         case .firstLaunch where onboardingPresentation != nil:
-            statusMessage = "First-launch session. Open Models to prepare a Whisper model for offline use."
+            statusMessage = "First-launch session. Open Dictation to prepare a Whisper model for offline use."
         case .firstLaunch, .returningUser:
             statusMessage = "DictaFlow is ready in the menu bar. Press \(hotkeyDisplayText) to start recording."
         }

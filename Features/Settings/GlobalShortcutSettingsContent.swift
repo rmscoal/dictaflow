@@ -4,80 +4,44 @@ struct GlobalShortcutSettingsContent: View {
     @ObservedObject var appState: DictaFlowAppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Label("Global Shortcut", systemImage: "keyboard")
-                    .font(.headline)
-
-                Spacer(minLength: 10)
-
-                if !appState.isEditingGlobalShortcut {
-                    Text(appState.hotkeyDisplayText)
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 11) {
+            EmberPanel {
+                EmberRow(title: "Start or stop dictation") {
+                    if appState.isEditingGlobalShortcut {
+                        ZStack {
+                            Text("Press shortcut…").font(.system(size: 12))
+                            GlobalShortcutCaptureView(
+                                isCapturing: true,
+                                onShortcut: { appState.handleGlobalShortcutCandidate($0) },
+                                onCancel: { appState.cancelGlobalShortcutEditing() }
+                            )
+                            .opacity(0.01).accessibilityHidden(true)
+                        }
+                        .frame(width: 134, height: 32)
+                        .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 9))
+                        .overlay { RoundedRectangle(cornerRadius: 9).stroke(AppTheme.accent) }
+                    } else {
+                        Button { appState.beginGlobalShortcutEditing() } label: {
+                            ShortcutKeycaps(shortcut: appState.globalShortcut)
+                        }
+                        .buttonStyle(EmberButtonStyle())
+                        .disabled(appState.whisperSettingsLocked)
+                        .accessibilityLabel("Change recording shortcut. \(appState.hotkeyDisplayText)")
+                    }
                 }
             }
-
             if appState.isEditingGlobalShortcut {
-                Text("Press a shortcut with Command, Control, Option, or Shift. Escape cancels.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.secondary.opacity(0.1))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Color.secondary.opacity(0.28), lineWidth: 0.75)
-                        }
-
-                    Text("Press a shortcut…")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
-
-                    GlobalShortcutCaptureView(
-                        isCapturing: true,
-                        onShortcut: { appState.handleGlobalShortcutCandidate($0) },
-                        onCancel: { appState.cancelGlobalShortcutEditing() }
-                    )
-                    .frame(maxWidth: .infinity, minHeight: 42)
-                    .opacity(0.01)
-                    .accessibilityHidden(true)
+                HStack(alignment: .top, spacing: 12) {
+                    Text(appState.globalShortcutEditingMessage ?? "Use Command, Control, Option, or Shift. Escape cancels.")
+                        .foregroundStyle(appState.globalShortcutEditingMessage == nil ? AppTheme.secondaryText : AppTheme.errorText)
+                    Spacer(minLength: 0)
+                    Button("Cancel", role: .cancel) { appState.cancelGlobalShortcutEditing() }.buttonStyle(.plain)
                 }
-                .frame(maxWidth: .infinity, minHeight: 42)
-
-                if let message = appState.globalShortcutEditingMessage {
-                    Text(message)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Button("Cancel", role: .cancel) {
-                    appState.cancelGlobalShortcutEditing()
-                }
-                .buttonStyle(.bordered)
-            } else {
-                HStack(spacing: 12) {
-                    Text(appState.hotkeyDisplayText)
-                        .font(.system(size: 17, weight: .semibold, design: .monospaced))
-
-                    Spacer(minLength: 10)
-
-                    Button("Change Shortcut") {
-                        appState.beginGlobalShortcutEditing()
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(appState.whisperSettingsLocked)
-                }
-
-                Text("Use this shortcut to start or stop recording from any app.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                .font(.system(size: 11))
+            } else if !appState.isHotkeyRegistered {
+                Text("Shortcut unavailable. Choose another key combination.")
+                    .font(.system(size: 11)).foregroundStyle(AppTheme.errorText)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

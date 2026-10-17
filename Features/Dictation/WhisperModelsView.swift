@@ -4,182 +4,149 @@ struct WhisperModelsView: View {
     @ObservedObject var appState: DictaFlowAppState
     let downloadModel: (WhisperModelDescriptor) -> Void
     let downloadEncoder: (WhisperModelDescriptor) -> Void
-    let downloadModelWithEncoder: (WhisperModelDescriptor) -> Void
     let removeModel: (WhisperModelDescriptor) -> Void
+    @State private var encoderPendingRemoval: WhisperModelDescriptor?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 10) {
-                SpeechProviderIcon()
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Selected model").font(.caption).foregroundStyle(AppTheme.secondaryText)
-                    Text(appState.whisperConfiguration.model.displayName).fontWeight(.semibold)
-                }
-                Spacer()
-                Text(appState.isWhisperModelPrepared(appState.whisperConfiguration.model) ? "Ready locally" : "Download needed")
-                    .font(.caption).foregroundStyle(AppTheme.secondaryText)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 7) {
+                EmberProviderIcon(asset: "provider-openai", size: 24)
+                Text("OpenAI").font(.system(size: 12, weight: .medium))
             }
-            .padding(16).background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 9))
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke(AppTheme.border))
-
-            HStack(spacing: 5) {
-                Image("provider-openai").resizable().scaledToFit().padding(3)
-                    .frame(width: 20, height: 20)
-                    .background(Color.white.opacity(0.94), in: RoundedRectangle(cornerRadius: 5))
-                    .accessibilityHidden(true)
-                Text("OpenAI")
-                    .font(.system(size: 11, weight: .medium)).fixedSize()
-            }
-                .padding(.horizontal, 9).padding(.vertical, 8)
-                .foregroundStyle(AppTheme.accent)
-                .background(AppTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.accent))
-                .padding(1).fixedSize(horizontal: true, vertical: false)
-                .padding(.top, 12)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Speech model provider: OpenAI")
-                .accessibilityAddTraits(.isSelected)
-
-            VStack(spacing: 8) {
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(AppTheme.selectedFill, in: Capsule())
+            .overlay { Capsule().stroke(AppTheme.accent, lineWidth: 1) }
+            .accessibilityElement(children: .combine)
+            VStack(spacing: 0) {
                 ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
-                    modelCard(model)
+                    modelRow(model).id(model.modelIdentifier)
+                    if model != WhisperModelDescriptor.allCases.last { EmberDivider() }
                 }
             }
-        }
-    }
-
-    private func modelCard(_ model: WhisperModelDescriptor) -> some View {
-        let prepared = appState.isWhisperModelPrepared(model)
-        let active = prepared && model == appState.whisperConfiguration.model
-        let downloadingModel = appState.isDownloadingWhisperModel(model)
-        let downloadingEncoder = appState.isDownloadingWhisperEncoder(model)
-
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                SpeechProviderIcon()
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(model.displayName).font(.system(size: 14, weight: .semibold))
-                    Text("Whisper · \(model.approximateDiskSizeDescription)")
-                        .font(.caption).foregroundStyle(AppTheme.secondaryText)
-                }
-                Spacer()
-                if downloadingModel {
-                    Button("Cancel") {
-                        appState.cancelWhisperModelDownload(model)
-                    }.controlSize(.small)
-                } else if active {
-                    HStack(spacing: 12) {
-                        Text("Active").font(.caption).foregroundStyle(AppTheme.accent)
-                        modelMenu(model, prepared: true)
-                            .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6))
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppTheme.border))
-                    }
-                    .disabled(appState.whisperSettingsLocked || appState.isDeletingModel)
-                } else {
-                    HStack(spacing: 0) {
-                        Button(prepared ? "Use model" : "Download") {
-                            if prepared { appState.updateWhisperModel(model) } else { downloadModel(model) }
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 12))
-                        .padding(.horizontal, 11)
-                        .frame(height: 29)
-
-                        Rectangle()
-                            .fill(prepared ? AppTheme.border : Color.white.opacity(0.25))
-                            .frame(width: 1, height: 29)
-                        modelMenu(model, prepared: prepared)
-                    }
-                    .foregroundStyle(prepared ? AppTheme.primaryText : Color.white)
-                    .background(prepared ? AppTheme.controlFill : AppTheme.accent, in: RoundedRectangle(cornerRadius: 6))
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(prepared ? AppTheme.border : Color.clear))
-                    .disabled(appState.whisperSettingsLocked || appState.isDeletingModel)
-                }
-            }
-            if downloadingModel {
-                downloadProgress(
-                    appState.whisperDownloadProgress(for: model),
-                    status: "Downloading model · \(appState.whisperDownloadStatusText(for: model))"
-                )
-            }
-            if downloadingEncoder {
-                downloadProgress(
-                    appState.whisperEncoderDownloadProgress(for: model),
-                    status: "Downloading encoder · \(appState.whisperEncoderDownloadStatusText(for: model))",
-                    cancelEncoder: { appState.cancelWhisperEncoderDownload(model) }
-                )
-            }
-            if let error = appState.whisperDownloadError(for: model) {
-                Text(error).font(.caption).foregroundStyle(AppTheme.warning).textSelection(.enabled)
-            }
-            if let error = appState.whisperEncoderDownloadError(for: model) {
-                Text(error).font(.caption).foregroundStyle(AppTheme.warning).textSelection(.enabled)
-            }
-        }
-        .padding(15)
-        .background(active ? AppTheme.accent.opacity(0.07) : AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(active ? AppTheme.accent.opacity(0.5) : AppTheme.border))
-    }
-
-    private func modelMenu(_ model: WhisperModelDescriptor, prepared: Bool) -> some View {
-        Menu {
-            if prepared {
-                if appState.isWhisperEncoderDownloaded(model) {
-                    Toggle("Use Encoder", isOn: Binding(
-                        get: { appState.isWhisperEncoderEnabled(model) },
-                        set: { appState.setWhisperEncoderEnabled($0, for: model) }
-                    ))
-                } else {
-                    Button("Download Encoder") { downloadEncoder(model) }
-                }
-                Divider()
-                Button(appState.isWhisperEncoderDownloaded(model) ? "Remove Model and Encoder…" : "Remove Model…", role: .destructive) {
-                    removeModel(model)
-                }
-                .disabled(!appState.canDeleteWhisperModel(model))
-                if model == appState.whisperConfiguration.model {
-                    Text("Select another model to remove this one.")
-                } else if !appState.canDeleteWhisperModel(model) {
-                    Text("Keep at least one downloaded model.")
-                }
-            } else {
-                Button("Download with Encoder") { downloadModelWithEncoder(model) }
-            }
-        } label: {
-            Image(systemName: "chevron.down")
-                .font(.system(size: 9, weight: .medium))
-                .frame(width: 30, height: 29)
-                .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .accessibilityLabel("Actions for \(model.displayName)")
-    }
-
-    private func downloadProgress(_ progress: Double?, status: String, cancelEncoder: (() -> Void)? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(status).font(.caption).foregroundStyle(AppTheme.secondaryText)
-                if let cancelEncoder {
+            DisclosureGroup {
+                encoderControls.padding(.top, 12)
+            } label: {
+                HStack {
+                    Text("Neural Engine acceleration")
                     Spacer()
-                    Button("Cancel encoder", action: cancelEncoder).controlSize(.small)
+                    Text("Optional").font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
                 }
             }
-            ProgressView(value: progress)
-                .progressViewStyle(.linear)
-                .tint(AppTheme.accent)
+            .disclosureGroupStyle(EmberDisclosureGroupStyle())
+            .font(.system(size: 12))
+        }
+        .alert("Remove the encoder?", isPresented: Binding(get: { encoderPendingRemoval != nil }, set: { if !$0 { encoderPendingRemoval = nil } })) {
+            Button("Cancel", role: .cancel) { encoderPendingRemoval = nil }
+            Button("Remove encoder", role: .destructive) {
+                if let model = encoderPendingRemoval { appState.removeWhisperEncoder(model) }
+                encoderPendingRemoval = nil
+            }
+        } message: {
+            Text("The speech model stays downloaded. Transcription can continue without Neural Engine acceleration.")
         }
     }
-}
 
-private struct SpeechProviderIcon: View {
-    var size: CGFloat = 28
-    var body: some View {
-        Image(systemName: "waveform").resizable().scaledToFit().padding(5)
-            .foregroundStyle(Color.black)
-            .frame(width: size, height: size)
-            .background(Color.white.opacity(0.94), in: RoundedRectangle(cornerRadius: 5))
-            .accessibilityHidden(true)
+    private func modelRow(_ model: WhisperModelDescriptor) -> some View {
+        let prepared = appState.isWhisperModelPrepared(model)
+        let selected = model == appState.whisperConfiguration.model
+        let downloading = appState.isDownloadingWhisperModel(model)
+        let encoderDownloading = appState.isDownloadingWhisperEncoder(model)
+        let error = appState.whisperDownloadError(for: model)
+        let encoderError = appState.whisperEncoderDownloadError(for: model)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                EmberProviderIcon(asset: "provider-openai", size: 30)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Whisper \(model.displayName)").font(.system(size: 14, weight: .medium))
+                    Text("\(model.approximateDiskSizeDescription) · Multilingual").font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+                    Text(model.detailText).font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                VStack(alignment: .trailing, spacing: 8) {
+                    if downloading {
+                        Button("Cancel") { appState.cancelWhisperModelDownload(model) }.buttonStyle(EmberButtonStyle())
+                    } else if selected && prepared {
+                        Label("Selected", systemImage: "checkmark").font(.system(size: 11)).foregroundStyle(AppTheme.accent)
+                    } else if prepared {
+                        HStack(spacing: 4) {
+                            Button("Use") { appState.updateWhisperModel(model) }
+                                .buttonStyle(EmberButtonStyle()).disabled(appState.whisperSettingsLocked)
+                            if !encoderDownloading { encoderMenu(model) }
+                        }
+                    } else {
+                        Button(error == nil ? "Download" : "Retry") { downloadModel(model) }
+                        .buttonStyle(EmberButtonStyle(primary: true))
+                        .disabled(appState.whisperSettingsLocked)
+                    }
+                    if prepared && !selected {
+                        Button { removeModel(model) } label: { Image(systemName: "trash") }
+                            .buttonStyle(EmberIconButtonStyle())
+                            .disabled(!appState.canDeleteWhisperModel(model) || appState.whisperSettingsLocked || encoderDownloading)
+                            .help(appState.canDeleteWhisperModel(model) ? "Remove Whisper \(model.displayName)" : "Keep at least one downloaded speech model.")
+                            .accessibilityLabel("Remove Whisper \(model.displayName)")
+                    }
+                }
+            }
+            if downloading {
+                progress(appState.whisperDownloadProgress(for: model), status: appState.whisperDownloadStatusText(for: model))
+            }
+            if encoderDownloading {
+                HStack {
+                    Text("Encoder · \(appState.whisperEncoderDownloadStatusText(for: model))").font(.system(size: 11))
+                    Spacer()
+                    Button("Cancel encoder") { appState.cancelWhisperEncoderDownload(model) }.buttonStyle(.plain).font(.system(size: 12))
+                }
+                ProgressView(value: appState.whisperEncoderDownloadProgress(for: model)).tint(AppTheme.accent)
+            }
+            if let error { Text(error).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
+            if let encoderError { Text(encoderError).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
+        }
+        .padding(.vertical, 17).padding(.horizontal, error != nil || encoderError != nil ? 12 : 0)
+        .background(error != nil || encoderError != nil ? AppTheme.errorFill : .clear, in: RoundedRectangle(cornerRadius: 16))
+        .overlay {
+            if error != nil || encoderError != nil { RoundedRectangle(cornerRadius: 16).stroke(AppTheme.errorBorder, lineWidth: 1) }
+        }
+    }
+
+    private func encoderMenu(_ model: WhisperModelDescriptor) -> some View {
+        Menu {
+            if appState.isWhisperEncoderDownloaded(model) {
+                Toggle("Use encoder", isOn: Binding(get: { appState.isWhisperEncoderEnabled(model) }, set: { appState.setWhisperEncoderEnabled($0, for: model) }))
+                Button("Remove encoder…", role: .destructive) { encoderPendingRemoval = model }
+            } else {
+                Button("Download encoder…") { downloadEncoder(model) }
+            }
+        } label: { Image(systemName: "ellipsis").frame(width: 22, height: 25) }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .disabled(appState.whisperSettingsLocked)
+        .accessibilityLabel("Encoder actions for Whisper \(model.displayName)")
+    }
+
+    private var encoderControls: some View {
+        let model = appState.whisperConfiguration.model
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Whisper \(model.displayName) encoder · \(model.encoderApproximateSizeDescription). Dictation also works without this download.")
+                .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+            if appState.isDownloadingWhisperEncoder(model) {
+                Text("The encoder download is shown in the model row above.").font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+            } else if appState.isWhisperEncoderDownloaded(model) {
+                Toggle("Use encoder", isOn: Binding(get: { appState.isWhisperEncoderEnabled(model) }, set: { appState.setWhisperEncoderEnabled($0, for: model) }))
+                    .toggleStyle(.switch).controlSize(.mini)
+                Button("Remove encoder…") { encoderPendingRemoval = model }.buttonStyle(EmberButtonStyle())
+            } else {
+                Button(appState.whisperEncoderDownloadError(for: model) == nil ? "Download encoder…" : "Retry encoder…") { downloadEncoder(model) }
+                    .buttonStyle(EmberButtonStyle())
+                    .disabled(!appState.isWhisperModelPrepared(model))
+            }
+        }
+        .disabled(appState.whisperSettingsLocked)
+    }
+
+    private func progress(_ value: Double?, status: String) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ProgressView(value: value).tint(AppTheme.accent)
+            Text(status).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+        }
     }
 }

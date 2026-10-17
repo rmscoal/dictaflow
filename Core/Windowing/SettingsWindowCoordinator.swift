@@ -9,6 +9,6 @@ final class SettingsWindowCoordinator: SettingsWindowRouting {
     }
 
     func showSettingsWindow() {
-        appState.showMainWindowPage(.shortcutAndAudio)
+        appState.openSettingsWindow()
     }
 }

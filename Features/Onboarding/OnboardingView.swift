@@ -121,7 +121,7 @@ struct OnboardingView: View {
 
         return OnboardingPageLayout(
             title: "Prepare offline transcription",
-            subtitle: "Download a Whisper model to continue. You can switch models later in Settings."
+            subtitle: "Download a Whisper model to continue. You can switch models later in Dictation."
         ) {
             VStack(spacing: 14) {
                 HStack(spacing: 16) {
@@ -799,5 +799,5 @@ private enum OnboardingTheme {
     static let accent = AppTheme.accent
     static let success = AppTheme.modelActive
     static let warning = AppTheme.warning
-    static let logoInk = Color(red: 0.12, green: 0.16, blue: 0.24)
+    static let logoInk = AppTheme.actionText
 }
