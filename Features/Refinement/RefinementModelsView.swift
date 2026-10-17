@@ -103,15 +103,13 @@ struct ModelCardActionGroup: View {
     var body: some View {
         HStack(spacing: 0) {
             Button("Use", action: onUse)
-                .buttonStyle(ModelCardSegmentStyle())
-                .padding(.horizontal, 12).padding(.vertical, 7)
+                .buttonStyle(ModelCardSegmentStyle(horizontal: 12))
                 .overlay(alignment: .trailing) { Rectangle().fill(AppTheme.border).frame(width: 1) }
                 .opacity(useDisabled ? 0.45 : 1)
                 .disabled(useDisabled)
             Button(action: onRemove) { Image(systemName: "trash").font(.system(size: 11)) }
-                .buttonStyle(ModelCardSegmentStyle())
+                .buttonStyle(ModelCardSegmentStyle(horizontal: 10))
                 .foregroundStyle(AppTheme.errorText)
-                .padding(.horizontal, 10).padding(.vertical, 7)
                 .opacity(removeDisabled ? 0.45 : 1)
                 .disabled(removeDisabled)
                 .help(removeHelp).accessibilityLabel(removeHelp)
@@ -124,7 +122,12 @@ struct ModelCardActionGroup: View {
 }
 
 private struct ModelCardSegmentStyle: ButtonStyle {
+    let horizontal: CGFloat
+
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.opacity(configuration.isPressed ? 0.6 : 1)
+        configuration.label
+            .padding(.horizontal, horizontal).padding(.vertical, 7)
+            .contentShape(Rectangle())
+            .opacity(configuration.isPressed ? 0.6 : 1)
     }
 }

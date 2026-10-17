@@ -18,13 +18,21 @@ final class ModelCardActionGroupTests: XCTestCase {
     /// and reports the size the view actually takes.
     private func renderedHeight<V: View>(of view: V) -> CGFloat {
         var size: CGSize = .zero
+        let reported = XCTestExpectation(description: "size reported")
+        var didFulfill = false
         let content = AnyView(view)
             .background(
                 GeometryReader { proxy in
                     Color.clear.preference(key: ReportedSizeKey.self, value: proxy.size)
                 }
             )
-            .onPreferenceChange(ReportedSizeKey.self) { size = $0 }
+            .onPreferenceChange(ReportedSizeKey.self) {
+                size = $0
+                if !didFulfill && $0.height > 0 {
+                    didFulfill = true
+                    reported.fulfill()
+                }
+            }
         let host = NSHostingView(
             rootView: AnyView(
                 HStack(alignment: .top, spacing: 0) {
@@ -36,7 +44,7 @@ final class ModelCardActionGroupTests: XCTestCase {
         )
         host.frame = NSRect(x: 0, y: 0, width: 300, height: 120)
         host.layoutSubtreeIfNeeded()
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.5))
+        wait(for: [reported], timeout: 2.0)
         return size.height
     }
 
