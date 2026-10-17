@@ -112,6 +112,7 @@ final class HistoryViewModel: ObservableObject {
     func updateSearchQuery(_ query: String) {
         guard searchQuery != query else { return }
         searchQuery = query
+        guard store != nil else { return }
         loadGeneration += 1
         needsSearchReset = true
         hasMore = false

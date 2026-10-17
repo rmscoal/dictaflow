@@ -242,7 +242,9 @@ struct EmberColumns: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? stackingWidth
         let sizes = sizes(width: width, subviews: subviews)
-        let height = width > stackingWidth ? sizes.map(\.height).max() ?? 0 : sizes.reduce(0) { $0 + $1.height } + gap
+        let height = width > stackingWidth
+            ? sizes.map(\.height).max() ?? 0
+            : sizes.reduce(0) { $0 + $1.height } + gap * CGFloat(max(0, sizes.count - 1))
         return CGSize(width: width, height: height)
     }
 

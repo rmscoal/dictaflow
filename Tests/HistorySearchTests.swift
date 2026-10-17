@@ -52,6 +52,15 @@ final class HistorySearchTests: XCTestCase {
         XCTAssertNil(model.errorMessage)
     }
 
+    func testNilStoreSearchDoesNotEnterLoadingState() async {
+        let model = HistoryViewModel(store: nil)
+        model.updateSearchQuery("anything")
+        XCTAssertEqual(model.searchQuery, "anything")
+        XCTAssertFalse(model.isLoading)
+        await model.refresh()
+        XCTAssertFalse(model.isLoading)
+    }
+
     private func entry(_ preview: String) -> HistoryEntry {
         HistoryEntry(id: UUID(), capturedAt: Date(), duration: 1, expiresAt: Date().addingTimeInterval(3600),
                      preview: preview, status: .succeeded, audioAvailable: false)

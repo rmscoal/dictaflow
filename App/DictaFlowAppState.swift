@@ -769,7 +769,7 @@ final class DictaFlowAppState: ObservableObject {
         refreshMicrophonePermissionStatus()
         prepareSoundCuesIfEnabled()
         refreshAccessibilityPermissionStatus()
-        registerGlobalHotkey()
+        registerGlobalHotkey { [weak self] in self?.showMainWindow() }
         refreshRefinementRuntimeAvailability()
         restoreCachedAvailableUpdate()
         checkForUpdatesIfNeeded()
@@ -1605,7 +1605,7 @@ final class DictaFlowAppState: ObservableObject {
 
         isEditingGlobalShortcut = false
         globalShortcutEditingMessage = nil
-        registerGlobalHotkey()
+        registerGlobalHotkey { [weak self] in self?.settingsCategory = .general }
         updateStatusMessage()
     }
 
@@ -1922,8 +1922,6 @@ final class DictaFlowAppState: ObservableObject {
                 return
             }
 
-            defer { self.isDeletingModel = false }
-
             do {
                 await self.refinementShutdownTask?.value
                 let deletedByteCount = try await self.modelDownloadService.deleteModelFiles(filesToDelete)
@@ -1933,13 +1931,17 @@ final class DictaFlowAppState: ObservableObject {
                 }
 
                 await MainActor.run {
+                    self.isDeletingModel = false
                     let fileCount = filesToDelete.count
                     self.setPreservedStatusMessage("Deleted \(fileCount) unused \(fileCount == 1 ? "model" : "models") and freed \(self.formattedLocalModelSize(deletedByteCount)).", issueTitle: "Model cleanup complete", severity: .information)
+                    self.updateStatusMessage()
                     self.refreshInstalledLocalModelFiles()
                 }
             } catch {
                 await MainActor.run {
+                    self.isDeletingModel = false
                     self.setPreservedStatusMessage("Could not delete unused models. \(error.localizedDescription)", issueTitle: "Could not remove unused models")
+                    self.updateStatusMessage()
                     self.refreshInstalledLocalModelFiles()
                 }
             }
@@ -2123,14 +2125,14 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
-    private func registerGlobalHotkey() {
+    private func registerGlobalHotkey(onFailure: () -> Void) {
         do {
             try registerToggleHotkey(globalShortcut)
             isHotkeyRegistered = true
         } catch {
             isHotkeyRegistered = false
             setPreservedStatusMessage(error.localizedDescription, issueTitle: "Recording shortcut is unavailable")
-            showSettingsCategory(.general)
+            onFailure()
         }
     }
 

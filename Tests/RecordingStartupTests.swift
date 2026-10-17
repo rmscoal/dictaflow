@@ -82,6 +82,20 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(state.refinementConfiguration.model, .llama32ThreeB)
     }
 
+    func testCancellingShortcutEditingWithFailingHotkeyDoesNotNavigateToSettings() throws {
+        let fixture = try RecordingStartupFixture(hotkeyService: FailingHotkeyService())
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        state.showMainWindowPage(.history)
+        state.beginGlobalShortcutEditing()
+        XCTAssertTrue(state.isEditingGlobalShortcut)
+        state.cancelGlobalShortcutEditing()
+        XCTAssertFalse(state.isEditingGlobalShortcut)
+        XCTAssertFalse(state.isHotkeyRegistered)
+        XCTAssertEqual(state.mainWindowPage, .history)
+        XCTAssertEqual(state.settingsCategory, .general)
+    }
+
     func testBulkCleanupRemovesRetiredWeightsAndProtectsSelectedModels() async throws {
         let fixture = try RecordingStartupFixture(refinementEnabled: true, refinementModel: .llama32ThreeB)
         defer { fixture.cleanup() }
@@ -902,7 +916,8 @@ private final class RecordingStartupFixture {
         refinementModel: RefinementModelDescriptor = .recommendedDefault,
         historyStore: HistoryStoreProtocol? = nil,
         promptStore: RefinementPromptStoreProtocol? = nil,
-        allowsInsertion: Bool = false
+        allowsInsertion: Bool = false,
+        hotkeyService: HotkeyServiceProtocol? = nil
     ) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -921,7 +936,7 @@ private final class RecordingStartupFixture {
             settingsStore: settings, permissionService: permissions,
             audioRecorderService: recorder, audioOutputVolumeService: volume,
             soundCueService: cues,
-            hotkeyService: StartupHotkeyService(),
+            hotkeyService: hotkeyService ?? StartupHotkeyService(),
             modelDownloadService: modelDownloadService ?? (usePipelineModels
                 ? PipelineModelDownloadService(modelsDirectoryURL: directory)
                 : WhisperModelDownloadService(modelsDirectoryURL: directory)),
@@ -1047,6 +1062,14 @@ private final class StartupPermissionService: PermissionServiceProtocol {
 @MainActor
 private final class StartupHotkeyService: HotkeyServiceProtocol {
     func registerToggleHotkey(_ shortcut: GlobalShortcutDescriptor, handler: @escaping () -> Void) throws {}
+    func unregisterToggleHotkey() {}
+}
+
+@MainActor
+private final class FailingHotkeyService: HotkeyServiceProtocol {
+    func registerToggleHotkey(_ shortcut: GlobalShortcutDescriptor, handler: @escaping () -> Void) throws {
+        throw NSError(domain: "DictaFlowTests", code: 1)
+    }
     func unregisterToggleHotkey() {}
 }
 
