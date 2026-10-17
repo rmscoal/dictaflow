@@ -97,7 +97,7 @@ struct WhisperModelsView: View {
                     Spacer()
                     Button("Cancel encoder") { appState.cancelWhisperEncoderDownload(model) }.buttonStyle(.plain).font(.system(size: 12))
                 }
-                ProgressView(value: appState.whisperEncoderDownloadProgress(for: model)).tint(AppTheme.accent)
+                EmberDownloadProgress(value: appState.whisperEncoderDownloadProgress(for: model))
             }
             if let error { Text(error).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
             if let encoderError { Text(encoderError).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
@@ -145,7 +145,7 @@ struct WhisperModelsView: View {
 
     private func progress(_ value: Double?, status: String) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            ProgressView(value: value).tint(AppTheme.accent)
+            EmberDownloadProgress(value: value)
             Text(status).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
         }
     }

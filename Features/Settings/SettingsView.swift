@@ -13,6 +13,7 @@ struct SettingsView: View {
                             .frame(minWidth: 82).padding(.horizontal, 12).padding(.vertical, 9)
                             .background(appState.settingsCategory == category ? AppTheme.tileFill : .clear,
                                         in: RoundedRectangle(cornerRadius: 7))
+                            .contentShape(RoundedRectangle(cornerRadius: 7))
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("settings-\(category.rawValue)")

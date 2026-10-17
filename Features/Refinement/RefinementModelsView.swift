@@ -19,6 +19,7 @@ struct RefinementModelsView: View {
                         .foregroundStyle(provider == item ? AppTheme.accent : AppTheme.primaryText)
                         .background(provider == item ? AppTheme.selectedFill : AppTheme.tileFill, in: Capsule())
                         .overlay { Capsule().stroke(provider == item ? AppTheme.accent : AppTheme.border, lineWidth: 1) }
+                        .contentShape(Capsule())
                     }
                     .buttonStyle(.plain).accessibilityLabel(item.title)
                     .accessibilityAddTraits(provider == item ? .isSelected : [])
@@ -73,7 +74,7 @@ struct RefinementModelsView: View {
                 }
             }
             if downloading {
-                ProgressView(value: appState.refinementDownloadProgress(for: model)).tint(AppTheme.accent)
+                EmberDownloadProgress(value: appState.refinementDownloadProgress(for: model))
                 Text(appState.refinementDownloadStatusText(for: model)).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
             }
             if let error { Text(error).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }

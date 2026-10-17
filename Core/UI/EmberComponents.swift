@@ -63,6 +63,7 @@ struct EmberPanel<Content: View>: View {
 struct EmberRow<Control: View>: View {
     let title: String
     var detail = ""
+    var asset: String? = nil
     @ViewBuilder var control: Control
 
     var body: some View {
@@ -82,11 +83,16 @@ struct EmberRow<Control: View>: View {
     }
 
     private var label: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.system(size: 13))
-            if !detail.isEmpty {
-                Text(detail).font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+        HStack(spacing: 10) {
+            if let asset {
+                EmberProviderIcon(asset: asset, size: 28)
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.system(size: 13))
+                if !detail.isEmpty {
+                    Text(detail).font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -148,6 +154,23 @@ struct EmberAppMark: View {
         .frame(width: size, height: size)
         .background(.white, in: RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))
         .accessibilityHidden(true)
+    }
+}
+
+/// Download progress bar that always transitions between the indeterminate
+/// and determinate states. A single `ProgressView(value:)` created while the
+/// value is nil keeps its indeterminate animation on macOS instead of
+/// switching to the determinate bar once the total size is known, so the two
+/// states must be distinct views.
+struct EmberDownloadProgress: View {
+    let value: Double?
+
+    var body: some View {
+        if let value {
+            ProgressView(value: value).tint(AppTheme.accent)
+        } else {
+            ProgressView().progressViewStyle(.linear).tint(AppTheme.accent)
+        }
     }
 }
 
