@@ -30,6 +30,7 @@ final class DictaFlowAppState: ObservableObject {
     @Published var dictationSettingsTab: DictationSettingsTab = .transcription
     @Published private(set) var textTone: TextTone
     private var recordingTone: TextTone = .original
+    private(set) var recordingRefinementMode: RefinementMode = .smartCleanup
     @Published var mainWindowPage: MainWindowPage = .dictation {
         didSet { if mainWindowPage != .settings { cancelGlobalShortcutEditing() } }
     }
@@ -139,7 +140,7 @@ final class DictaFlowAppState: ObservableObject {
     private var isWarmingUpWhisperEncoder = false
     var whisperIdleEvictionInterval: TimeInterval = 600
     private var isRecordingOverlaySessionActive = false
-    private var lastKnownExternalTargetApplication: InsertionTargetApplication?
+    @Published private(set) var lastKnownExternalTargetApplication: InsertionTargetApplication?
     private var pendingInsertionTargetApplication: InsertionTargetApplication?
     private var isOnboardingPracticeSession = false
     private var preservedStatusMessage: String?
@@ -192,6 +193,13 @@ final class DictaFlowAppState: ObservableObject {
         if initialRefinementConfiguration.writingStyleVersion == 0 {
             if refinementPromptStore.hasCustomPromptTemplate() { initialRefinementConfiguration.mode = .diy }
             initialRefinementConfiguration.writingStyleVersion = 1
+            settingsStore.saveRefinementConfiguration(initialRefinementConfiguration)
+        }
+        if initialRefinementConfiguration.writingStyleVersion < 2 {
+            let installedRules = WritingStyleApplicationCatalog.starterRules.filter {
+                NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.key) != nil
+            }
+            initialRefinementConfiguration.migrateAppStyles(installedStarterRules: installedRules)
             settingsStore.saveRefinementConfiguration(initialRefinementConfiguration)
         }
         if !RefinementModelDescriptor.allCases.contains(initialRefinementConfiguration.model), initialRefinementConfiguration.isEnabled {
@@ -1053,6 +1061,28 @@ final class DictaFlowAppState: ObservableObject {
         persistRefinementConfiguration()
     }
 
+    var effectiveRefinementStyle: RefinementStyleResolver.Resolution {
+        RefinementStyleResolver.effectiveMode(for: lastKnownExternalTargetApplication?.bundleIdentifier, in: refinementConfiguration)
+    }
+
+    func updatePerAppStylesEnabled(_ enabled: Bool) {
+        guard !refinementSettingsLocked else { return }
+        refinementConfiguration.perAppStylesEnabled = enabled
+        persistRefinementConfiguration()
+    }
+
+    func assignWritingStyle(_ mode: RefinementMode, to bundleIDs: Set<String>) {
+        guard !refinementSettingsLocked else { return }
+        for bundleID in bundleIDs { refinementConfiguration.appStyleRules[bundleID] = mode }
+        persistRefinementConfiguration()
+    }
+
+    func removeWritingStyleRule(for bundleID: String) {
+        guard !refinementSettingsLocked else { return }
+        refinementConfiguration.appStyleRules.removeValue(forKey: bundleID)
+        persistRefinementConfiguration()
+    }
+
     var currentPresetInstructions: String {
         presetInstructionDrafts[refinementConfiguration.mode.rawValue] ?? ""
     }
@@ -1084,14 +1114,14 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private var savedRefinementPromptTemplate: String {
-        RefinementPromptTemplate.template(for: refinementConfiguration.mode,
-            additionalInstructions: savedPresetInstructions[refinementConfiguration.mode.rawValue] ?? "",
+    private func savedRefinementPromptTemplate(for mode: RefinementMode) -> String {
+        RefinementPromptTemplate.template(for: mode,
+            additionalInstructions: savedPresetInstructions[mode.rawValue] ?? "",
             diyPrompt: savedRefinementPromptText)
     }
 
     func savedEffectiveRefinementPrompt(taskMode: WhisperTaskMode) -> String {
-        RefinementPromptTemplate.renderedInstructions(from: savedRefinementPromptTemplate, whisperTaskMode: taskMode)
+        RefinementPromptTemplate.renderedInstructions(from: savedRefinementPromptTemplate(for: refinementConfiguration.mode), whisperTaskMode: taskMode)
     }
 
     func updateRefinementPromptText(_ promptText: String) {
@@ -2590,6 +2620,9 @@ final class DictaFlowAppState: ObservableObject {
             ? nil
             : captureCurrentInsertionTargetApplication()
 
+        recordingRefinementMode = RefinementStyleResolver.effectiveMode(
+            for: pendingInsertionTargetApplication?.bundleIdentifier, in: refinementConfiguration).mode
+
         // Reserve startup before any await so another shortcut cannot start
         // a second recorder and reset the first session's state on failure.
         recordingState = microphonePermissionState == .granted ? .starting : .requestingPermission
@@ -2692,7 +2725,7 @@ final class DictaFlowAppState: ObservableObject {
             microphonePermissionState = permissionService.currentMicrophonePermissionStatus()
             recordingState = .idle
             updateStatusMessage()
-            await transcribe(capture: capture, historyID: historyID, tone: recordingTone)
+            await transcribe(capture: capture, historyID: historyID, tone: recordingTone, refinementMode: recordingRefinementMode)
             if let historyID { await historyStore?.releaseAudio(historyID) }
             await history.refresh()
         } catch {
@@ -2921,7 +2954,7 @@ final class DictaFlowAppState: ObservableObject {
             return RecordingOverlayPresentation(
                 phase: .recording,
                 title: "Recording",
-                detail: "Press again to stop",
+                detail: refinementConfiguration.isEnabled ? recordingRefinementMode.title : "Press again to stop",
                 audioLevel: recordingAudioLevel
             )
         case .stopping:
@@ -2979,7 +3012,7 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func transcribe(capture: DictationCapture, historyID: UUID? = nil, insertResult: Bool = true, configuration override: WhisperConfiguration? = nil, tone: TextTone? = nil) async {
+    private func transcribe(capture: DictationCapture, historyID: UUID? = nil, insertResult: Bool = true, configuration override: WhisperConfiguration? = nil, tone: TextTone? = nil, refinementMode: RefinementMode? = nil) async {
         let configuration = override ?? whisperConfiguration
         let selectedTone = tone ?? textTone
         var historyAttempt: UUID?
@@ -3029,7 +3062,7 @@ final class DictaFlowAppState: ObservableObject {
             }
             lastTranscription = transcription
             clearPreservedStatusMessage()
-            let insertionTranscription = await refinedTranscriptionIfNeeded(transcription, historyTranscriptionID: historyAttempt, protectedTerms: configuration.customVocabulary)
+            let insertionTranscription = await refinedTranscriptionIfNeeded(transcription, historyTranscriptionID: historyAttempt, protectedTerms: configuration.customVocabulary, mode: refinementMode)
             guard !isTerminating else { return }
 
             if isOnboardingPracticeSession {
@@ -3102,7 +3135,7 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func refinedTranscriptionIfNeeded(_ transcription: WhisperTranscriptionResult, historyTranscriptionID: UUID? = nil, forceEnabled: Bool = false, protectedTerms: [String] = []) async -> WhisperTranscriptionResult {
+    private func refinedTranscriptionIfNeeded(_ transcription: WhisperTranscriptionResult, historyTranscriptionID: UUID? = nil, forceEnabled: Bool = false, protectedTerms: [String] = [], mode: RefinementMode? = nil) async -> WhisperTranscriptionResult {
         guard !isTerminating, refinementConfiguration.isEnabled || forceEnabled else {
             return transcription
         }
@@ -3141,7 +3174,8 @@ final class DictaFlowAppState: ObservableObject {
 
         var configuration = refinementConfiguration
         if forceEnabled { configuration.isEnabled = true }
-        let prompt = savedRefinementPromptTemplate
+        configuration.mode = mode ?? configuration.mode
+        let prompt = savedRefinementPromptTemplate(for: configuration.mode)
         let effectivePrompt = RefinementPromptTemplate.renderedInstructions(from: prompt, whisperTaskMode: transcription.taskMode)
         prewarmRefinementModel(forceEnabled: forceEnabled)
         // Persistence yields to the preparation task. Keep its result even if
@@ -3449,7 +3483,7 @@ final class DictaFlowAppState: ObservableObject {
             statusMessage = "Preparing the microphone before recording."
             return
         case .recording:
-            statusMessage = "Recording locally to a temporary file. Press \(hotkeyDisplayText) again to stop."
+            statusMessage = (refinementConfiguration.isEnabled ? "\(recordingRefinementMode.title). " : "") + "Recording locally to a temporary file. Press \(hotkeyDisplayText) again to stop."
             return
         case .stopping:
             statusMessage = "Stopping recording and finalizing the temporary audio file."

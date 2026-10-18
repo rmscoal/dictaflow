@@ -38,19 +38,10 @@ struct RefinementSettingsView: View {
                 appState.showRefinementModels()
             }
             .padding(.bottom, 18)
-            EmberPanel {
-                EmberRow(title: "Writing style") {
-                    Picker("Refinement writing style", selection: Binding(get: { mode }, set: { appState.updateRefinementMode($0) })) {
-                        ForEach(RefinementMode.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .labelsHidden().frame(width: 195).disabled(appState.refinementSettingsLocked)
-                }
-            }
-            .padding(.bottom, 18)
-            if mode == .diy {
-                diyEditor
-            } else {
-                EmberPanel {
+            EmberSectionHeading(title: "Writing style")
+            WritingStyleCard(appState: appState) {
+                if mode != .diy {
+                    EmberDivider()
                     DisclosureGroup(isExpanded: $instructionsExpanded) {
                         instructionsEditor.padding(.top, 14)
                     } label: {
@@ -64,6 +55,8 @@ struct RefinementSettingsView: View {
                     .font(.system(size: 12)).padding(17)
                 }
             }
+            .padding(.bottom, 18)
+            if mode == .diy { diyEditor }
             if let error = appState.refinementWritingError {
                 EmberErrorBanner(title: "Could not save instructions", message: error).padding(.top, 14)
             }

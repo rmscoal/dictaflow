@@ -3,8 +3,11 @@ import Foundation
 nonisolated struct RefinementConfiguration: Codable, Equatable {
     var isEnabled: Bool
     var model: RefinementModelDescriptor
+    // Version 1 preserves the existing prompt migration; app discovery completes version 2.
     var writingStyleVersion = 1
     var mode: RefinementMode
+    var perAppStylesEnabled: Bool
+    var appStyleRules: [String: RefinementMode]
 
     static let `default` = RefinementConfiguration(
         isEnabled: false,
@@ -15,15 +18,25 @@ nonisolated struct RefinementConfiguration: Codable, Equatable {
     init(
         isEnabled: Bool,
         model: RefinementModelDescriptor,
-        mode: RefinementMode
+        mode: RefinementMode,
+        perAppStylesEnabled: Bool = true,
+        appStyleRules: [String: RefinementMode] = [:]
     ) {
         self.isEnabled = isEnabled
         self.model = model
         self.mode = mode
+        self.perAppStylesEnabled = perAppStylesEnabled
+        self.appStyleRules = appStyleRules
+    }
+
+    mutating func migrateAppStyles(installedStarterRules: [String: RefinementMode]) {
+        guard writingStyleVersion < 2 else { return }
+        appStyleRules.merge(installedStarterRules) { existing, _ in existing }
+        writingStyleVersion = 2
     }
 
     private enum CodingKeys: String, CodingKey {
-        case isEnabled, model, mode, writingStyleVersion
+        case isEnabled, model, mode, writingStyleVersion, perAppStylesEnabled, appStyleRules
     }
 
     init(from decoder: Decoder) throws {
@@ -41,6 +54,8 @@ nonisolated struct RefinementConfiguration: Codable, Equatable {
             self.model = .qwen3Small
         }
         self.mode = try container.decode(RefinementMode.self, forKey: .mode)
+        self.perAppStylesEnabled = try container.decodeIfPresent(Bool.self, forKey: .perAppStylesEnabled) ?? true
+        self.appStyleRules = try container.decodeIfPresent([String: RefinementMode].self, forKey: .appStyleRules) ?? [:]
         self.writingStyleVersion = try container.decodeIfPresent(Int.self, forKey: .writingStyleVersion) ?? 0
     }
 }

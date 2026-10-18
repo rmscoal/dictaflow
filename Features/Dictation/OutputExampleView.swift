@@ -7,7 +7,7 @@ struct OutputExampleView: View {
 
     private var isTone: Bool { appState.dictationSettingsTab == .tone }
     private var result: String {
-        let source = isTone ? toneExample : appState.refinementConfiguration.isEnabled && appState.refinementConfiguration.mode != .diy ? appState.refinementConfiguration.mode.writingExample : original
+        let source = isTone ? toneExample : appState.refinementConfiguration.isEnabled && appState.effectiveRefinementStyle.mode != .diy ? appState.effectiveRefinementStyle.mode.writingExample : original
         return isTone ? TextToneFormatter.format(source, tone: appState.textTone, isEnglish: true).text : source
     }
 
@@ -24,12 +24,21 @@ struct OutputExampleView: View {
                 Text(isTone ? toneExample : original).font(.system(size: 13)).lineSpacing(7)
                     .foregroundStyle(AppTheme.paperSecondaryText).padding(.top, 10).padding(.bottom, 25)
                 Rectangle().fill(AppTheme.paperBorder).frame(height: 1)
-                caption(isTone ? appState.textTone.title : "Ready to share").padding(.top, 25)
+                caption(isTone ? appState.textTone.title : "Ready to share" + (appState.lastKnownExternalTargetApplication.map { " · " + $0.displayName } ?? "")).padding(.top, 25)
                 Text(result).font(.system(size: 21)).tracking(-0.35).lineSpacing(9)
                     .foregroundStyle(AppTheme.paperText)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 10).padding(.bottom, 30)
                 Spacer(minLength: 0)
+                if !isTone {
+                    Rectangle().fill(AppTheme.paperBorder).frame(height: 1)
+                    Text(appState.refinementConfiguration.isEnabled
+                        ? appState.effectiveRefinementStyle.mode.title + (appState.effectiveRefinementStyle.source == .rule
+                            ? " · per-app rule for " + (appState.lastKnownExternalTargetApplication?.displayName ?? "app")
+                            : " · default style")
+                        : "Tone only · refinement off")
+                        .font(.system(size: 11)).foregroundStyle(AppTheme.paperSecondaryText).padding(.top, 16)
+                }
                 if isTone {
                     Rectangle().fill(AppTheme.paperBorder).frame(height: 1)
                     HStack {
