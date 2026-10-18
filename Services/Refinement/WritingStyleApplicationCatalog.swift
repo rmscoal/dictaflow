@@ -49,7 +49,7 @@ struct WritingStyleApplicationCatalog: WritingStyleApplicationCatalogProtocol {
     }
 
     func suggestedApplications() -> [WritingStyleApplication] {
-        let ids = Set(Self.starterRules.keys).union(["com.apple.Notes", "com.apple.Safari", "com.apple.Mail", "com.apple.Xcode", "com.microsoft.VSCode"])
+        let ids = Set(Self.starterRules.keys).union(["com.apple.Notes", "com.apple.Safari", "com.apple.mail", "com.apple.dt.Xcode", "com.microsoft.VSCode"])
         return ids.map { application(bundleID: $0) }.filter { $0.url != nil }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
