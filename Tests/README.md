@@ -321,3 +321,32 @@ model before removing it; keep at least one downloaded speech model.
 late completion, model failure followed by a plain retry, and encoder failure
 followed by an encoder-only retry. These checks use synthetic download services
 and do not download weights.
+
+## Per-app writing styles
+
+`RefinementStyleResolverTests` covers exact bundle-ID matching, unknown and missing
+apps, the disabled toggle, DIY, moving/removing rules, preference round trips,
+and one-time starter migration. Migration keeps the user's default and existing
+assignments; removed starter rules are not restored on later launches.
+`RecordingStartupTests.testRecordingStyleSnapshotReachesPromptAndHistory` checks
+that the recording's style selects its saved instructions and reaches history,
+with settings locked while recording.
+
+In the installed Dev app, open Dictation > Refinement. Check the style-filtered
+app list, inline empty state, search, multiple selection, disk picker, removal,
+and Cancel/Move confirmation. Switch to a different external app and return to
+DictaFlow to check the live example. Start a recording in an assigned app, switch
+apps before stopping, and confirm the history style still matches the original
+target. Repeat with an unassigned app and with “Switch style by app” off.
+
+Decided behavior, not a bug: retrying from History (“Refine again” and
+re-transcribe) intentionally uses the refinement configuration as it is at
+retry time — the current model and the currently selected Style, which is also
+the default style — instead of the effective style stored on the original
+attempt. It also does not re-resolve a per-app rule, because history does not
+store the app the text was dictated into (only the effective style is stored,
+on each refinement attempt). So if the default Style has changed since the
+recording was made, a retry can produce a differently styled result. The first
+refinement of a recording is unaffected: it always uses the style snapshot
+taken when recording started. This matches the general rule in the main README
+that retrying creates a new result using current settings.

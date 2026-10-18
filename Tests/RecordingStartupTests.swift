@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import GRDB
@@ -226,6 +227,53 @@ final class RecordingStartupTests: XCTestCase {
                 XCTAssertEqual(fixture.insertion.insertedTexts.last, text)
             }
         }
+    }
+
+    func testRecordingStyleSnapshotReachesPromptAndHistory() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("StylePipeline-\(UUID())")
+        let store = SQLiteHistoryStore(root: root)
+        let service = PipelineRefinementService(expectedTranscript: "Review the PR.")
+        let fixture = try RecordingStartupFixture(
+            whisper: PipelineWhisperService(text: "Review the PR."), refinement: service,
+            usePipelineModels: true, historyStore: store, allowsInsertion: true)
+        defer { fixture.cleanup(); try? FileManager.default.removeItem(at: root) }
+        fixture.volume.shouldWait = false
+        fixture.permissions.accessibilityGranted = true
+        let state = fixture.state
+        state.updateRefinementMode(.technicalEngineering)
+        state.updatePresetInstructions("Keep API identifiers.")
+        state.savePresetInstructions()
+        state.updateRefinementMode(.casualMessaging)
+        // Use the actual captured target without activating another application in a unit test.
+        if let id = state.lastKnownExternalTargetApplication?.bundleIdentifier {
+            state.assignWritingStyle(.technicalEngineering, to: [id])
+        } else {
+            state.updateRefinementMode(.technicalEngineering)
+        }
+        let recording = expectation(description: "Recording starts")
+        let observation = state.$recordingState.sink { if $0.isRecording { recording.fulfill() } }
+        state.toggleDictation()
+        await fulfillment(of: [recording], timeout: 2)
+        observation.cancel()
+        XCTAssertEqual(state.recordingRefinementMode, .technicalEngineering)
+        // Simulate the workspace notification from switching apps while recording.
+        if let other = NSWorkspace.shared.runningApplications.first(where: {
+            $0.activationPolicy == .regular && $0.bundleIdentifier != Bundle.main.bundleIdentifier
+                && $0.bundleIdentifier != state.lastKnownExternalTargetApplication?.bundleIdentifier
+        }) {
+            NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didActivateApplicationNotification,
+                object: nil, userInfo: [NSWorkspace.applicationUserInfoKey: other])
+        }
+        state.updateRefinementMode(.diy)
+        XCTAssertNotEqual(state.refinementConfiguration.mode, .diy, "Settings are locked during recording")
+        state.toggleDictation()
+        for _ in 0..<200 where !state.canProcessHistory { try await Task.sleep(for: .milliseconds(10)) }
+        let entries = try await store.entries(search: "", limit: 10, offset: 0)
+        let id = try XCTUnwrap(entries.first?.id)
+        let detail = try await store.detail(id)
+        let refinement = try XCTUnwrap(detail.refinements.first)
+        XCTAssertEqual(refinement.result?.mode, .technicalEngineering)
+        XCTAssertTrue(refinement.prompt.contains("Keep API identifiers."))
     }
 
     func testWritingDraftsOnlyAffectInferenceAfterSaving() throws {

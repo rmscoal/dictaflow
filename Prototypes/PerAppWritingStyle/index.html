@@ -1,0 +1,806 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DictaFlow &middot; Per-app writing styles prototype</title>
+<style>
+/* Ember tokens from Prototypes/UIRedesign (DESIGN_SIGNATURE.md color contract). */
+#perapp-prototype {
+  color-scheme:light;
+  --df-bg:#f3f0e9; --df-surface:#fffdf8; --df-well:#eae6dc;
+  --df-text:#2f322b; --df-muted:#66695f; --df-line:#d8d4c8; --df-accent:#785422;
+  --df-accent-soft:#e8ddca; --df-green:#426745; --df-red:#ad3b38;
+  --df-sidebar:rgba(233,228,216,.94); --df-glass:rgba(249,245,236,.97);
+  --df-action:#765126; --df-action-ink:#fffaf0;
+  --df-paper:#eae1cf; --df-paper-line:#cfc3ad; --df-paper-ink:#37392f; --df-paper-muted:#626354;
+  --df-shadow:0 18px 60px #25221818;
+  --df-error-bg:#f7e6e2; --df-error-line:#d5a49a; --df-error-ink:#8e3029;
+  font:13px/1.5 -apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
+  color:var(--df-text); background:#3a3a38; padding:28px 16px 40px;
+  -webkit-font-smoothing:antialiased;
+}
+#perapp-prototype[data-theme="dark"] {
+  color-scheme:dark;
+  --df-bg:#171816; --df-surface:#242521; --df-well:#2e3029;
+  --df-text:#f0ede5; --df-muted:#b6b4a8; --df-line:#414239; --df-accent:#e6be83;
+  --df-accent-soft:#393226; --df-green:#b3c7a7; --df-red:#f2a6a2;
+  --df-sidebar:rgba(38,39,34,.96); --df-glass:rgba(45,46,40,.97);
+  --df-action:#e6be83; --df-action-ink:#27251f;
+  --df-paper:#34352e; --df-paper-line:#535447; --df-paper-ink:#f4eddd; --df-paper-muted:#c3bfae;
+  --df-shadow:0 22px 65px #0006;
+  --df-error-bg:#392824; --df-error-line:#81514a; --df-error-ink:#f0b6aa;
+  background:#101010;
+}
+#perapp-prototype * { box-sizing:border-box; }
+#perapp-prototype button, #perapp-prototype input,
+#perapp-prototype select, #perapp-prototype textarea { font:inherit; }
+#perapp-prototype button { color:inherit; cursor:pointer; }
+#perapp-prototype button:disabled { cursor:default; opacity:.5; }
+#perapp-prototype button:focus-visible, #perapp-prototype input:focus-visible,
+#perapp-prototype select:focus-visible, #perapp-prototype summary:focus-visible {
+  outline:3px solid var(--df-accent); outline-offset:3px;
+}
+#perapp-prototype h1, #perapp-prototype h2, #perapp-prototype p { margin:0; }
+#perapp-prototype .df-window {
+  position:relative; max-width:1120px; margin:0 auto;
+  display:grid; grid-template-columns:208px minmax(0,1fr); grid-template-rows:68px minmax(0,1fr);
+  border:1px solid var(--df-line); border-radius:28px; overflow:hidden;
+  background:var(--df-bg); box-shadow:var(--df-shadow); isolation:isolate;
+  min-height:760px;
+}
+#perapp-prototype .df-sidebar {
+  grid-column:1; grid-row:1/-1; background:var(--df-sidebar);
+  border:1px solid var(--df-line); border-radius:24px; margin:12px 0 12px 12px;
+  padding:22px 12px 16px; display:flex; flex-direction:column;
+  backdrop-filter:blur(25px) saturate(1.15);
+}
+#perapp-prototype .df-lights { display:flex; gap:8px; height:25px; padding:0 10px; }
+#perapp-prototype .df-light { width:12px; height:12px; border-radius:50%; }
+#perapp-prototype .df-light:nth-child(1) { background:#ff5f57; }
+#perapp-prototype .df-light:nth-child(2) { background:#febc2e; }
+#perapp-prototype .df-light:nth-child(3) { background:#28c840; }
+#perapp-prototype .df-brand { display:flex; gap:9px; align-items:center; padding:14px 9px 28px; }
+#perapp-prototype .df-brand strong { font-size:17px; font-weight:600; letter-spacing:-.4px; display:block; }
+#perapp-prototype .df-brand small { display:block; font-size:11px; color:var(--df-muted); }
+#perapp-prototype .df-appmark {
+  width:35px; height:35px; border-radius:9px; background:#fff; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center; gap:2px;
+}
+#perapp-prototype .df-appmark span { width:2.5px; border-radius:2px; background:#000; display:block; }
+#perapp-prototype .df-nav-caption { padding:0 10px 7px; font-size:11px; font-weight:600; color:var(--df-muted); }
+#perapp-prototype .df-nav-group { margin-bottom:18px; }
+#perapp-prototype .df-nav-item {
+  display:flex; align-items:center; gap:10px; width:100%; border:0; background:transparent;
+  border-radius:14px; padding:12px 11px; margin:3px 0; text-align:left; font-size:13px;
+}
+#perapp-prototype .df-nav-item:hover { background:var(--df-well); }
+#perapp-prototype .df-nav-item[aria-current="page"] {
+  background:var(--df-accent-soft); color:var(--df-accent); font-weight:500;
+}
+#perapp-prototype .df-nav-sym { width:17px; text-align:center; color:var(--df-muted); font-size:14px; }
+#perapp-prototype .df-nav-item[aria-current="page"] .df-nav-sym { color:var(--df-accent); }
+#perapp-prototype .df-sidebar-bottom { margin-top:auto; padding:12px 10px 3px; }
+#perapp-prototype .df-private { font-size:11px; color:var(--df-muted); line-height:1.6; }
+#perapp-prototype .df-dot { width:6px; height:6px; border-radius:50%; background:var(--df-green); display:inline-block; margin-right:6px; }
+#perapp-prototype .df-titlebar {
+  grid-column:2; display:flex; align-items:center; padding:0 28px; gap:12px;
+}
+#perapp-prototype .df-titlebar small { font-size:11px; color:var(--df-muted); }
+#perapp-prototype .df-toolbar-actions { margin-left:auto; display:flex; align-items:center; gap:8px; }
+#perapp-prototype .df-control {
+  border:1px solid var(--df-line); border-radius:12px; background:var(--df-surface);
+  padding:6px 12px; font-size:12px; display:inline-flex; align-items:center; gap:7px; white-space:nowrap;
+}
+#perapp-prototype .df-control:hover { background:var(--df-well); }
+#perapp-prototype .df-primary { background:var(--df-action); border-color:var(--df-action); color:var(--df-action-ink); }
+#perapp-prototype .df-primary:hover { background:var(--df-action); filter:brightness(1.08); }
+#perapp-prototype .df-icon-button {
+  width:29px; height:29px; border:0; border-radius:7px; background:transparent;
+  display:inline-flex; align-items:center; justify-content:center; font-size:14px; color:var(--df-muted);
+}
+#perapp-prototype .df-icon-button:hover { background:var(--df-well); color:var(--df-text); }
+#perapp-prototype .df-keycaps { display:inline-flex; gap:3px; align-items:center; }
+#perapp-prototype kbd {
+  font:12px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;
+  background:var(--df-surface); border:1px solid var(--df-line); border-bottom-width:2px;
+  border-radius:4px; padding:1px 5px;
+}
+#perapp-prototype .df-main { grid-column:2; padding:10px 28px 28px; min-width:0; }
+#perapp-prototype .df-intro h2 { font-size:28px; font-weight:600; letter-spacing:-.8px; }
+#perapp-prototype .df-stages { display:flex; gap:12px; margin:22px 0; }
+#perapp-prototype .df-stage {
+  flex:1; min-width:0; text-align:left; border:1px solid var(--df-line); background:var(--df-surface);
+  border-radius:21px; padding:15px 18px; display:block;
+}
+#perapp-prototype .df-stage[aria-selected="true"] { background:var(--df-accent-soft); border-color:var(--df-accent); }
+#perapp-prototype .df-stage-top { display:flex; align-items:center; gap:4px; font-size:11px; color:var(--df-muted); margin-bottom:11px; }
+#perapp-prototype .df-stage[aria-selected="true"] .df-stage-top { color:var(--df-accent); }
+#perapp-prototype .df-stage-top .df-chev { margin-left:auto; font-size:10px; }
+#perapp-prototype .df-stage-main { display:flex; align-items:center; gap:11px; }
+#perapp-prototype .df-stage-val { font-size:14px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#perapp-prototype .df-stage-detail { font-size:11px; color:var(--df-muted); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#perapp-prototype .df-provider-mark {
+  width:32px; height:32px; border-radius:9px; background:#fff; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  font-size:11px; font-weight:700; color:#333; border:1px solid #e8eaf1;
+}
+#perapp-prototype .df-cols { display:grid; grid-template-columns:1.25fr 1fr; gap:24px; align-items:start; }
+@media (max-width:980px) { #perapp-prototype .df-cols { grid-template-columns:1fr; } }
+#perapp-prototype .df-section-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin:0 1px 9px; }
+#perapp-prototype .df-section-head h3 { font-size:13px; font-weight:600; }
+#perapp-prototype .df-section-head small { font-size:11px; color:var(--df-muted); }
+#perapp-prototype .df-panel { background:var(--df-surface); border:1px solid var(--df-line); border-radius:20px; overflow:hidden; margin-bottom:18px; }
+#perapp-prototype .df-row { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:18px 20px; }
+#perapp-prototype .df-row + .df-row { border-top:1px solid var(--df-line); }
+#perapp-prototype .df-row-label { min-width:0; }
+#perapp-prototype .df-row-label strong { display:block; font-size:13px; font-weight:500; }
+#perapp-prototype .df-row-label small { display:block; margin-top:3px; line-height:1.45; color:var(--df-muted); font-size:12px; }
+#perapp-prototype .df-switch { position:relative; width:34px; height:20px; flex-shrink:0; }
+#perapp-prototype .df-switch input {
+  appearance:none; -webkit-appearance:none; margin:0; width:34px; height:20px; border-radius:12px;
+  border:1px solid var(--df-line); background:var(--df-well); cursor:pointer;
+}
+#perapp-prototype .df-switch input:checked { background:var(--df-action); border-color:var(--df-action); }
+#perapp-prototype .df-switch::after {
+  content:""; position:absolute; pointer-events:none; top:3px; left:3px; width:14px; height:14px;
+  background:var(--df-text); border-radius:50%; transition:transform .16s;
+}
+#perapp-prototype .df-switch:has(input:checked)::after { background:var(--df-action-ink); transform:translateX(14px); }
+#perapp-prototype .df-select {
+  border:1px solid var(--df-line); border-radius:6px; background:var(--df-well); color:var(--df-text);
+  padding:5px 26px 5px 9px; max-width:225px; font-size:12px; flex-shrink:0;
+}
+#perapp-prototype .df-footnote { margin:10px 2px 0; color:var(--df-muted); font-size:11px; line-height:1.55; }
+#perapp-prototype .df-app-group { padding:14px 20px 4px; font-size:11px; font-weight:600; color:var(--df-muted); border-top:1px solid var(--df-line); }
+#perapp-prototype .df-app-row { display:flex; align-items:center; gap:12px; padding:9px 20px; }
+#perapp-prototype .df-app-row + .df-app-row { border-top:1px solid var(--df-line); }
+#perapp-prototype .df-app-info { flex:1; min-width:0; }
+#perapp-prototype .df-app-info strong { display:block; font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#perapp-prototype .df-app-info small { display:block; font-size:11px; color:var(--df-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#perapp-prototype .df-tile {
+  width:30px; height:30px; border-radius:8px; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  font-size:11px; font-weight:700; letter-spacing:-.3px; color:#fff;
+}
+#perapp-prototype .df-tile.sm { width:22px; height:22px; border-radius:6px; font-size:9px; }
+#perapp-prototype .df-remove {
+  width:26px; height:26px; border:0; border-radius:7px; background:transparent; flex-shrink:0;
+  display:inline-flex; align-items:center; justify-content:center; font-size:13px; color:var(--df-muted);
+}
+#perapp-prototype .df-remove:hover { background:var(--df-error-bg); color:var(--df-error-ink); }
+#perapp-prototype .df-panel-footer {
+  display:flex; align-items:center; gap:10px; padding:13px 20px;
+  border-top:1px solid var(--df-line);
+}
+#perapp-prototype .df-empty-apps { padding:22px 20px; text-align:center; }
+#perapp-prototype .df-empty-line { font-size:12px; color:var(--df-muted); }
+#perapp-prototype .df-empty-line .df-plus { color:var(--df-accent); font-size:14px; }
+#perapp-prototype .df-inline-add {
+  border:0; background:transparent; padding:2px 4px; margin:-2px -4px; border-radius:6px;
+  color:var(--df-accent); font-size:12px; font-weight:500;
+  text-decoration:underline; text-underline-offset:2px;
+}
+#perapp-prototype .df-inline-add:hover { background:var(--df-accent-soft); }
+#perapp-prototype details.df-disclosure { border-top:1px solid var(--df-line); }
+#perapp-prototype details.df-disclosure summary {
+  cursor:pointer; list-style:none; display:flex; align-items:center; gap:8px;
+  font-size:12px; font-weight:500; padding:17px 20px;
+}
+#perapp-prototype details.df-disclosure summary::-webkit-details-marker { display:none; }
+#perapp-prototype details.df-disclosure .df-chev { font-size:10px; color:var(--df-muted); display:inline-block; transition:transform .15s; }
+#perapp-prototype details.df-disclosure[open] > summary .df-chev { transform:rotate(90deg); }
+#perapp-prototype .df-disclosure-body { padding:0 20px 18px; }
+#perapp-prototype .df-textarea {
+  width:100%; border:1px solid var(--df-line); border-radius:7px; color:var(--df-muted);
+  background:var(--df-bg); padding:9px 11px; min-height:60px; font-size:12px; resize:none;
+}
+#perapp-prototype .df-paper {
+  background:var(--df-paper); border:1px solid var(--df-paper-line); border-radius:24px;
+  padding:24px; min-height:410px; color:var(--df-paper-ink);
+}
+#perapp-prototype .df-paper-kicker { font-size:11px; letter-spacing:1.1px; color:var(--df-paper-muted); margin-bottom:30px; }
+#perapp-prototype .df-paper-cap { font-size:11px; color:var(--df-paper-muted); }
+#perapp-prototype .df-paper-dictated { font-size:13px; line-height:1.7; color:var(--df-paper-muted); margin:10px 0 25px; }
+#perapp-prototype .df-paper hr { border:0; border-top:1px solid var(--df-paper-line); margin:0; }
+#perapp-prototype .df-paper-result { font-size:21px; letter-spacing:-.35px; line-height:1.6; margin:10px 0 30px; white-space:pre-wrap; }
+#perapp-prototype .df-paper-foot {
+  display:flex; align-items:center; gap:7px; font-size:11px; color:var(--df-paper-muted);
+  border-top:1px solid var(--df-paper-line); padding-top:16px;
+}
+#perapp-prototype .df-overlay {
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:24px;
+  background:#080b0866; backdrop-filter:blur(3px); z-index:20;
+}
+#perapp-prototype .df-overlay[hidden] { display:none; }
+#perapp-prototype .df-sheet {
+  width:560px; max-width:100%; max-height:640px; overflow:hidden; display:flex; flex-direction:column;
+  background:var(--df-surface); border:1px solid var(--df-line); border-radius:25px;
+  box-shadow:0 24px 70px #0005;
+}
+#perapp-prototype .df-sheet-head {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:19px 21px 15px; border-bottom:1px solid var(--df-line); flex-shrink:0;
+}
+#perapp-prototype .df-sheet-small { width:425px; }
+#perapp-prototype .df-move-row { display:flex; align-items:center; gap:12px; padding:10px 4px; }
+#perapp-prototype .df-move-row + .df-move-row { border-top:1px solid var(--df-line); }
+#perapp-prototype .df-move-styles { margin-left:auto; font-size:12px; color:var(--df-muted); white-space:nowrap; }
+#perapp-prototype .df-move-styles strong { color:var(--df-text); font-weight:600; }
+#perapp-prototype .df-sheet-head h2 { font-size:17px; font-weight:600; }
+#perapp-prototype .df-sheet-head small { display:block; font-size:12px; color:var(--df-muted); margin-top:2px; font-weight:400; }
+#perapp-prototype .df-sheet-body { padding:16px 21px 19px; overflow-y:auto; min-height:0; }
+#perapp-prototype .df-search { position:relative; margin-bottom:6px; }
+#perapp-prototype .df-search span { position:absolute; top:9px; left:10px; font-size:13px; color:var(--df-muted); }
+#perapp-prototype .df-search input {
+  width:100%; border:1px solid var(--df-line); border-radius:7px; color:var(--df-text);
+  background:var(--df-bg); padding:9px 11px 9px 30px; font-size:12px;
+}
+#perapp-prototype .df-pick-group { font-size:11px; color:var(--df-muted); font-weight:600; margin:14px 2px 4px; }
+#perapp-prototype .df-pick-row {
+  display:flex; align-items:center; gap:12px; width:100%; border:0; background:transparent;
+  border-radius:10px; padding:8px 10px; text-align:left;
+}
+#perapp-prototype .df-pick-row:hover { background:var(--df-well); }
+#perapp-prototype .df-pick-row[aria-disabled="true"] { opacity:.45; cursor:default; }
+#perapp-prototype .df-pick-row[aria-disabled="true"]:hover { background:transparent; }
+#perapp-prototype .df-checkbox {
+  width:16px; height:16px; border-radius:5px; border:1px solid var(--df-line);
+  background:var(--df-bg); flex-shrink:0; display:inline-flex; align-items:center; justify-content:center;
+  font-size:11px; color:var(--df-action-ink);
+}
+#perapp-prototype .df-pick-row[aria-checked="true"] .df-checkbox { background:var(--df-action); border-color:var(--df-action); }
+#perapp-prototype .df-pick-note { margin-left:auto; font-size:11px; color:var(--df-muted); flex-shrink:0; }
+#perapp-prototype .df-sheet-footer {
+  flex-shrink:0; padding:13px 21px; background:var(--df-bg); border-top:1px solid var(--df-line);
+  display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+}
+#perapp-prototype .df-sheet-footer .df-assign-note { font-size:12px; color:var(--df-muted); max-width:280px; line-height:1.5; }
+#perapp-prototype .df-sheet-footer .df-spacer { flex:1; }
+#perapp-prototype .df-toast {
+  position:absolute; bottom:30px; left:50%; transform:translateX(-50%);
+  padding:10px 15px; border-radius:10px; border:1px solid var(--df-line);
+  box-shadow:0 8px 25px #0003; background:var(--df-surface); z-index:30; font-size:12px;
+  max-width:90%; text-align:center;
+}
+#perapp-prototype .df-toast[hidden] { display:none; }
+#perapp-prototype .df-sim {
+  max-width:1120px; margin:12px auto 0; display:flex; flex-wrap:wrap; gap:10px; align-items:center;
+  font-size:11px; color:#cfcfcf; padding:2px;
+}
+#perapp-prototype .df-sim select {
+  font-size:11px; padding:4px 24px 4px 7px; border-radius:6px;
+  border:1px solid #666; background:#222; color:#eee;
+}
+#perapp-prototype .df-sim .df-seg { display:inline-flex; background:#222; border:1px solid #666; border-radius:6px; padding:2px; gap:2px; }
+#perapp-prototype .df-sim .df-seg button { border:0; background:transparent; color:#cfcfcf; font-size:11px; padding:3px 10px; border-radius:4px; }
+#perapp-prototype .df-sim .df-seg button[aria-pressed="true"] { background:#444; color:#fff; }
+#perapp-prototype .df-sim button.df-simlink { background:none; border:0; color:#9fc1ff; font-size:11px; padding:0; }
+#perapp-prototype .df-sim .df-note { margin-left:auto; opacity:.7; }
+</style>
+</head>
+<body>
+<div id="perapp-prototype" data-theme="light">
+  <div class="df-window" role="dialog" aria-label="DictaFlow prototype window">
+    <aside class="df-sidebar">
+      <div class="df-lights" aria-hidden="true"><span class="df-light"></span><span class="df-light"></span><span class="df-light"></span></div>
+      <div class="df-brand">
+        <div class="df-appmark" aria-hidden="true"><span style="height:8px"></span><span style="height:14px"></span><span style="height:20px"></span><span style="height:14px"></span><span style="height:8px"></span></div>
+        <div><strong>DictaFlow</strong><small>DictaFlow Dev</small></div>
+      </div>
+      <nav>
+        <div class="df-nav-group">
+          <div class="df-nav-caption">Workspace</div>
+          <button class="df-nav-item" aria-current="page"><span class="df-nav-sym">&#123;&#123;</span><span>Dictation</span></button>
+          <button class="df-nav-item"><span class="df-nav-sym">&#9719;</span><span>History</span></button>
+          <button class="df-nav-item"><span class="df-nav-sym">&#9881;</span><span>Settings</span></button>
+        </div>
+      </nav>
+      <div class="df-sidebar-bottom">
+        <button class="df-nav-item"><span class="df-nav-sym">&#8635;</span><span>Updates</span></button>
+        <p class="df-private"><span class="df-dot"></span>Private &middot; On this Mac</p>
+      </div>
+    </aside>
+    <div class="df-titlebar">
+      <small>Local transcription &middot; Whisper on this Mac</small>
+      <div class="df-toolbar-actions">
+        <span class="df-keycaps"><kbd>&#8980;</kbd><kbd>&#8679;</kbd><kbd>D</kbd></span>
+        <button class="df-control" id="record-btn"><span aria-hidden="true" style="color:var(--df-error-ink)">&#9679;</span> Start Recording</button>
+      </div>
+    </div>
+    <main class="df-main">
+      <div class="df-intro"><h2>Dictation</h2></div>
+      <div class="df-stages" role="tablist" aria-label="Dictation stages">
+        <button class="df-stage" role="tab" aria-selected="false" data-tab="transcription">
+          <span class="df-stage-top">01 / Transcription <span class="df-chev">&#8250;</span></span>
+          <span class="df-stage-main"><span class="df-provider-mark">AI</span>
+            <span><span class="df-stage-val">Whisper Large v3 Turbo</span><span class="df-stage-detail" style="display:block">English</span></span>
+          </span>
+        </button>
+        <button class="df-stage" role="tab" aria-selected="true" data-tab="refinement">
+          <span class="df-stage-top">02 / Refinement <span class="df-chev">&#8249;</span></span>
+          <span class="df-stage-main"><span class="df-provider-mark">Q</span>
+            <span><span class="df-stage-val" id="stage-refine-value">Qwen3 4B</span><span class="df-stage-detail" id="stage-refine-detail" style="display:block">Normal Cleanup &middot; Per-app on</span></span>
+          </span>
+        </button>
+        <button class="df-stage" role="tab" aria-selected="false" data-tab="tone">
+          <span class="df-stage-top">03 / Tone <span class="df-chev">&#8250;</span></span>
+          <span class="df-stage-main"><span class="df-provider-mark">Aa</span>
+            <span><span class="df-stage-val">Original</span><span class="df-stage-detail" style="display:block">&nbsp;</span></span>
+          </span>
+        </button>
+      </div>
+
+      <div class="df-cols">
+        <div id="config-col">
+          <div class="df-panel">
+            <div class="df-row">
+              <div class="df-row-label"><strong>Refine before insertion</strong></div>
+              <label class="df-switch"><input type="checkbox" id="refine-toggle" checked aria-label="Refine before insertion"></label>
+            </div>
+          </div>
+
+          <div class="df-section-head"><h3>Refinement model</h3></div>
+          <div class="df-panel">
+            <div class="df-row">
+              <div class="df-row-label"><strong>Qwen3 4B</strong><small>Ready &middot; 2.5 GB &middot; Microsoft</small></div>
+              <button class="df-control">Change&hellip;</button>
+            </div>
+          </div>
+
+          <div class="df-section-head"><h3>Writing style</h3></div>
+          <div class="df-panel" id="perapp-panel">
+            <div class="df-row">
+              <div class="df-row-label"><strong>Style</strong><small>Default for apps without a rule.</small></div>
+              <select class="df-select" id="default-style" aria-label="Writing style"></select>
+            </div>
+            <div class="df-row">
+              <div class="df-row-label"><strong>Switch style by app</strong><small>Match the app you dictate into when recording starts.</small></div>
+              <label class="df-switch"><input type="checkbox" id="perapp-toggle" checked aria-label="Switch style by app"></label>
+            </div>
+            <div class="df-app-group" id="app-group-caption">Apps using Normal Cleanup</div>
+            <div class="df-applist" id="app-list"></div>
+            <div class="df-empty-apps" id="app-empty" hidden></div>
+            <div class="df-panel-footer">
+              <button class="df-control" id="add-apps-btn">Add apps&hellip;</button>
+            </div>
+            <details class="df-disclosure">
+              <summary><span class="df-chev">&#8250;</span> Additional instructions <span style="margin-left:auto;font-weight:400;color:var(--df-muted)">Optional</span></summary>
+              <div class="df-disclosure-body">
+                <textarea class="df-textarea" readonly>Extra guidance is saved per writing style and applies on top of any app rule.</textarea>
+              </div>
+            </details>
+          </div>
+          <p class="df-footnote">The list shows apps using the selected style. Switch the style to see its apps. Unassigned apps use the selected style as the default. Rules apply to the next recording.</p>
+        </div>
+
+        <div>
+          <div class="df-paper">
+            <div class="df-paper-kicker">EXAMPLE</div>
+            <div class="df-paper-cap">As dictated</div>
+            <p class="df-paper-dictated">Hey um can you review the auth PR by Wednesday? I think it might fix the login issue but yeah we still need to test it.</p>
+            <hr>
+            <div class="df-paper-cap" id="paper-caption" style="margin-top:25px">Ready to share &middot; Slack</div>
+            <p class="df-paper-result" id="paper-result"></p>
+            <div class="df-paper-foot"><span aria-hidden="true">&#9776;</span><span id="paper-foot">Casual Text Messaging &middot; per-app rule for Slack</span></div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <div class="df-overlay" id="picker-overlay" hidden>
+      <div class="df-sheet" role="dialog" aria-label="Add apps">
+        <div class="df-sheet-head">
+          <div><h2>Add apps</h2><small>Apps join the style selected in the window.</small></div>
+          <button class="df-icon-button" id="picker-close" aria-label="Close">&#10005;</button>
+        </div>
+        <div class="df-sheet-body">
+          <div class="df-search"><span aria-hidden="true">&#8981;</span><input id="picker-search" type="search" placeholder="Search applications" aria-label="Search applications"></div>
+          <div id="picker-list"></div>
+        </div>
+        <div class="df-sheet-footer">
+          <small class="df-assign-note" id="picker-assign-note"></small>
+          <span class="df-spacer"></span>
+          <button class="df-control" id="picker-cancel">Cancel</button>
+          <button class="df-control df-primary" id="picker-add" disabled>Add</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="df-overlay" id="move-overlay" hidden>
+      <div class="df-sheet df-sheet-small" role="alertdialog" aria-label="Confirm moving apps">
+        <div class="df-sheet-head">
+          <div><h2 id="move-title">Move apps?</h2><small>Each app can only use one writing style.</small></div>
+        </div>
+        <div class="df-sheet-body">
+          <div id="move-list"></div>
+        </div>
+        <div class="df-sheet-footer">
+          <span class="df-spacer"></span>
+          <button class="df-control" id="move-cancel">Cancel</button>
+          <button class="df-control df-primary" id="move-confirm">Move</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="df-toast" id="toast" hidden></div>
+  </div>
+
+  <div class="df-sim" aria-label="Prototype controls">
+    <span>PROTOTYPE &mdash; frontmost app:</span>
+    <select id="sim-app" aria-label="Simulated frontmost app"></select>
+    <span class="df-seg" role="group" aria-label="Appearance">
+      <button id="theme-light" aria-pressed="true">Light</button>
+      <button id="theme-dark" aria-pressed="false">Dark</button>
+    </span>
+    <button class="df-simlink" id="sim-reset">Reset demo</button>
+    <span class="df-note">Controls below the window are prototype-only and do not ship.</span>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+  var STYLES = {
+    smartCleanup: {
+      title: "Normal Cleanup",
+      example: "Hey, can you review the auth PR by Wednesday? It might fix the login issue, but we still need to test it."
+    },
+    professionalFormal: {
+      title: "Professional Formal",
+      example: "Could you please review the authentication PR by Wednesday?\n\nIt may resolve the login issue. Further testing is still required."
+    },
+    casualMessaging: {
+      title: "Casual Text Messaging",
+      example: "hey, can u review the auth PR by Wed? might fix the login issue, but we still need to test it."
+    },
+    technicalEngineering: {
+      title: "Technical and Engineering",
+      example: "Please review the authentication PR by Wednesday.\n\nIt may fix the login issue. Testing is still required."
+    },
+    diy: { title: "DIY (Do It Yourself)", example: null }
+  };
+  var ORDER = ["smartCleanup", "professionalFormal", "casualMessaging", "technicalEngineering", "diy"];
+  var AS_DICTATED = "Hey um can you review the auth PR by Wednesday? I think it might fix the login issue but yeah we still need to test it.";
+
+  var APPS = [
+    { id: "com.apple.Terminal", name: "Terminal", tile: ">_", bg: "#1c1c1e", group: "open" },
+    { id: "com.tinyspeck.slackmacgap", name: "Slack", tile: "S", bg: "#4A154B", group: "open" },
+    { id: "com.apple.Notes", name: "Notes", tile: "N", bg: "#c79a12", group: "open" },
+    { id: "com.apple.Safari", name: "Safari", tile: "S", bg: "#0A84FF", group: "open" },
+    { id: "com.apple.Mail", name: "Mail", tile: "M", bg: "#5e5ce6", group: "open" },
+    { id: "com.openai.chat", name: "ChatGPT", tile: "CG", bg: "#202123", group: "suggested" },
+    { id: "com.anthropic.claude", name: "Claude", tile: "C", bg: "#D97757", group: "suggested" },
+    { id: "net.whatsapp.WhatsApp", name: "WhatsApp", tile: "W", bg: "#1da851", group: "suggested" },
+    { id: "com.googlecode.iterm2", name: "iTerm", tile: "iT", bg: "#000000", group: "suggested" },
+    { id: "com.mitchellh.ghostty", name: "Ghostty", tile: "Gh", bg: "#3d2b5c", group: "suggested" },
+    { id: "com.hnc.Discord", name: "Discord", tile: "D", bg: "#5865F2", group: "suggested" },
+    { id: "com.apple.MobileSMS", name: "Messages", tile: "M", bg: "#34C759", group: "suggested" },
+    { id: "com.apple.Xcode", name: "Xcode", tile: "X", bg: "#147EFB", group: "all" },
+    { id: "notion.id", name: "Notion", tile: "N", bg: "#111111", group: "all" },
+    { id: "com.bear.Bear", name: "Bear", tile: "B", bg: "#c23b2e", group: "all" },
+    { id: "com.microsoft.VSCode", name: "Visual Studio Code", tile: "VS", bg: "#007ACC", group: "all" }
+  ];
+  var GROUP_TITLES = { open: "Currently open", suggested: "Suggested", all: "All applications" };
+
+  var DEFAULT_RULES = {
+    "com.apple.Terminal": "technicalEngineering",
+    "com.openai.chat": "technicalEngineering",
+    "com.anthropic.claude": "technicalEngineering",
+    "com.tinyspeck.slackmacgap": "casualMessaging",
+    "net.whatsapp.WhatsApp": "casualMessaging"
+  };
+
+  var state = {
+    enabled: true,
+    refineOn: true,
+    defaultStyle: "smartCleanup",
+    rules: Object.assign({}, DEFAULT_RULES),
+    frontmost: "com.tinyspeck.slackmacgap"
+  };
+  var pickerChecked = {};
+
+  function $(id) { return document.getElementById(id); }
+  function appById(id) {
+    for (var i = 0; i < APPS.length; i++) if (APPS[i].id === id) return APPS[i];
+    return null;
+  }
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function toast(msg) {
+    var t = $("toast");
+    t.textContent = msg;
+    t.hidden = false;
+    clearTimeout(t._h);
+    t._h = setTimeout(function () { t.hidden = true; }, 2400);
+  }
+
+  function fillStyleSelect(sel, current) {
+    sel.innerHTML = "";
+    ORDER.forEach(function (key) {
+      var o = document.createElement("option");
+      o.value = key;
+      o.textContent = STYLES[key].title;
+      if (key === current) o.selected = true;
+      sel.appendChild(o);
+    });
+  }
+
+  function effectiveRule() {
+    if (!state.enabled) return { style: state.defaultStyle, via: "default", app: appById(state.frontmost) };
+    var mapped = state.rules[state.frontmost];
+    if (mapped) return { style: mapped, via: "rule", app: appById(state.frontmost) };
+    return { style: state.defaultStyle, via: "default", app: appById(state.frontmost) };
+  }
+
+  function renderRules() {
+    var list = $("app-list");
+    list.innerHTML = "";
+    var title = STYLES[state.defaultStyle].title;
+    var ids = Object.keys(state.rules).filter(function (id) {
+      return state.rules[id] === state.defaultStyle;
+    }).sort(function (a, b) {
+      var na = appById(a), nb = appById(b);
+      return (na ? na.name : a).localeCompare(nb ? nb.name : b);
+    });
+    $("app-group-caption").textContent = "Apps using " + title;
+    $("app-group-caption").style.display = state.enabled ? "" : "none";
+    var empty = $("app-empty");
+    empty.innerHTML = "";
+    var line = document.createElement("div");
+    line.className = "df-empty-line";
+    var lead = document.createElement("span");
+    lead.textContent = "No apps yet. ";
+    line.appendChild(lead);
+    var plus = document.createElement("span");
+    plus.className = "df-plus";
+    plus.setAttribute("aria-hidden", "true");
+    plus.textContent = "\u2295 ";
+    line.appendChild(plus);
+    var link = document.createElement("button");
+    link.type = "button";
+    link.className = "df-inline-add";
+    link.textContent = "Add apps";
+    link.setAttribute("aria-label", "Add apps to " + title);
+    link.addEventListener("click", openPicker);
+    line.appendChild(link);
+    var tail = document.createElement("span");
+    tail.textContent = " using this style.";
+    line.appendChild(tail);
+    empty.appendChild(line);
+    empty.hidden = ids.length > 0 || !state.enabled;
+    list.style.display = state.enabled ? "" : "none";
+    document.querySelector("#perapp-panel .df-panel-footer").style.display = (state.enabled && ids.length > 0) ? "" : "none";
+    ids.forEach(function (id) {
+      var app = appById(id) || { name: id, tile: "?", bg: "#666" };
+      var row = document.createElement("div");
+      row.className = "df-app-row";
+      row.title = id;
+      row.innerHTML =
+        '<span class="df-tile" style="background:' + app.bg + '">' + esc(app.tile) + "</span>" +
+        '<span class="df-app-info"><strong>' + esc(app.name) + "</strong></span>" +
+        '<button class="df-remove" aria-label="Remove ' + esc(app.name) + '">&#10005;</button>';
+      row.querySelector(".df-remove").addEventListener("click", function () {
+        delete state.rules[id];
+        renderRules();
+        renderEffective();
+        renderSimApps();
+        toast("Removed " + app.name + ". It now uses the default style.");
+      });
+      list.appendChild(row);
+    });
+  }
+
+  function renderEffective() {
+    var eff = effectiveRule();
+    var app = eff.app;
+    var label = app ? app.name : "Unknown app";
+    $("stage-refine-detail").textContent = !state.refineOn ? "Refinement off" :
+      STYLES[state.defaultStyle].title + (state.enabled ? " \u00B7 Per-app on" : "");
+    var ex = STYLES[eff.style].example;
+    $("paper-result").textContent = (!state.refineOn || ex === null) ? AS_DICTATED : ex;
+    $("paper-caption").textContent = "Ready to share \u00B7 " + label;
+    $("paper-foot").textContent = !state.refineOn ? "Tone only \u00B7 refinement off" :
+      STYLES[eff.style].title + (eff.via === "rule" ? " \u00B7 per-app rule for " + label : " \u00B7 default style");
+  }
+
+  function renderSimApps() {
+    var sel = $("sim-app");
+    sel.innerHTML = "";
+    APPS.forEach(function (a) {
+      var o = document.createElement("option");
+      o.value = a.id;
+      o.textContent = a.name + (state.rules[a.id] ? "  \u2014  " + STYLES[state.rules[a.id]].title : "");
+      if (a.id === state.frontmost) o.selected = true;
+      sel.appendChild(o);
+    });
+  }
+
+  function openPicker() {
+    pickerChecked = {};
+    $("picker-search").value = "";
+    $("picker-assign-note").textContent = "Adds to " + STYLES[state.defaultStyle].title +
+      ". Moving an app from another style asks for confirmation.";
+    renderPicker("");
+    $("picker-overlay").hidden = false;
+    $("picker-search").focus();
+  }
+  function closePicker() { $("picker-overlay").hidden = true; }
+
+  function renderPicker(query) {
+    var q = query.trim().toLowerCase();
+    var host = $("picker-list");
+    host.innerHTML = "";
+    ["open", "suggested", "all"].forEach(function (g) {
+      var items = APPS.filter(function (a) {
+        return a.group === g && (q === "" || a.name.toLowerCase().indexOf(q) !== -1 || a.id.toLowerCase().indexOf(q) !== -1);
+      });
+      if (!items.length) return;
+      var cap = document.createElement("div");
+      cap.className = "df-pick-group";
+      cap.textContent = GROUP_TITLES[g];
+      host.appendChild(cap);
+      items.forEach(function (a) {
+        var assigned = state.rules[a.id];
+        var isCurrent = assigned === state.defaultStyle;
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "df-pick-row";
+        b.setAttribute("role", "checkbox");
+        b.setAttribute("aria-checked", pickerChecked[a.id] ? "true" : "false");
+        if (isCurrent) b.setAttribute("aria-disabled", "true");
+        b.innerHTML =
+          '<span class="df-checkbox">' + (pickerChecked[a.id] ? "&#10003;" : "") + "</span>" +
+          '<span class="df-tile sm" style="background:' + a.bg + '">' + esc(a.tile) + "</span>" +
+          '<span class="df-app-info"><strong>' + esc(a.name) + "</strong><small>" + esc(a.id) + "</small></span>" +
+          (assigned ? '<span class="df-pick-note">' + (isCurrent ? "Uses this style" : esc(STYLES[assigned].title)) + "</span>" : "");
+        if (!isCurrent) {
+          b.addEventListener("click", function () {
+            if (pickerChecked[a.id]) delete pickerChecked[a.id];
+            else pickerChecked[a.id] = true;
+            renderPicker($("picker-search").value);
+          });
+        }
+        host.appendChild(b);
+      });
+    });
+    if (!host.children.length) {
+      var none = document.createElement("div");
+      none.className = "df-empty-apps";
+      none.style.borderTop = "0";
+      none.textContent = "No applications match this search.";
+      host.appendChild(none);
+    }
+    var n = Object.keys(pickerChecked).length;
+    var add = $("picker-add");
+    add.disabled = n === 0;
+    add.textContent = n === 0 ? "Add" : "Add " + n + (n === 1 ? " app" : " apps");
+  }
+
+  // Wire up.
+  fillStyleSelect($("default-style"), state.defaultStyle);
+  $("default-style").addEventListener("change", function (e) {
+    state.defaultStyle = e.target.value;
+    renderRules();
+    renderEffective();
+    renderSimApps();
+  });
+  $("perapp-toggle").addEventListener("change", function (e) {
+    state.enabled = e.target.checked;
+    renderRules();
+    renderEffective();
+    renderSimApps();
+  });
+  $("refine-toggle").addEventListener("change", function (e) {
+    state.refineOn = e.target.checked;
+    renderEffective();
+  });
+  $("add-apps-btn").addEventListener("click", openPicker);
+  $("picker-close").addEventListener("click", closePicker);
+  $("picker-cancel").addEventListener("click", closePicker);
+  $("picker-overlay").addEventListener("click", function (e) { if (e.target === this) closePicker(); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    if (!$("move-overlay").hidden) { $("move-overlay").hidden = true; return; }
+    closePicker();
+  });
+  $("picker-search").addEventListener("input", function (e) { renderPicker(e.target.value); });
+  function applyPickerSelection() {
+    var style = state.defaultStyle;
+    var added = 0, moved = 0;
+    Object.keys(pickerChecked).forEach(function (id) {
+      if (state.rules[id] && state.rules[id] !== style) moved++;
+      else added++;
+      state.rules[id] = style;
+    });
+    pickerChecked = {};
+    $("move-overlay").hidden = true;
+    closePicker();
+    renderRules();
+    renderEffective();
+    renderSimApps();
+    var parts = [];
+    if (added > 0) parts.push(added + (added === 1 ? " app added to " : " apps added to ") + STYLES[style].title);
+    if (moved > 0) parts.push(moved + (moved === 1 ? " app moved to " : " apps moved to ") + STYLES[style].title);
+    toast(parts.join(". ") + ".");
+  }
+
+  function openMoveConfirm(movers, style) {
+    var title = STYLES[style].title;
+    $("move-title").textContent = "Move " + movers.length + (movers.length === 1 ? " app" : " apps") + " to " + title + "?";
+    var host = $("move-list");
+    host.innerHTML = "";
+    movers.forEach(function (id) {
+      var app = appById(id) || { name: id, tile: "?", bg: "#666" };
+      var row = document.createElement("div");
+      row.className = "df-move-row";
+      row.innerHTML =
+        '<span class="df-tile sm" style="background:' + app.bg + '">' + esc(app.tile) + "</span>" +
+        '<span class="df-app-info"><strong>' + esc(app.name) + "</strong></span>" +
+        '<span class="df-move-styles">' + esc(STYLES[state.rules[id]].title) + " &rarr; <strong>" + esc(title) + "</strong></span>";
+      host.appendChild(row);
+    });
+    $("move-confirm").textContent = "Move " + movers.length + (movers.length === 1 ? " app" : " apps");
+    $("move-overlay").hidden = false;
+  }
+
+  $("picker-add").addEventListener("click", function () {
+    var style = state.defaultStyle;
+    var movers = Object.keys(pickerChecked).filter(function (id) {
+      return state.rules[id] && state.rules[id] !== style;
+    });
+    if (movers.length > 0) openMoveConfirm(movers, style);
+    else applyPickerSelection();
+  });
+  $("move-cancel").addEventListener("click", function () { $("move-overlay").hidden = true; });
+  $("move-confirm").addEventListener("click", applyPickerSelection);
+  $("move-overlay").addEventListener("click", function (e) { if (e.target === this) this.hidden = true; });
+  $("sim-app").addEventListener("change", function (e) {
+    state.frontmost = e.target.value;
+    renderEffective();
+  });
+  $("record-btn").addEventListener("click", function () {
+    var eff = effectiveRule();
+    var app = eff.app;
+    toast(state.refineOn
+      ? "Recording into " + (app ? app.name : "app") + " with " + STYLES[eff.style].title + "."
+      : "Recording with refinement off. Tone still applies.");
+  });
+  document.querySelectorAll(".df-stage").forEach(function (s) {
+    s.addEventListener("click", function () {
+      document.querySelectorAll(".df-stage").forEach(function (o) { o.setAttribute("aria-selected", "false"); });
+      s.setAttribute("aria-selected", "true");
+      if (s.getAttribute("data-tab") !== "refinement") toast("This prototype focuses on the Refinement stage.");
+    });
+  });
+  var root = $("perapp-prototype");
+  function setTheme(dark) {
+    root.setAttribute("data-theme", dark ? "dark" : "light");
+    $("theme-dark").setAttribute("aria-pressed", dark ? "true" : "false");
+    $("theme-light").setAttribute("aria-pressed", dark ? "false" : "true");
+  }
+  $("theme-dark").addEventListener("click", function () { setTheme(true); });
+  $("theme-light").addEventListener("click", function () { setTheme(false); });
+  $("sim-reset").addEventListener("click", function () {
+    state.enabled = true;
+    state.refineOn = true;
+    state.defaultStyle = "smartCleanup";
+    state.rules = Object.assign({}, DEFAULT_RULES);
+    state.frontmost = "com.tinyspeck.slackmacgap";
+    $("perapp-toggle").checked = true;
+    $("refine-toggle").checked = true;
+    fillStyleSelect($("default-style"), state.defaultStyle);
+    renderRules();
+    renderEffective();
+    renderSimApps();
+    toast("Demo reset.");
+  });
+
+  renderRules();
+  renderEffective();
+  renderSimApps();
+})();
+
+</script>
+</body>
+</html>
