@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Dimensions from Prototypes/UIRedesign/DESIGN_SIGNATURE.md, in macOS points.
+/// Layout dimensions in macOS points.
 enum AppLayout {
     static let windowMinWidth: CGFloat = 660
     static let windowMinHeight: CGFloat = 520

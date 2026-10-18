@@ -102,9 +102,7 @@ microphone I/O open while idle just to improve startup numbers.
 
 See [the test README](../../Tests/README.md) for regression tests, opt-in hardware
 checks, and installed-app checks. Property snapshots alone cannot detect
-per-client ducking; logs and listening checks are also needed. See
-[sound-cue documentation](../../Prototypes/AudioCues/README.md) for cue behavior
-and synthetic playback checks.
+per-client ducking; logs and listening checks are also needed.
 
 - [Apple: AVAudioRecorder](https://developer.apple.com/documentation/avfaudio/avaudiorecorder)
 - [Apple: device input using AUHAL](https://developer.apple.com/library/archive/technotes/tn2091/_index.html)
