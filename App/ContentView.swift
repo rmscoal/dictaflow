@@ -30,7 +30,16 @@ struct ContentView: View {
                                 }
                                 .padding(.horizontal, AppLayout.contentPadding).padding(.bottom, 14)
                             }
-                            page.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            page
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                                .overlay(alignment: .topTrailing) {
+                                    if let notice = appState.downloadCompletionNotice {
+                                        DownloadCompletionNotification(appState: appState, notice: notice)
+                                            .padding(.top, 14).padding(.trailing, AppLayout.contentPadding)
+                                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                                    }
+                                }
+                                .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: appState.downloadCompletionNotice?.id)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }

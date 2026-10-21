@@ -56,14 +56,6 @@ struct ModelPickerSheet: View {
                     }
                     EmberDivider()
                     HStack(spacing: 12) {
-                        if let activity = appState.modelDownloadActivity {
-                            Button { appState.openDownloadActivity(activity) } label: {
-                                Label(activity.title, systemImage: activity.hasFailed ? "exclamationmark.circle" : "arrow.down.circle")
-                                    .font(.system(size: 11)).lineLimit(2)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(activity.hasFailed ? AppTheme.errorText : AppTheme.secondaryText)
-                        }
                         Spacer(minLength: 0)
                         Button("Done") { dismiss() }.buttonStyle(EmberButtonStyle()).keyboardShortcut(.cancelAction)
                     }

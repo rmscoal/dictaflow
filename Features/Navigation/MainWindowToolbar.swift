@@ -4,8 +4,11 @@ struct MainWindowToolbar: View {
     @ObservedObject var appState: DictaFlowAppState
     let sidebarCollapsed: Bool
     let toggleSidebar: () -> Void
+    @State private var showsDownloads = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let activities = appState.activeDownloadActivities
         HStack(spacing: 12) {
             Button(action: toggleSidebar) { Image(systemName: "sidebar.left") }
                 .buttonStyle(EmberIconButtonStyle())
@@ -13,14 +16,9 @@ struct MainWindowToolbar: View {
                 .accessibilityLabel(sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar")
             Text(appState.mainWindowPage.title).font(.system(size: 14, weight: .medium))
             Spacer(minLength: 8)
-            if let activity = appState.modelDownloadActivity {
-                Button { appState.openDownloadActivity(activity) } label: {
-                    Image(systemName: activity.hasFailed ? "exclamationmark.circle" : "arrow.down.circle")
-                        .foregroundStyle(activity.hasFailed ? AppTheme.errorText : AppTheme.secondaryText)
-                }
-                .buttonStyle(EmberIconButtonStyle())
-                .background(activity.hasFailed ? AppTheme.errorFill : .clear, in: RoundedRectangle(cornerRadius: 7))
-                .help(activity.title).accessibilityLabel(activity.title)
+            if !activities.isEmpty {
+                downloadButton(count: activities.count)
+                    .transition(.scale(scale: 0.85).combined(with: .opacity))
             }
             Button { appState.toggleDictation() } label: {
                 Label(recordTitle, systemImage: appState.recordingState.isRecording ? "stop" : "mic")
@@ -31,6 +29,43 @@ struct MainWindowToolbar: View {
         }
         .padding(.horizontal, AppLayout.contentPadding)
         .frame(height: AppLayout.headerHeight)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: activities.count)
+        .onChange(of: activities.isEmpty) { _, isEmpty in
+            if isEmpty { showsDownloads = false }
+        }
+    }
+
+    private func downloadButton(count: Int) -> some View {
+        Button { showsDownloads.toggle() } label: {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(AppTheme.accent)
+                .frame(width: 32, height: 32)
+                .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(AppTheme.border, lineWidth: 1)
+                }
+                .overlay(alignment: .topTrailing) {
+                    Text("\(count)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .padding(.horizontal, 1)
+                        .background(AppTheme.destructive, in: Capsule())
+                        .overlay { Capsule().stroke(AppTheme.background, lineWidth: 1.5) }
+                        .offset(x: 5, y: -5)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help(count == 1 ? "Show download in progress" : "Show \(count) downloads in progress")
+        .accessibilityLabel(count == 1 ? "Show download in progress" : "Show downloads in progress")
+        .accessibilityValue(count == 1 ? "1 download" : "\(count) downloads")
+        .accessibilityIdentifier("downloads-button")
+        .popover(isPresented: $showsDownloads, arrowEdge: .top) {
+            DownloadActivitiesPopover(appState: appState, isPresented: $showsDownloads)
+        }
     }
 
     private var recordTitle: String {

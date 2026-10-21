@@ -689,6 +689,129 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(fixture.state.whisperConfiguration.model, .small)
     }
 
+    func testActiveDownloadActivitiesListsOnlyDownloadsInProgress() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        var continuations: [CheckedContinuation<Void, Never>] = []
+        let bothStarted = expectation(description: "Both model downloads are in flight")
+        service.onModelDownload = {
+            await withCheckedContinuation { continuation in
+                continuations.append(continuation)
+                if continuations.count == 2 { bothStarted.fulfill() }
+            }
+        }
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+
+        fixture.state.downloadWhisperModel(.tiny)
+        fixture.state.downloadWhisperModel(.base)
+        await fulfillment(of: [bothStarted], timeout: 2)
+
+        let activities = fixture.state.activeDownloadActivities
+        XCTAssertEqual(activities.map(\.id), [WhisperModelDescriptor.tiny.modelIdentifier, WhisperModelDescriptor.base.modelIdentifier])
+        XCTAssertEqual(activities.map(\.name), ["Whisper Tiny", "Whisper Base"])
+        XCTAssertEqual(activities.map(\.statusText), ["Starting download", "Starting download"])
+        XCTAssertEqual(activities.map(\.progress), [nil, nil])
+        XCTAssertFalse(activities.contains { $0.hasFailed })
+
+        // Cancelling through the activity must target only its own download.
+        fixture.state.cancelDownloadActivity(activities[0])
+        let finished = expectation(description: "Remaining downloads finish and leave the list")
+        let observation = fixture.state.$whisperDownloads.sink { downloads in
+            if downloads.isEmpty, service.isWhisperModelPrepared(.tiny), service.isWhisperModelPrepared(.base) {
+                finished.fulfill()
+            }
+        }
+        continuations.forEach { $0.resume() }
+        await fulfillment(of: [finished], timeout: 2)
+        observation.cancel()
+        XCTAssertTrue(fixture.state.activeDownloadActivities.isEmpty)
+        XCTAssertEqual(service.cancelledIdentifiers, [WhisperModelDescriptor.tiny.modelIdentifier])
+    }
+
+    func testCancelAllDownloadActivitiesCancelsEveryActiveDownload() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        var continuations: [CheckedContinuation<Void, Never>] = []
+        let bothStarted = expectation(description: "Both model downloads are in flight")
+        service.onModelDownload = {
+            await withCheckedContinuation { continuation in
+                continuations.append(continuation)
+                if continuations.count == 2 { bothStarted.fulfill() }
+            }
+        }
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+
+        fixture.state.downloadWhisperModel(.tiny)
+        fixture.state.downloadWhisperModel(.base)
+        await fulfillment(of: [bothStarted], timeout: 2)
+        XCTAssertEqual(fixture.state.activeDownloadActivities.count, 2)
+
+        fixture.state.cancelAllDownloadActivities()
+        let finished = expectation(description: "Cancelled downloads leave the list")
+        let observation = fixture.state.$whisperDownloads.sink { downloads in
+            if downloads.isEmpty { finished.fulfill() }
+        }
+        continuations.forEach { $0.resume() }
+        await fulfillment(of: [finished], timeout: 2)
+        observation.cancel()
+        XCTAssertEqual(Set(service.cancelledIdentifiers), [WhisperModelDescriptor.tiny.modelIdentifier, WhisperModelDescriptor.base.modelIdentifier])
+        XCTAssertTrue(fixture.state.activeDownloadActivities.isEmpty)
+    }
+
+    func testFailedDownloadLeavesActiveListButKeepsItsError() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        service.onModelDownload = { throw ModelDownloadServiceError.checksumMismatch }
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+        let failed = expectation(description: "Model download failure is surfaced")
+        let observation = fixture.state.$whisperDownloadErrors.sink {
+            if $0[.tiny] != nil { failed.fulfill() }
+        }
+        fixture.state.downloadWhisperModel(.tiny)
+        await fulfillment(of: [failed], timeout: 2)
+        observation.cancel()
+        XCTAssertTrue(fixture.state.activeDownloadActivities.isEmpty)
+        XCTAssertEqual(fixture.state.modelDownloadActivity?.hasFailed, true)
+        XCTAssertEqual(fixture.state.downloadCompletionNotice?.kind, .failed)
+        XCTAssertTrue(fixture.notifications.shown.isEmpty, "Download outcomes must not post an Apple system notification")
+    }
+
+    func testDownloadCompletionNoticeDismissesAfterReturningToMainWindow() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+        fixture.state.downloadCompletionDismissInterval = 60
+
+        let completed = expectation(description: "Download completion notice is recorded")
+        let completedObservation = fixture.state.$downloadCompletionNotice.sink {
+            if $0 != nil { completed.fulfill() }
+        }
+        fixture.state.downloadWhisperModel(.tiny)
+        await fulfillment(of: [completed], timeout: 2)
+        completedObservation.cancel()
+
+        XCTAssertEqual(fixture.state.downloadCompletionNotice?.kind, .completed)
+        XCTAssertEqual(fixture.state.downloadCompletionNotice?.activity.name, "Whisper Tiny")
+        XCTAssertEqual(fixture.state.downloadCompletionNotice?.message, "Whisper Tiny is ready.")
+        XCTAssertTrue(fixture.notifications.shown.isEmpty, "Download outcomes must not post an Apple system notification")
+        XCTAssertNotNil(fixture.state.downloadCompletionNotice, "The notice must stay visible until the user returns to the main window")
+
+        fixture.state.downloadCompletionDismissInterval = 0.05
+        let dismissed = expectation(description: "Completion notice dismisses after returning to the main window")
+        let dismissedObservation = fixture.state.$downloadCompletionNotice.sink {
+            if $0 == nil { dismissed.fulfill() }
+        }
+        fixture.state.mainWindowDidOpen()
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        await fulfillment(of: [dismissed], timeout: 2)
+        dismissedObservation.cancel()
+        XCTAssertNil(fixture.state.downloadCompletionNotice)
+    }
+
     func testFailedCombinedModelDownloadDoesNotQueueEncoderOnPlainRetry() async throws {
         let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
         service.preparedModels = [.small]
@@ -951,6 +1074,7 @@ private final class RecordingStartupFixture {
     let recorder: StartupRecorderService
     let overlay = StartupOverlayRouter()
     let cues = StartupCueService()
+    let notifications = StartupNotificationService()
     let state: DictaFlowAppState
     let insertion: StartupInsertionService
 
@@ -992,7 +1116,7 @@ private final class RecordingStartupFixture {
             transcriptRefinementService: refinement,
             refinementPromptStore: promptStore ?? StartupPromptStore(directory: directory),
             textInsertionService: insertion,
-            localNotificationService: StartupNotificationService(),
+            localNotificationService: notifications,
             appUpdateService: GitHubReleaseUpdateService(),
             historyStore: historyStore
         )
@@ -1160,8 +1284,9 @@ private final class StartupInsertionService: TextInsertionServiceProtocol {
 
 @MainActor
 private final class StartupNotificationService: LocalNotificationServiceProtocol {
+    var shown: [(title: String, body: String)] = []
     func requestAuthorizationIfNeeded() {}
-    func show(title: String, body: String) {}
+    func show(title: String, body: String) { shown.append((title, body)) }
 }
 
 private actor PipelineWhisperService: WhisperServiceProtocol {
@@ -1218,13 +1343,14 @@ private final class PipelineModelDownloadService: ModelDownloadServiceProtocol {
     let modelsDirectoryURL: URL
     var preparedModels: Set<WhisperModelDescriptor>?
     var downloadRequests: [String] = []
+    var cancelledIdentifiers: [String] = []
     var onModelDownload: (() async throws -> Void)?
     var onEncoderDownload: (() -> Void)?
     var encoderDownloadError: Error?
     init(modelsDirectoryURL: URL) { self.modelsDirectoryURL = modelsDirectoryURL }
     func installedModelFiles() -> [LocalModelFile] { [] }
     func deleteModelFiles(_ files: [LocalModelFile]) async throws -> Int64 { 0 }
-    func cancelDownload(modelIdentifier: String) {}
+    func cancelDownload(modelIdentifier: String) { cancelledIdentifiers.append(modelIdentifier) }
     func removeIncompleteDownloads() -> Int64 { 0 }
     func isWhisperModelPrepared(_ model: WhisperModelDescriptor) -> Bool { preparedModels?.contains(model) ?? true }
     func verifiedWhisperModelURL(for model: WhisperModelDescriptor) async -> URL? {
