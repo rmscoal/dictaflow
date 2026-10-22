@@ -812,6 +812,42 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertNil(fixture.state.downloadCompletionNotice)
     }
 
+    func testDownloadCompletionNoticesAreQueuedInsteadOfReplaced() async throws {
+        let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
+        service.preparedModels = [.small]
+        var continuations: [CheckedContinuation<Void, Never>] = []
+        let bothStarted = expectation(description: "Both model downloads are in flight")
+        service.onModelDownload = {
+            await withCheckedContinuation { continuation in
+                continuations.append(continuation)
+                if continuations.count == 2 { bothStarted.fulfill() }
+            }
+        }
+        let fixture = try RecordingStartupFixture(modelDownloadService: service)
+        defer { fixture.cleanup() }
+        fixture.state.downloadCompletionDismissInterval = 60
+
+        fixture.state.downloadWhisperModel(.tiny)
+        fixture.state.downloadWhisperModel(.base)
+        await fulfillment(of: [bothStarted], timeout: 2)
+
+        let bothFinished = expectation(description: "Both downloads finish")
+        let finishedObservation = fixture.state.$whisperDownloads.sink { downloads in
+            if downloads.isEmpty, service.isWhisperModelPrepared(.tiny), service.isWhisperModelPrepared(.base) {
+                bothFinished.fulfill()
+            }
+        }
+        continuations.forEach { $0.resume() }
+        await fulfillment(of: [bothFinished], timeout: 2)
+        finishedObservation.cancel()
+
+        XCTAssertEqual(fixture.state.downloadCompletionNotice?.activity.name, "Whisper Tiny")
+        fixture.state.dismissDownloadCompletionNotice()
+        XCTAssertEqual(fixture.state.downloadCompletionNotice?.activity.name, "Whisper Base")
+        fixture.state.dismissDownloadCompletionNotice()
+        XCTAssertNil(fixture.state.downloadCompletionNotice)
+    }
+
     func testFailedCombinedModelDownloadDoesNotQueueEncoderOnPlainRetry() async throws {
         let service = PipelineModelDownloadService(modelsDirectoryURL: FileManager.default.temporaryDirectory)
         service.preparedModels = [.small]

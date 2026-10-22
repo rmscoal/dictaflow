@@ -143,6 +143,7 @@ final class DictaFlowAppState: ObservableObject {
     /// How long a download completion notice stays once the app is active.
     var downloadCompletionDismissInterval: TimeInterval = 5
     private var downloadCompletionDismissTask: Task<Void, Never>?
+    private var pendingDownloadCompletionNotices: [DownloadCompletionNotice] = []
     private var isRecordingOverlaySessionActive = false
     @Published private(set) var lastKnownExternalTargetApplication: InsertionTargetApplication?
     private var pendingInsertionTargetApplication: InsertionTargetApplication?
@@ -2181,13 +2182,22 @@ final class DictaFlowAppState: ObservableObject {
     func dismissDownloadCompletionNotice() {
         downloadCompletionDismissTask?.cancel()
         downloadCompletionDismissTask = nil
-        downloadCompletionNotice = nil
+        downloadCompletionNotice = pendingDownloadCompletionNotices.isEmpty
+            ? nil
+            : pendingDownloadCompletionNotices.removeFirst()
+        if downloadCompletionNotice != nil {
+            scheduleDownloadCompletionDismissal()
+        }
     }
 
     private func recordDownloadCompletion(_ activity: ModelDownloadActivity, kind: DownloadCompletionNotice.Kind, message: String) {
         let notice = DownloadCompletionNotice(activity: activity, kind: kind, message: message)
-        downloadCompletionNotice = notice
-        scheduleDownloadCompletionDismissal()
+        if downloadCompletionNotice == nil {
+            downloadCompletionNotice = notice
+            scheduleDownloadCompletionDismissal()
+        } else {
+            pendingDownloadCompletionNotices.append(notice)
+        }
     }
 
     /// Starts the dismissal countdown. The countdown only runs while the
