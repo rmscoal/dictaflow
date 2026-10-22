@@ -39,6 +39,7 @@ final class DictaFlowAppState: ObservableObject {
     }
     @Published var modelPickerPresentation: ModelPickerPresentation?
     @Published private(set) var interfaceIssue: InterfaceIssue?
+    @Published private(set) var downloadCompletionNotice: DownloadCompletionNotice?
     @Published private(set) var microphonePermissionState: MicrophonePermissionState
     @Published private(set) var accessibilityPermissionState: AccessibilityPermissionState
     @Published private(set) var onboardingPresentation: OnboardingPresentation?
@@ -139,6 +140,10 @@ final class DictaFlowAppState: ObservableObject {
     private var isTerminating = false
     private var isWarmingUpWhisperEncoder = false
     var whisperIdleEvictionInterval: TimeInterval = 600
+    /// How long a download completion notice stays once the app is active.
+    var downloadCompletionDismissInterval: TimeInterval = 5
+    private var downloadCompletionDismissTask: Task<Void, Never>?
+    private var pendingDownloadCompletionNotices: [DownloadCompletionNotice] = []
     private var isRecordingOverlaySessionActive = false
     @Published private(set) var lastKnownExternalTargetApplication: InsertionTargetApplication?
     private var pendingInsertionTargetApplication: InsertionTargetApplication?
@@ -2135,11 +2140,13 @@ final class DictaFlowAppState: ObservableObject {
 
     func mainWindowDidOpen() {
         isMainWindowVisible = true
+        scheduleDownloadCompletionDismissal()
         updateStatusMessage()
     }
 
     func mainWindowDidClose() {
         cancelGlobalShortcutEditing()
+        pauseDownloadCompletionDismissal()
         isMainWindowVisible = false
         updateStatusMessage()
     }
@@ -2170,6 +2177,54 @@ final class DictaFlowAppState: ObservableObject {
         try hotkeyService.registerToggleHotkey(shortcut) { [weak self] in
             self?.toggleDictation()
         }
+    }
+
+    func dismissDownloadCompletionNotice() {
+        downloadCompletionDismissTask?.cancel()
+        downloadCompletionDismissTask = nil
+        downloadCompletionNotice = pendingDownloadCompletionNotices.isEmpty
+            ? nil
+            : pendingDownloadCompletionNotices.removeFirst()
+        if downloadCompletionNotice != nil {
+            scheduleDownloadCompletionDismissal()
+        }
+    }
+
+    private func recordDownloadCompletion(_ activity: ModelDownloadActivity, kind: DownloadCompletionNotice.Kind, message: String) {
+        let notice = DownloadCompletionNotice(activity: activity, kind: kind, message: message)
+        if downloadCompletionNotice == nil {
+            downloadCompletionNotice = notice
+            scheduleDownloadCompletionDismissal()
+        } else {
+            pendingDownloadCompletionNotices.append(notice)
+        }
+    }
+
+    /// Starts the dismissal countdown. The countdown only runs while the
+    /// app is active, so a notice posted while the user is in another app
+    /// stays visible until they return and the interval elapses.
+    private func scheduleDownloadCompletionDismissal(assumingActive: Bool = false) {
+        downloadCompletionDismissTask?.cancel()
+        downloadCompletionDismissTask = nil
+        guard let notice = downloadCompletionNotice,
+              isMainWindowVisible,
+              assumingActive || NSApplication.shared.isActive else {
+            return
+        }
+        let interval = downloadCompletionDismissInterval
+        downloadCompletionDismissTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(interval))
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                guard self?.downloadCompletionNotice?.id == notice.id else { return }
+                self?.dismissDownloadCompletionNotice()
+            }
+        }
+    }
+
+    private func pauseDownloadCompletionDismissal() {
+        downloadCompletionDismissTask?.cancel()
+        downloadCompletionDismissTask = nil
     }
 
     private func applyWhisperDownloadEvent(_ event: ModelDownloadEvent, for model: WhisperModelDescriptor, token: UUID) {
@@ -2228,6 +2283,12 @@ final class DictaFlowAppState: ObservableObject {
         refreshInstalledLocalModelFiles()
         if whisperModelsPendingEncoderDownload.remove(model) != nil {
             downloadWhisperEncoder(model)
+        } else {
+            recordDownloadCompletion(
+                ModelDownloadActivity(target: .speech(model), name: "Whisper \(model.displayName)", title: "\(model.displayName) · Downloaded", progress: nil, statusText: "", hasFailed: false),
+                kind: .completed,
+                message: "Whisper \(model.displayName) is ready."
+            )
         }
     }
 
@@ -2254,6 +2315,11 @@ final class DictaFlowAppState: ObservableObject {
         let message = "Could not download \(model.displayName). \(error.localizedDescription)"
         whisperDownloadErrors[model] = message
         setPreservedStatusMessage(message)
+        recordDownloadCompletion(
+            ModelDownloadActivity(target: .speech(model), name: "Whisper \(model.displayName)", title: "\(model.displayName) download failed. Review download.", progress: nil, statusText: "", hasFailed: true),
+            kind: .failed,
+            message: message
+        )
         updateStatusMessage()
     }
 
@@ -2307,6 +2373,11 @@ final class DictaFlowAppState: ObservableObject {
         setPreservedStatusMessage("Downloaded the \(model.displayName) Neural Engine encoder.")
         updateStatusMessage()
         refreshInstalledLocalModelFiles()
+        recordDownloadCompletion(
+            ModelDownloadActivity(target: .encoder(model), name: "Whisper \(model.displayName) encoder", title: "\(model.displayName) encoder · Downloaded", progress: nil, statusText: "", hasFailed: false),
+            kind: .completed,
+            message: "Whisper \(model.displayName) encoder is ready."
+        )
 
         Task { [weak self] in
             await self?.activateWhisperEncoder(model)
@@ -2347,6 +2418,11 @@ final class DictaFlowAppState: ObservableObject {
         let message = "Could not download the \(model.displayName) Neural Engine encoder. \(error.localizedDescription)"
         whisperEncoderDownloadErrors[model] = message
         setPreservedStatusMessage(message)
+        recordDownloadCompletion(
+            ModelDownloadActivity(target: .encoder(model), name: "Whisper \(model.displayName) encoder", title: "\(model.displayName) encoder download failed. Review download.", progress: nil, statusText: "", hasFailed: true),
+            kind: .failed,
+            message: message
+        )
         updateStatusMessage()
     }
 
@@ -2476,6 +2552,11 @@ final class DictaFlowAppState: ObservableObject {
         setPreservedStatusMessage("Downloaded \(model.displayName). It is ready for text refinement.")
 
         refreshInstalledLocalModelFiles()
+        recordDownloadCompletion(
+            ModelDownloadActivity(target: .refinement(model), name: model.displayName, title: "\(model.displayName) · Downloaded", progress: nil, statusText: "", hasFailed: false),
+            kind: .completed,
+            message: "\(model.displayName) is ready."
+        )
 
         updateStatusMessage()
     }
@@ -2501,6 +2582,11 @@ final class DictaFlowAppState: ObservableObject {
         let message = "Could not download \(model.displayName). \(error.localizedDescription)"
         refinementDownloadErrors[model] = message
         setPreservedStatusMessage(message)
+        recordDownloadCompletion(
+            ModelDownloadActivity(target: .refinement(model), name: model.displayName, title: "\(model.displayName) download failed. Review download.", progress: nil, statusText: "", hasFailed: true),
+            kind: .failed,
+            message: message
+        )
         updateStatusMessage()
     }
 
@@ -3430,6 +3516,14 @@ final class DictaFlowAppState: ObservableObject {
             .sink { [weak self] _ in
                 self?.refreshMicrophonePermissionStatus()
                 self?.refreshAccessibilityPermissionStatus()
+                self?.scheduleDownloadCompletionDismissal(assumingActive: true)
+            }
+            .store(in: &workspaceObservers)
+
+        NotificationCenter.default
+            .publisher(for: NSApplication.didResignActiveNotification)
+            .sink { [weak self] _ in
+                self?.pauseDownloadCompletionDismissal()
             }
             .store(in: &workspaceObservers)
 
