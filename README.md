@@ -4,7 +4,7 @@
 
 <p align="center">
   <strong>Private dictation that types where you work.</strong><br>
-  Speak naturally. DictaFlow turns your voice into polished text on your Mac.
+  Turn spoken thoughts into text, right in the app you’re using. All on your Mac.
 </p>
 
 <p align="center">
@@ -16,261 +16,117 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/rmscoal/dictaflow/releases/latest"><strong>Download DictaFlow</strong></a>
+  <a href="https://github.com/rmscoal/dictaflow/releases/latest"><strong>Download DictaFlow</strong></a><br>
+  <sub>Apple silicon · macOS 14 or newer · No account or API key</sub>
 </p>
-
-## DictaFlow Showcase
 
 <p align="center">
-  <img src="public/dictaflow-overview.png" alt="DictaFlow Overview showing dictation, local models, permissions, and the latest transcript" width="850"><br>
-  <sub>The main app keeps dictation, local models, and permissions in one place.</sub>
+  <img src="public/dictaflow-overview.png" alt="DictaFlow Dictation workspace with local speech and refinement models, tone controls, and a sample text preview" width="900"><br>
+  <sub>Your voice, your models, your Mac.</sub>
 </p>
 
-<table align="center">
-  <tr>
-    <td align="center" valign="middle">
-      <img src="public/dictaflow-menu-bar.png" alt="DictaFlow menu bar panel with dictation and model controls" width="320"><br>
-      <sub>Start dictation and change essential options from the menu bar.</sub>
-    </td>
-    <td align="center" valign="middle">
-      <img src="public/dictaflow-recording-pill.png" alt="DictaFlow recording indicator" width="220"><br>
-      <sub>A small recording indicator stays out of your way.</sub>
-    </td>
-  </tr>
-</table>
+## From thought to text
 
-## Table of contents
+An email, a quick reply, a technical note. Say what you want to write, and
+DictaFlow puts the text where your cursor is. Start and stop with a global
+shortcut or from the menu bar, without switching away from your work.
 
-- [DictaFlow Showcase](#dictaflow-showcase)
-- [Introduction](#introduction)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Inside DictaFlow](#inside-dictaflow)
-- [Models and Local Data](#models-and-local-data)
-- [Updates](#updates)
-- [Troubleshooting](#troubleshooting)
-- [Development](#development)
-- [License](#license)
+DictaFlow is a native macOS app. Speech recognition and optional text cleanup
+run locally, with no cloud transcription, analytics, or account to manage.
+Once your models are downloaded, you can dictate offline.
 
-## Introduction
+- **Speak your language.** Transcribe in many languages, or translate supported speech into English.
+- **Make it sound like you.** Keep the transcript as spoken, or use optional local refinement for clearer wording and punctuation.
+- **Match the app.** Choose a writing style for each app, such as casual messages in chat and technical notes in your editor.
+- **Teach it your words.** Add names and specialist terms to custom vocabulary to help recognition.
+- **Pick up where you left off.** With history enabled, revisit recordings, compare original and refined text, copy a result, or try again.
 
-DictaFlow is a native macOS app for people who think faster than they type. It
-records your voice, transcribes or translates it with `whisper.cpp`, and puts
-the result into the app you were using.
+## Start dictating
 
-Everything runs locally. There is no cloud transcription, account, analytics,
-or API key.
+1. Download the DMG from the [latest release](https://github.com/rmscoal/dictaflow/releases/latest) and drag **DictaFlow** into **Applications**.
+2. Open DictaFlow. In **Dictation → Transcription**, choose and download a speech model.
+3. Allow microphone access when asked. For automatic text insertion, allow Accessibility access when needed.
+4. Place your cursor in the app you want to write in. Press your dictation shortcut, speak, then press it again to finish.
 
-| | |
+Find or change your shortcut in **Settings → General**. If automatic insertion
+is unavailable, DictaFlow offers a copy panel so you can paste the result yourself.
+
+Public releases are signed and notarized. You need an Apple silicon Mac running
+macOS 14 or newer, plus an internet connection to download the app, models, and
+updates. Larger models need more memory and disk space.
+
+## A little cleanup, your way
+
+Use **Dictation → Refinement** to turn rough speech into text that is easier to
+share. Choose a local model and a writing style: Normal Cleanup, Professional
+Formal, Casual Text Messaging, or Technical and Engineering. Add your own
+instructions, or use DIY for a fully custom prompt.
+
+You can assign styles to individual apps and let DictaFlow switch when you
+start recording. Separate **Tone** controls offer Original, Balanced, Casual,
+and Formal options, even when refinement is off.
+
+<p align="center">
+  <img src="public/dictaflow-refinement.png" alt="Local refinement settings with a writing style selector and per-app style assignments" width="900"><br>
+  <sub>Choose how your text reads, with processing that stays on your Mac. The preview uses sample text.</sub>
+</p>
+
+Refinement is optional. If it cannot complete, DictaFlow keeps the original
+transcription and applies your selected tone. You can review saved results in
+**History** before reusing them.
+
+## Local by design
+
+Your audio and text stay on your Mac during transcription and refinement.
+DictaFlow uses local [Whisper](https://github.com/ggml-org/whisper.cpp) speech
+models and [llama.cpp](https://github.com/ggml-org/llama.cpp) for optional text
+refinement. No subscription or cloud inference is required.
+
+Download models from their **Change…** buttons in Dictation. Choose a smaller
+model for a lighter setup or a larger one when accuracy matters more. Downloads
+are checksum-verified before use, and supported speech models offer optional
+Neural Engine acceleration.
+
+You control what stays on disk:
+
+- **Models** stay until you remove them. Open **Settings → General → Storage** to find local model files and manage storage.
+- **History** keeps recordings and text for your selected retention period. With history off, recordings are temporary.
+- **Clipboard insertion** restores the previous clipboard contents when possible.
+
+Update checks use GitHub Releases and send no transcripts, recordings, or usage
+data. You can turn automatic checks off. To update, open **Updates**, download
+the new DMG, and replace DictaFlow in Applications.
+
+## Need a hand?
+
+| If… | Try… |
 | --- | --- |
-| **Stay private** | Audio, transcription, and optional text refinement remain on your Mac. |
-| **Keep your flow** | Start dictation with a global shortcut and continue in the same app. |
-| **Speak your language** | Transcribe in many languages or translate supported speech into English. |
-| **Clean up locally** | An optional local language model can improve punctuation and wording before insertion. |
-| **Reuse the result** | Review, copy, or insert your latest transcript again. |
+| Recording will not start | Check microphone access in **Settings → Permissions**. |
+| Text is not inserted | Check Accessibility access in **Settings → Permissions**, or use the copy panel. |
+| Recognition misses words | Set the input language, add custom vocabulary, or try a larger speech model. |
+| The first dictation takes longer | Give the selected local models time to load. |
+| You want to recover a previous result | Open **History**, if recording history was enabled. |
 
-## Requirements
+For bugs or suggestions, [open an issue](https://github.com/rmscoal/dictaflow/issues).
 
-| | Requirement |
-| --- | --- |
-| **Mac** | Apple silicon |
-| **macOS** | 14.0 or newer |
-| **Internet** | Needed to download the app, models, and updates |
+## Build and contribute
 
-After the models are downloaded, dictation works offline.
+DictaFlow is open source. Contributions that keep it private, local, and pleasant
+to use are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
 
-## Installation
-
-1. Download the DMG from the [latest release](https://github.com/rmscoal/dictaflow/releases/latest).
-2. Open it and drag **DictaFlow** into **Applications**.
-3. Launch DictaFlow and follow the permission prompts when needed.
-
-Public releases are signed and notarized for macOS.
-
-## Inside DictaFlow
-
-| Step | What happens |
-| --- | --- |
-| **Record** | DictaFlow creates a temporary local `.m4a` recording. |
-| **Transcribe** | Bundled speech detection filters non-speech audio before `whisper.cpp` converts speech to text on your Mac. |
-| **Refine** | If enabled, a local language model cleans the text. |
-| **Tone** | Fixed Swift rules apply the selected tone, with or without refinement. |
-| **Insert** | DictaFlow returns the text to the previously focused app. |
-
-Insertion uses the best available method: direct Accessibility insertion,
-clipboard paste, simulated typing, then a copy panel as the final fallback.
-
-### Dictation settings
-
-**Dictation** contains **Transcription**, **Refinement**, and **Tone** tabs.
-Transcription combines task and language defaults, Whisper model cards, sound
-cues, and custom vocabulary. Every model card has an optional **Neural Engine**
-section. Download the speech model first, then its encoder. Encoder download
-turns acceleration on automatically; you can switch it off without removing it.
-**Models** remains available for storage management.
-
-### Transcribe or translate
-
-- **Transcribe** keeps the spoken language.
-- **Translate** converts supported source languages into English.
-
-### Optional refinement
-
-Local refinement can fix punctuation, repeated wording, and rough sentence
-structure. It is optional. If refinement fails, DictaFlow uses the original
-Whisper transcript with the selected tone.
-
-The Dictation > Refinement tab offers local models from Qwen, Google Gemma, and
-Microsoft Phi. Download a model, then choose **Use model**. Downloading never
-changes the active model. Each row shows file size, estimated model RAM,
-progress, and cancellation. RAM estimates exclude Whisper and other apps.
-Existing Qwen3 0.6B selections stay unchanged while the newer models are evaluated.
-Models load when recording starts, remain ready between dictations, and sleep
-after five minutes without use.
-
-Refinement uses the bundled llama-server engine. Older model preferences migrate
-to standard Qwen3, and old downloads remain available for removal from Storage.
-Until the selected model is downloaded, dictation uses the original transcript.
-
-### Tone
-
-Tone runs after optional local refinement and before insertion. **Original** is
-the default. **Balanced** preserves the incoming casing, contractions, and
-punctuation. **Casual** lowercases prose, including names and acronyms, simplifies
-an allowlist of English contractions, and removes prose commas and the final
-prose period. It keeps periods between sentences, question marks, exclamation
-marks, and ellipses. **Formal** expands clear English contractions and “gonna”,
-removes opening fillers, adds a terminal prose period, and restores English
-sentence starts when safe. These rules do not infer grammar or missing commas.
-English word replacements require detected English or translation mode.
-
-The formatter protects casing and punctuation in URLs, email addresses, numbers
-(including decimal and thousands separators), code spans, identifiers, and custom
-vocabulary. Formal also preserves acronyms and unfamiliar capitalized words, so
-names are usually preserved, but name detection is not guaranteed. Line breaks
-are preserved; Casual can still remove prose commas and the final period in
-multiline text. Tone settings are saved independently of refinement. Settings are
-locked during processing.
-
-History saves raw transcripts, raw refinement results, and the final text with
-the selected tone and rule version. **Original**, **Refined**, and **Final** let
-you inspect the available outputs. Changing tone settings does not rewrite saved
-results. Copy and insertion use the selected saved output; outer whitespace is
-trimmed for final output. Retrying creates a new result using current settings.
-
-## Models and Local Data
-
-Models are downloaded when you prepare them in DictaFlow. Every download is
-checksum-verified before use.
-
-| Model type | Available sizes |
-| --- | --- |
-| Whisper | Tiny 75 MB, Base 142 MB, Small 466 MB, Medium 1.5 GB, Large V3 Turbo 1.5 GB, Large V3 2.9 GB |
-| Refinement | Qwen3 0.6B: 397 MB; new models: approximately 1.28–3.35 GB |
-
-Models are stored in:
-
-```text
-~/Library/Application Support/DictaFlow/Models
-```
-
-Open **Models** to view, prepare, or remove models.
-
-| Data | Storage behavior |
-| --- | --- |
-| Recordings | Saved locally for the chosen history retention period; temporary when history is off |
-| Latest transcript | Kept in memory; raw and final outputs also saved to SQLite when history is on |
-| Models | Stored locally until you remove them |
-| Clipboard | Used briefly when needed, with restoration attempted |
-
-## Updates
-
-DictaFlow checks GitHub Releases for updates. When a new version is available:
-
-1. Open **Updates**.
-2. Open the release page and download the new DMG.
-3. Replace the old DictaFlow app in **Applications**.
-
-Automatic checks can be turned off. DictaFlow sends no transcript, model, or
-usage data during an update check.
-
-## Troubleshooting
-
-| Problem | Try this |
-| --- | --- |
-| Dictation does not start | Open **Permissions** and allow microphone access. |
-| Text is not inserted | Allow Accessibility access, then try again. The copy panel remains available as a fallback. |
-| First dictation is slow | Wait for the selected model to finish downloading and preparing. |
-| Accuracy is too low | Select a larger Whisper model or set the input language instead of automatic detection. |
-| Disk use is too high | Open **Models** and remove models you no longer use. |
-| No update appears | Open **Updates** or check the [latest release](https://github.com/rmscoal/dictaflow/releases/latest). |
-
-## Development
-
-You need Xcode with the macOS SwiftUI and AppKit tooling. Clone the repository,
-then run:
+With Xcode installed, clone the repository and run:
 
 ```sh
 make run
 ```
 
-Useful commands:
-
-| Command | Purpose |
-| --- | --- |
-| `make run` | Build, install, and launch DictaFlow Dev |
-| `make build` | Build and install without launching |
-| `make package-dev` | Create a local development DMG |
-| `make uninstall-dev` | Remove only DictaFlow Dev from `/Applications` |
-| `make reset-dev` | Reset Dev onboarding, Microphone, and Accessibility permissions |
-| `make verify` | Build, install, verify signing, and launch |
-
-The main Xcode scheme is `DictaFlow Dev`. `DictaFlowTests` covers refinement
-lifecycle and optional real-model inference. See [the verification guide](Tests/README.md). Changes to permissions, hotkeys, insertion, model storage, or launch behavior
-must also be checked with the installed app in `/Applications`.
-
-Contributions are welcome. Please keep DictaFlow local-first and read
-[CONTRIBUTING.md](CONTRIBUTING.md) before submitting a change.
+This builds, installs, and launches **DictaFlow Dev**. Use `make build` to install
+without launching, or `make verify` to check the installed app’s signature and
+launch it. The main Xcode scheme is `DictaFlow Dev`; see the
+[verification guide](Tests/README.md) for tests and manual checks.
 
 ## License
 
 DictaFlow is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE).
 Third-party notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 and [NOTICE](NOTICE).
-
-
-## Writing style and local prompts
-
-Choose Normal Cleanup, Professional Formal, Casual Text Messaging, Technical and
-Engineering, or DIY. The first four have optional **Additional instructions**
-saved separately for each mode and a static writing example. DIY replaces the
-built-in prompt with your own system prompt. Write Markdown source and switch
-to Preview to check headings, bullets, emphasis, and code. Preview never changes
-the saved source. Click Save before your edits affect dictation.
-
-Built-in prompts ship in `Resources/RefinementPrompts`. Selected model, mode,
-and refinement enablement use the existing local preferences. DIY Markdown is
-stored as `Prompts/refinement.txt`; preset additions use `Prompts/preset-instructions.json`
-under the app's Application Support directory. Dev uses `DictaFlow Dev`, and
-release uses `DictaFlow`. Old Dev prompts are copied once from the previously
-shared folder, and an existing custom prompt migrates to DIY. Files are private
-and written atomically. Saving preset additions reloads the existing file first;
-unreadable instructions are kept intact until the file is repaired and Save is
-retried. History stores the effective prompt snapshot for each
-attempt in its existing SQLite database. Clearing history leaves prompts intact.
-
-Long transcripts are split at paragraph or sentence boundaries using the loaded
-model's tokenizer and context budget. Chunks run in order. An editable ending is carried into the next rewrite so
-nearby self-corrections can cross source boundaries. Recent earlier output supplies
-read-only context for style and list numbering and is not appended again. An
-incomplete or failed chunk rejects the whole rewrite and uses
-the original transcription. Large DIY prompts may need shortening. Chunked
-rewrites still cannot resolve corrections referring far back beyond the retained
-context; model accuracy and formatting should be evaluated on real recordings.
-Qwen3 0.6B has also omitted a corrected date in a synthetic long technical passage,
-even with boundary context. Context support does not guarantee factual preservation.
-
-Meta Llama is no longer supported for refinement. Existing Llama selections keep
-their model name with refinement disabled until a supported model is selected.
-Saved history remains readable, and old weights can be removed through Storage.
-All inference stays on-device through llama.cpp.
