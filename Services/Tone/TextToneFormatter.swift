@@ -2,7 +2,7 @@ import Foundation
 
 /// Conservative presentation rules. This does not infer grammar or rewrite meaning.
 nonisolated enum TextToneFormatter {
-    static let version = 1
+    static let version = 2
 
     private static let contractions: [String: String] = [
         "i'm": "I am", "you're": "you are", "we're": "we are", "they're": "they are",
@@ -25,30 +25,51 @@ nonisolated enum TextToneFormatter {
         }
         let source = text as NSString
         // Protect structured text before processing words. Numbers and punctuation inside these
-        // spans are never modified. Unknown names and mixed-case identifiers are preserved below.
-        let structured = try! NSRegularExpression(pattern: #"(?s)```.*?(?:```|$)|`[^`\n]*(?:`|$)|https?://[^\s]+|www\.[^\s]+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b[\w]*[\d_][\w.:-]*\b|\b[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)+\b"#, options: .caseInsensitive)
+        // spans are never modified, including numeric separators with attached units such as “1,234kg”.
+        let structured = try! NSRegularExpression(pattern: #"(?s)```.*?(?:```|$)|`[^`\n]*(?:`|$)|https?://[^\s]+|www\.[^\s]+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b\d+(?:[.,]\d+)+\w*\b|\b[\w]*[\d_][\w.:-]*\b|\b[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)+\b"#, options: .caseInsensitive)
         var protectedRanges = structured.matches(in: text, range: NSRange(location: 0, length: source.length)).map(\.range)
-        let acronyms = try! NSRegularExpression(pattern: #"\b\p{Lu}{2,}\b"#)
-        protectedRanges += acronyms.matches(in: text, range: NSRange(location: 0, length: source.length)).map(\.range)
-        // “Uh huh” is an affirmation, rather than an opening hesitation.
-        let affirmation = try! NSRegularExpression(pattern: #"^(?i:uh[ -]huh)\b"#)
-        protectedRanges += affirmation.matches(in: text, range: NSRange(location: 0, length: source.length)).map(\.range)
+        if tone == .formal {
+            let acronyms = try! NSRegularExpression(pattern: #"\b\p{Lu}{2,}\b"#)
+            protectedRanges += acronyms.matches(in: text, range: NSRange(location: 0, length: source.length)).map(\.range)
+            // “Uh huh” is an affirmation, rather than an opening hesitation.
+            let affirmation = try! NSRegularExpression(pattern: #"^(?i:uh[ -]huh)\b"#)
+            protectedRanges += affirmation.matches(in: text, range: NSRange(location: 0, length: source.length)).map(\.range)
+        }
         for term in protectedTerms where !term.isEmpty {
             let pattern = #"(?<![\p{L}\p{N}_])"# + NSRegularExpression.escapedPattern(for: term) + #"(?![\p{L}\p{N}_])"#
             if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
                 protectedRanges += regex.matches(in: text, range: NSRange(location: 0, length: source.length)).map(\.range)
             }
         }
-        let words = try! NSRegularExpression(pattern: #"[\p{L}]+(?:['’][\p{L}]+)*"#)
         let output = NSMutableString(string: text)
-        for match in words.matches(in: text, range: NSRange(location: 0, length: source.length)).reversed() {
+        // Remove the final prose period before edits shift the original protected ranges.
+        // Sentence separators and ellipses remain, including in multiline text.
+        if tone == .casual, let end = text.lastIndex(where: { !$0.isWhitespace }),
+           text[end] == ".", text[..<end].last != "." {
+            let range = NSRange(end...end, in: text)
+            if !protectedRanges.contains(where: { NSIntersectionRange($0, range).length > 0 }) {
+                output.deleteCharacters(in: range)
+            }
+        }
+        let tokens = try! NSRegularExpression(pattern: #"[\p{L}]+(?:['’][\p{L}]+)*|,"#)
+        for match in tokens.matches(in: text, range: NSRange(location: 0, length: source.length)).reversed() {
             guard !protectedRanges.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) else { continue }
             let word = source.substring(with: match.range)
+            if word == "," {
+                if tone == .casual, let range = Range(match.range, in: text) {
+                    let before = text[..<range.lowerBound].last
+                    let after = text[range.upperBound...].first
+                    // Keep a word boundary in unspaced prose such as “Hello,world”.
+                    let needsSpace = before?.isWhitespace == false && after?.isWhitespace == false
+                    output.replaceCharacters(in: match.range, with: needsSpace ? " " : "")
+                }
+                continue
+            }
             let lower = word.lowercased().replacingOccurrences(of: "’", with: "'")
             let isKnown = sentenceWords.contains(lower) || contractions[lower] != nil
             let isLowercase = word == word.lowercased()
-            // Capitalized unknown words may be names. All caps may be acronyms.
-            guard isLowercase || isKnown else { continue }
+            // Formal keeps possible names. Casual lowercases all unprotected prose.
+            guard tone == .casual || isLowercase || isKnown else { continue }
             if tone == .casual {
                 let replacement = isEnglish && contractions[lower] != nil
                     ? lower.replacingOccurrences(of: "'", with: "") : word.lowercased()
@@ -79,15 +100,13 @@ nonisolated enum TextToneFormatter {
                 result = result.replacingOccurrences(of: #"^(?:(?i:hmm|um|uh)[,\s]+)+"#, with: "", options: .regularExpression)
             }
         }
-        // Touch only a terminal prose period. Keep multiline text, code, URLs and numeric endings.
-        if !result.contains("\n"), !result.contains("`"),
+        // Formal adds only a terminal prose period. Keep multiline text, code and numeric endings.
+        if tone == .formal, !result.contains("\n"), !result.contains("`"),
            let end = result.lastIndex(where: { !$0.isWhitespace }) {
             let last = result[end]
             let trailingLength = result[result.index(after: end)...].utf16.count
             let structuredEnding = protectedRanges.contains { NSMaxRange($0) >= source.length - trailingLength - 1 }
-            if tone == .casual, last == ".", !structuredEnding, result[..<end].last != "." {
-                result.remove(at: end)
-            } else if tone == .formal, last.isLetter, !structuredEnding {
+            if last.isLetter, !structuredEnding {
                 result.insert(".", at: result.index(after: end))
             }
         }
