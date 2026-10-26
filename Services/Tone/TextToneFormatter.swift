@@ -25,8 +25,8 @@ nonisolated enum TextToneFormatter {
         }
         let source = text as NSString
         // Protect structured text before processing words. Numbers and punctuation inside these
-        // spans are never modified, including decimal and thousands separators.
-        let structured = try! NSRegularExpression(pattern: #"(?s)```.*?(?:```|$)|`[^`\n]*(?:`|$)|https?://[^\s]+|www\.[^\s]+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b\d+(?:[.,]\d+)+\b|\b[\w]*[\d_][\w.:-]*\b|\b[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)+\b"#, options: .caseInsensitive)
+        // spans are never modified, including numeric separators with attached units such as “1,234kg”.
+        let structured = try! NSRegularExpression(pattern: #"(?s)```.*?(?:```|$)|`[^`\n]*(?:`|$)|https?://[^\s]+|www\.[^\s]+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b\d+(?:[.,]\d+)+\w*\b|\b[\w]*[\d_][\w.:-]*\b|\b[\p{L}_][\p{L}\p{N}_]*(?:\.[\p{L}_][\p{L}\p{N}_]*)+\b"#, options: .caseInsensitive)
         var protectedRanges = structured.matches(in: text, range: NSRange(location: 0, length: source.length)).map(\.range)
         if tone == .formal {
             let acronyms = try! NSRegularExpression(pattern: #"\b\p{Lu}{2,}\b"#)

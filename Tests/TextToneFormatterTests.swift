@@ -68,6 +68,21 @@ final class TextToneFormatterTests: XCTestCase {
         XCTAssertEqual(formatted("uh huh", .formal), "uh huh")
     }
 
+    func testCasualPreservesNumericSeparatorsWithAttachedUnits() {
+        let quantities = [
+            "1,234kg", "1,234.56kg", "12,5kg", "1.234,56kg",
+            "1,234MB", "1,234cm2", "-1,234kg", "1,234µg"
+        ]
+        for quantity in quantities {
+            let input = "Weight \(quantity), Please."
+            let output = formatted(input, .casual)
+            XCTAssertEqual(output, "weight \(quantity) please", input)
+            XCTAssertEqual(formatted(output, .casual), output, "Formatting must be idempotent: \(input)")
+            XCTAssertEqual(formatted(input, .formal), input)
+        }
+        XCTAssertEqual(formatted("Berat 12,5kg, Tolong.", .casual, english: false), "berat 12,5kg tolong")
+    }
+
     func testNonEnglishNeverGetsEnglishWordReplacement() {
         XCTAssertEqual(formatted("I'm gonna", .formal, english: false), "I'm gonna.")
         XCTAssertEqual(formatted("I'm gonna", .casual, english: false), "i'm gonna")
