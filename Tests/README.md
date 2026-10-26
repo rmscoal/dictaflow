@@ -291,10 +291,11 @@ model preserves every fact.
 
 ## Dictation tone and combined settings
 
-`TextToneFormatterTests` checks conservative English rules, protected structured
-text and vocabulary, non-English behavior, empty output, idempotence, settings
-persistence, and legacy result decoding. `RecordingStartupTests` verifies the
-pipeline with refinement off, on, and failing, including the locked tone snapshot,
+`TextToneFormatterTests` checks Casual prose lowercasing and comma/final-period
+removal, preserved sentence punctuation, protected structured text and vocabulary,
+conservative Formal English rules, non-English behavior, empty output, idempotence,
+settings persistence, and saved version-one output. `RecordingStartupTests` verifies
+the pipeline with refinement off, on, and failing, including the locked tone snapshot,
 inserted/copied text, and retrieving the original. `HistoryStoreTests` checks raw
 and final search/preview, saved rule versions, and upgrade from the v2 schema.
 

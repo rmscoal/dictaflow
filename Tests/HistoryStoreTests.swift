@@ -68,7 +68,7 @@ final class HistoryStoreTests: XCTestCase {
         model.textView = .original
         XCTAssertEqual(model.displayedText, "I'm late.")
         let saved = try await store.detail(capture.id)
-        XCTAssertEqual(saved.refinements.first?.result?.toneFormatting?.formatterVersion, 1)
+        XCTAssertEqual(saved.refinements.first?.result?.toneFormatting?.formatterVersion, 2)
         let finalMatches = try await store.entries(search: "cannot", limit: 50, offset: 0)
         XCTAssertEqual(finalMatches.first?.preview, "I cannot go.")
         let rawMatches = try await store.entries(search: "can't", limit: 50, offset: 0)

@@ -187,8 +187,9 @@ final class RecordingStartupTests: XCTestCase {
             for fails in [false, true] where refinementEnabled || !fails {
                 let root = FileManager.default.temporaryDirectory.appendingPathComponent("TonePipeline-\(UUID())")
                 let store = SQLiteHistoryStore(root: root)
-                let text = "I'm late."
-                let service = PipelineRefinementService(expectedTranscript: text, failsRefinement: fails)
+                let text = "Got it, I'm late. Next, check the CLI framework."
+                let service = PipelineRefinementService(expectedTranscript: text, failsRefinement: fails,
+                    refinedText: "Got it, I will use TypeScript. Next, discuss the CLI framework.")
                 let fixture = try RecordingStartupFixture(
                     whisper: PipelineWhisperService(text: text, languageCode: "en"), refinement: service,
                     usePipelineModels: true, refinementEnabled: refinementEnabled, historyStore: store, allowsInsertion: true)
@@ -205,7 +206,9 @@ final class RecordingStartupTests: XCTestCase {
                 XCTAssertEqual(fixture.state.textTone, .casual, "Tone is locked during a recording")
                 fixture.state.toggleDictation()
                 for _ in 0..<200 where !fixture.state.canProcessHistory { try await Task.sleep(for: .milliseconds(10)) }
-                let final = refinementEnabled && !fails ? "im late. refined" : "im late"
+                let final = refinementEnabled && !fails
+                    ? "got it i will use typescript. next discuss the cli framework"
+                    : "got it im late. next check the cli framework"
                 XCTAssertEqual(fixture.state.lastTranscription?.insertionText, final)
                 XCTAssertEqual(fixture.state.lastTranscription?.text, text)
                 XCTAssertEqual(fixture.insertion.insertedTexts.last, final)
@@ -1354,9 +1357,11 @@ private actor PipelineRefinementService: TranscriptRefinementServiceProtocol {
     var refineCalls = 0
     let expectedTranscript: String?
     let failsRefinement: Bool
-    init(expectedTranscript: String? = nil, failsRefinement: Bool = false) {
+    let refinedText: String?
+    init(expectedTranscript: String? = nil, failsRefinement: Bool = false, refinedText: String? = nil) {
         self.expectedTranscript = expectedTranscript
         self.failsRefinement = failsRefinement
+        self.refinedText = refinedText
     }
     func isRuntimeAvailable(for model: RefinementModelDescriptor) async -> Bool { true }
     func prepare(modelURL: URL) async throws {}
@@ -1368,7 +1373,7 @@ private actor PipelineRefinementService: TranscriptRefinementServiceProtocol {
         if let expectedTranscript { XCTAssertEqual(transcript, expectedTranscript) }
         else { XCTFail("An empty raw transcript must never reach refinement") }
         if failsRefinement { throw TranscriptRefinementServiceError.failedToRun("Synthetic refinement failure") }
-        return TranscriptRefinementResult(originalText: transcript, refinedText: transcript + " refined",
+        return TranscriptRefinementResult(originalText: transcript, refinedText: refinedText ?? transcript + " refined",
             model: configuration.model, mode: configuration.mode, completedAt: Date())
     }
 }

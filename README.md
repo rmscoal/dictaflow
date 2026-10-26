@@ -136,17 +136,21 @@ Until the selected model is downloaded, dictation uses the original transcript.
 
 Tone runs after optional local refinement and before insertion. **Original** is
 the default. **Balanced** preserves the incoming casing, contractions, and
-punctuation. **Casual** lowercases common prose words, simplifies an allowlist of
-English contractions, and removes a terminal prose period. **Formal** expands
-clear English contractions and “gonna”, removes opening fillers, and adds a
-terminal prose period and restores English sentence starts when safe. These rules do not infer grammar or missing
-commas. English word replacements require detected English or translation mode.
+punctuation. **Casual** lowercases prose, including names and acronyms, simplifies
+an allowlist of English contractions, and removes prose commas and the final
+prose period. It keeps periods between sentences, question marks, exclamation
+marks, and ellipses. **Formal** expands clear English contractions and “gonna”,
+removes opening fillers, adds a terminal prose period, and restores English
+sentence starts when safe. These rules do not infer grammar or missing commas.
+English word replacements require detected English or translation mode.
 
-The formatter protects URLs, email addresses, numbers, code spans, identifiers,
-acronyms, and custom vocabulary. It conservatively keeps unfamiliar capitalized
-words, so names are usually preserved, but name detection is not guaranteed.
-Multiline punctuation is left alone. Tone settings are saved independently of
-refinement. Settings are locked during processing.
+The formatter protects casing and punctuation in URLs, email addresses, numbers
+(including decimal and thousands separators), code spans, identifiers, and custom
+vocabulary. Formal also preserves acronyms and unfamiliar capitalized words, so
+names are usually preserved, but name detection is not guaranteed. Line breaks
+are preserved; Casual can still remove prose commas and the final period in
+multiline text. Tone settings are saved independently of refinement. Settings are
+locked during processing.
 
 History saves raw transcripts, raw refinement results, and the final text with
 the selected tone and rule version. **Original**, **Refined**, and **Final** let
