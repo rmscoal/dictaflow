@@ -189,7 +189,7 @@ final class RecordingStartupTests: XCTestCase {
                 let store = SQLiteHistoryStore(root: root)
                 let text = "Got it, I'm late. Next, check the CLI framework."
                 let service = PipelineRefinementService(expectedTranscript: text, failsRefinement: fails,
-                    refinedText: "Got it, I will use TypeScript. Next, discuss the CLI framework.")
+                    refinedText: "Got it, we'll use TypeScript. Next, discuss the CLI framework.")
                 let fixture = try RecordingStartupFixture(
                     whisper: PipelineWhisperService(text: text, languageCode: "en"), refinement: service,
                     usePipelineModels: true, refinementEnabled: refinementEnabled, historyStore: store, allowsInsertion: true)
@@ -207,8 +207,8 @@ final class RecordingStartupTests: XCTestCase {
                 fixture.state.toggleDictation()
                 for _ in 0..<200 where !fixture.state.canProcessHistory { try await Task.sleep(for: .milliseconds(10)) }
                 let final = refinementEnabled && !fails
-                    ? "got it i will use typescript. next discuss the cli framework"
-                    : "got it im late. next check the cli framework"
+                    ? "got it we'll use typescript. next discuss the cli framework"
+                    : "got it i'm late. next check the cli framework"
                 XCTAssertEqual(fixture.state.lastTranscription?.insertionText, final)
                 XCTAssertEqual(fixture.state.lastTranscription?.text, text)
                 XCTAssertEqual(fixture.insertion.insertedTexts.last, final)

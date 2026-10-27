@@ -2,7 +2,7 @@ import Foundation
 
 /// Conservative presentation rules. This does not infer grammar or rewrite meaning.
 nonisolated enum TextToneFormatter {
-    static let version = 2
+    static let version = 3
 
     private static let contractions: [String: String] = [
         "i'm": "I am", "you're": "you are", "we're": "we are", "they're": "they are",
@@ -71,9 +71,9 @@ nonisolated enum TextToneFormatter {
             // Formal keeps possible names. Casual lowercases all unprotected prose.
             guard tone == .casual || isLowercase || isKnown else { continue }
             if tone == .casual {
-                let replacement = isEnglish && contractions[lower] != nil
-                    ? lower.replacingOccurrences(of: "'", with: "") : word.lowercased()
-                output.replaceCharacters(in: match.range, with: replacement)
+                // Preserve apostrophes: removing them can turn a contraction
+                // into a different word (we're -> were, we'll -> well).
+                output.replaceCharacters(in: match.range, with: word.lowercased())
             } else if isEnglish {
                 var replacement = lower == "i" ? "I" : word
                 if let expansion = contractions[lower] {
