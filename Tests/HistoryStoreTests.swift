@@ -68,11 +68,29 @@ final class HistoryStoreTests: XCTestCase {
         model.textView = .original
         XCTAssertEqual(model.displayedText, "I'm late.")
         let saved = try await store.detail(capture.id)
-        XCTAssertEqual(saved.refinements.first?.result?.toneFormatting?.formatterVersion, 2)
+        XCTAssertEqual(saved.refinements.first?.result?.toneFormatting?.formatterVersion, 3)
         let finalMatches = try await store.entries(search: "cannot", limit: 50, offset: 0)
         XCTAssertEqual(finalMatches.first?.preview, "I cannot go.")
         let rawMatches = try await store.entries(search: "can't", limit: 50, offset: 0)
         XCTAssertEqual(rawMatches.count, 1)
+    }
+
+    func testVersionTwoCasualSnapshotSurvivesReopen() async throws {
+        let capture = try await recording()
+        let attempt = try await store.startTranscription(capture.id, configuration: .default)
+        var savedResult = result("Got it, I'm late.")
+        // Realistic version-2 Casual output: prose comma and apostrophe removed.
+        savedResult.toneFormatting = ToneFormattingResult(tone: .casual, formatterVersion: 2, text: "got it im late")
+        try await store.finishTranscription(attempt, result: savedResult, error: nil)
+        await store.releaseAudio(capture.id)
+        store = nil
+        store = SQLiteHistoryStore(root: root)
+        try await store.initialize()
+        let saved = try await store.detail(capture.id)
+        XCTAssertEqual(saved.transcriptions.first?.result?.text, "Got it, I'm late.")
+        XCTAssertEqual(saved.transcriptions.first?.result?.toneFormatting?.formatterVersion, 2)
+        XCTAssertEqual(saved.transcriptions.first?.result?.toneFormatting?.text, "got it im late")
+        XCTAssertEqual(saved.transcriptions.first?.result?.insertionText, "got it im late")
     }
 
     func testVersionTwoDatabaseMigratesWithoutChangingLegacyText() async throws {
