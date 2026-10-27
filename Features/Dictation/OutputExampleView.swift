@@ -1,14 +1,47 @@
 import SwiftUI
 
+/// Composes the EXAMPLE card output: the illustrative writing-style result
+/// (or the original sample when refinement cannot run) passed through the
+/// production final-formatting rules. No inference is performed.
+nonisolated enum OutputExampleComposer {
+    static let originalSample = "Hey um can you review the auth PR by Wednesday? I think it might fix the login issue but yeah we can't ship until we're done testing."
+
+    static func output(refinementUsable: Bool, effectiveMode: RefinementMode, tone: TextTone) -> String {
+        let source = refinementUsable && effectiveMode != .diy
+            ? effectiveMode.writingExample
+            : originalSample
+        return TextToneFormatter.format(source, tone: tone, isEnglish: true).text
+    }
+}
+
 struct OutputExampleView: View {
     @ObservedObject var appState: DictaFlowAppState
-    private let original = "Hey um can you review the auth PR by Wednesday? I think it might fix the login issue but yeah we still need to test it."
-    private let toneExample = "Hmm, I'm gonna be late. There's a cute dog outside. I can't just walk past him."
 
-    private var isTone: Bool { appState.dictationSettingsTab == .tone }
+    /// Mirrors the dictation fallback: refinement only contributes when it
+    /// is enabled and its runtime and selected model are ready.
+    private var refinementUsable: Bool {
+        appState.refinementConfiguration.isEnabled
+            && appState.isRefinementRuntimeAvailable
+            && appState.isSelectedRefinementModelPrepared
+    }
+
     private var result: String {
-        let source = isTone ? toneExample : appState.refinementConfiguration.isEnabled && appState.effectiveRefinementStyle.mode != .diy ? appState.effectiveRefinementStyle.mode.writingExample : original
-        return isTone ? TextToneFormatter.format(source, tone: appState.textTone, isEnglish: true).text : source
+        OutputExampleComposer.output(
+            refinementUsable: refinementUsable,
+            effectiveMode: appState.effectiveRefinementStyle.mode,
+            tone: appState.textTone
+        )
+    }
+
+    private var footerText: String {
+        if refinementUsable {
+            return appState.effectiveRefinementStyle.mode.title + (appState.effectiveRefinementStyle.source == .rule
+                ? " · per-app rule for " + (appState.lastKnownExternalTargetApplication?.displayName ?? "app")
+                : " · default style")
+        }
+        return appState.refinementConfiguration.isEnabled
+            ? "Formatting only · refinement unavailable"
+            : "Formatting only · refinement off"
     }
 
     var body: some View {
@@ -21,32 +54,18 @@ struct OutputExampleView: View {
                 }
                 .foregroundStyle(AppTheme.paperSecondaryText).padding(.bottom, 30)
                 caption("As dictated")
-                Text(isTone ? toneExample : original).font(.system(size: 13)).lineSpacing(7)
+                Text(OutputExampleComposer.originalSample).font(.system(size: 13)).lineSpacing(7)
                     .foregroundStyle(AppTheme.paperSecondaryText).padding(.top, 10).padding(.bottom, 25)
                 Rectangle().fill(AppTheme.paperBorder).frame(height: 1)
-                caption(isTone ? appState.textTone.title : "Ready to share" + (appState.lastKnownExternalTargetApplication.map { " · " + $0.displayName } ?? "")).padding(.top, 25)
+                caption("Ready to share" + (appState.lastKnownExternalTargetApplication.map { " · " + $0.displayName } ?? "")).padding(.top, 25)
                 Text(result).font(.system(size: 21)).tracking(-0.35).lineSpacing(9)
                     .foregroundStyle(AppTheme.paperText)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 10).padding(.bottom, 30)
                 Spacer(minLength: 0)
-                if !isTone {
-                    Rectangle().fill(AppTheme.paperBorder).frame(height: 1)
-                    Text(appState.refinementConfiguration.isEnabled
-                        ? appState.effectiveRefinementStyle.mode.title + (appState.effectiveRefinementStyle.source == .rule
-                            ? " · per-app rule for " + (appState.lastKnownExternalTargetApplication?.displayName ?? "app")
-                            : " · default style")
-                        : "Tone only · refinement off")
-                        .font(.system(size: 11)).foregroundStyle(AppTheme.paperSecondaryText).padding(.top, 16)
-                }
-                if isTone {
-                    Rectangle().fill(AppTheme.paperBorder).frame(height: 1)
-                    HStack {
-                        Label("\(appState.textTone.title) tone", systemImage: "slider.horizontal.3")
-                        Spacer()
-                    }
+                Rectangle().fill(AppTheme.paperBorder).frame(height: 1)
+                Text(footerText)
                     .font(.system(size: 11)).foregroundStyle(AppTheme.paperSecondaryText).padding(.top, 16)
-                }
             }
             .padding(24).frame(maxWidth: .infinity, minHeight: 410, alignment: .topLeading)
             .background(AppTheme.paper, in: RoundedRectangle(cornerRadius: 24, style: .continuous))

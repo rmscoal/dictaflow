@@ -169,6 +169,56 @@ final class TextToneFormatterTests: XCTestCase {
         XCTAssertEqual(UserDefaultsSettingsStore(defaults: defaults).textTone, .original)
     }
 
+    func testFinalFormattingSliderMapping() {
+        XCTAssertEqual(TextTone.casual.finalFormattingPosition, 0)
+        XCTAssertEqual(TextTone.original.finalFormattingPosition, 1)
+        XCTAssertEqual(TextTone.formal.finalFormattingPosition, 2)
+        XCTAssertEqual(TextTone.finalFormattingTone(at: 0), .casual)
+        XCTAssertEqual(TextTone.finalFormattingTone(at: 1), .original)
+        XCTAssertEqual(TextTone.finalFormattingTone(at: 2), .formal)
+        XCTAssertEqual(TextTone.finalFormattingTone(at: -1), .casual)
+        XCTAssertEqual(TextTone.finalFormattingTone(at: 3), .formal)
+        XCTAssertEqual(TextTone.casual.finalFormattingTitle, "Casual")
+        XCTAssertEqual(TextTone.original.finalFormattingTitle, "Original")
+        XCTAssertEqual(TextTone.formal.finalFormattingTitle, "Formal")
+    }
+
+    func testLegacyBalancedMapsToCenterWithoutRewritingStoredValue() throws {
+        XCTAssertEqual(TextTone.balanced.finalFormattingPosition, 1)
+        XCTAssertEqual(TextTone.balanced.finalFormattingTitle, "Original")
+        let name = "FinalFormattingBalancedTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = UserDefaultsSettingsStore(defaults: defaults)
+        store.saveTextTone(.balanced)
+        XCTAssertEqual(store.textTone, .balanced)
+        // Merely reading the preference must not rewrite the stored value.
+        XCTAssertEqual(defaults.string(forKey: "dictation.textTone"), "balanced")
+        // The balanced center behaves exactly like Original in the formatter.
+        let text = "Hey, I can't ship until we're done."
+        XCTAssertEqual(formatted(text, .balanced), formatted(text, .original))
+    }
+
+    func testExampleCompositionAppliesRealFormatting() {
+        let usableSmartFormal = OutputExampleComposer.output(refinementUsable: true, effectiveMode: .smartCleanup, tone: .formal)
+        XCTAssertEqual(usableSmartFormal,
+                       "Hey, can you review the auth PR by Wednesday? It might fix the login issue, but we cannot ship until we are done testing.")
+        let usableSmartOriginal = OutputExampleComposer.output(refinementUsable: true, effectiveMode: .smartCleanup, tone: .original)
+        XCTAssertEqual(usableSmartOriginal, RefinementMode.smartCleanup.writingExample)
+        let offFormal = OutputExampleComposer.output(refinementUsable: false, effectiveMode: .smartCleanup, tone: .formal)
+        XCTAssertEqual(offFormal,
+                       "Hey um can you review the auth PR by Wednesday? I think it might fix the login issue but yeah we cannot ship until we are done testing.")
+        let offCasual = OutputExampleComposer.output(refinementUsable: false, effectiveMode: .smartCleanup, tone: .casual)
+        XCTAssertEqual(offCasual,
+                       "hey um can you review the auth pr by wednesday? i think it might fix the login issue but yeah we can't ship until we're done testing")
+        // DIY never pretends to execute custom instructions in the preview.
+        let diyFormal = OutputExampleComposer.output(refinementUsable: true, effectiveMode: .diy, tone: .formal)
+        XCTAssertEqual(diyFormal, offFormal)
+        // Legacy balanced shows the same composed output as Original.
+        XCTAssertEqual(OutputExampleComposer.output(refinementUsable: true, effectiveMode: .smartCleanup, tone: .balanced),
+                       usableSmartOriginal)
+    }
+
     func testLegacyResultsDecodeAndFinalTextUsesSavedSnapshot() throws {
         let raw = WhisperTranscriptionResult(text: "I'm late.", segments: [], detectedLanguageCode: "en", model: .base, taskMode: .transcribe, completedAt: Date())
         let decoded = try JSONDecoder().decode(WhisperTranscriptionResult.self, from: JSONEncoder().encode(raw))

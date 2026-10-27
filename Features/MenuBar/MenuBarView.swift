@@ -22,8 +22,6 @@ struct MenuBarView: View {
                 pipelineRow(.transcription, title: "Transcription", detail: "Whisper \(appState.whisperConfiguration.model.displayName)", asset: "provider-openai")
                 EmberDivider()
                 pipelineRow(.refinement, title: "Refinement", detail: appState.refinementConfiguration.isEnabled ? appState.refinementConfiguration.model.displayName : "Off", asset: appState.refinementConfiguration.model.provider?.iconName)
-                EmberDivider()
-                pipelineRow(.tone, title: "Tone", detail: appState.textTone.title, asset: nil)
             }
             .padding(.top, 4)
             EmberDivider()

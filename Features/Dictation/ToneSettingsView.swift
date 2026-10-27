@@ -1,50 +1,66 @@
 import SwiftUI
 
+/// Final formatting controls. The visible three-stop slider reuses the
+/// persisted `TextTone` preference; only the presentation changed.
 struct ToneSettingsView: View {
     @ObservedObject var appState: DictaFlowAppState
 
+    private var isLocked: Bool {
+        appState.whisperSettingsLocked || appState.refinementSettingsLocked
+    }
+
+    private var selectedPosition: Int {
+        appState.textTone.finalFormattingPosition
+    }
+
+    private var sliderValue: Binding<Double> {
+        Binding(
+            get: { Double(appState.textTone.finalFormattingPosition) },
+            set: { newValue in
+                let tone = TextTone.finalFormattingTone(at: Int(newValue.rounded()))
+                guard tone != appState.textTone else { return }
+                appState.updateTextTone(tone)
+            }
+        )
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                ForEach(TextTone.allCases) { tone in
-                    Button { appState.updateTextTone(tone) } label: {
-                        VStack(alignment: .leading, spacing: 7) {
-                            HStack {
-                                Text(glyph(tone)).font(.system(size: 27, weight: .medium))
-                                Spacer()
-                                if appState.textTone == tone { Image(systemName: "checkmark").font(.system(size: 12)) }
-                            }
-                            .padding(.bottom, 9)
-                            Text(tone.title).font(.system(size: 13, weight: .medium))
-                            Text(detail(tone)).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
-                        }
-                        .padding(18).frame(maxWidth: .infinity, minHeight: 135, alignment: .topLeading)
-                        .foregroundStyle(appState.textTone == tone ? AppTheme.accent : AppTheme.primaryText)
-                        .background(appState.textTone == tone ? AppTheme.selectedFill : AppTheme.tileFill,
-                                    in: RoundedRectangle(cornerRadius: 20))
-                        .overlay { RoundedRectangle(cornerRadius: 20).stroke(appState.textTone == tone ? AppTheme.accent : AppTheme.border, lineWidth: 1) }
-                        .contentShape(RoundedRectangle(cornerRadius: 20))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(appState.whisperSettingsLocked || appState.refinementSettingsLocked)
-                    .accessibilityLabel("\(tone.title), \(detail(tone))")
-                    .accessibilityAddTraits(appState.textTone == tone ? .isSelected : [])
+        EmberPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Applies to every app, after the writing style.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(AppTheme.secondaryText)
+                Slider(value: sliderValue, in: 0...2, step: 1)
+                    .tint(AppTheme.accent)
+                    .disabled(isLocked)
+                    .accessibilityLabel("Final formatting")
+                    .accessibilityValue(appState.textTone.finalFormattingTitle)
+                HStack(spacing: 0) {
+                    labelButton(title: "Casual", position: 0, alignment: .leading)
+                    labelButton(title: "Original", position: 1, alignment: .center)
+                    labelButton(title: "Formal", position: 2, alignment: .trailing)
                 }
             }
-            .accessibilityElement(children: .contain).accessibilityLabel("Text tone")
+            .padding(20)
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Final formatting")
     }
 
-    private func glyph(_ tone: TextTone) -> String {
-        switch tone { case .original, .formal: "Aa"; case .casual: "aa"; case .balanced: "Aa." }
-    }
-
-    private func detail(_ tone: TextTone) -> String {
-        switch tone {
-        case .original: "Keep as dictated"
-        case .casual: "Relaxed casing"
-        case .balanced: "Keep formatting"
-        case .formal: "Expand contractions"
+    private func labelButton(title: String, position: Int, alignment: Alignment) -> some View {
+        let isSelected = selectedPosition == position
+        return Button {
+            appState.updateTextTone(TextTone.finalFormattingTone(at: position))
+        } label: {
+            Text(title)
+                .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? AppTheme.accent : AppTheme.secondaryText)
+                .frame(maxWidth: .infinity, alignment: alignment)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .disabled(isLocked)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

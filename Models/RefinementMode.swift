@@ -16,10 +16,10 @@ nonisolated enum RefinementMode: String, Codable, Equatable, CaseIterable {
     var detailText: String { title }
     var writingExample: String {
         switch self {
-        case .smartCleanup: "Hey, can you review the auth PR by Wednesday? It might fix the login issue, but we still need to test it."
-        case .professionalFormal: "Could you please review the authentication PR by Wednesday?\n\nIt may resolve the login issue. Further testing is still required."
-        case .casualMessaging: "hey, can u review the auth PR by Wed? might fix the login issue, but we still need to test it."
-        case .technicalEngineering: "Please review the authentication PR by Wednesday.\n\nIt may fix the login issue. Testing is still required."
+        case .smartCleanup: "Hey, can you review the auth PR by Wednesday? It might fix the login issue, but we can't ship until we're done testing."
+        case .professionalFormal: "Could you please review the authentication PR by Wednesday?\n\nIt may resolve the login issue, but we can't ship until testing is complete."
+        case .casualMessaging: "hey, can u review the auth PR by Wed? might fix the login issue, but we can't ship until we're done testing."
+        case .technicalEngineering: "Please review the authentication PR by Wednesday.\n\nIt may fix the login issue, but we can't ship until testing is complete."
         case .diy: ""
         }
     }

@@ -60,6 +60,9 @@ struct RefinementSettingsView: View {
             if let error = appState.refinementWritingError {
                 EmberErrorBanner(title: "Could not save instructions", message: error).padding(.top, 14)
             }
+            EmberSectionHeading(title: "Final formatting")
+                .padding(.top, 18)
+            ToneSettingsView(appState: appState)
         }
         .onAppear { if appState.isPresetInstructionsDirty { instructionsExpanded = true } }
         .alert("Reset the system prompt?", isPresented: $confirmsPromptReset) {
