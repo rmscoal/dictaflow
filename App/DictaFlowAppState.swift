@@ -1011,7 +1011,7 @@ final class DictaFlowAppState: ObservableObject {
         }
         let term = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleaned = spellings.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        if isFromHistory, let existing = vocabularySettings.entry(matchingTerm: term) {
+        if isFromHistory, editingID == nil, let existing = vocabularySettings.entry(matchingTerm: term) {
             var updated = existing
             for spelling in cleaned where !updated.replacementSpellings.contains(where: { VocabularySettings.normalizedKey($0) == VocabularySettings.normalizedKey(spelling) }) {
                 updated.replacementSpellings.append(spelling)

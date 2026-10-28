@@ -220,6 +220,24 @@ final class RecordingStartupTests: XCTestCase {
         }
     }
 
+    func testVocabularyExplicitEditReplacesSpellingsWhileHistoryCorrectionMerges() throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        XCTAssertNil(fixture.state.saveVocabularyEntry(id: nil, text: "Claude", spellings: ["cloud", "clod"]))
+        let claudeID = try XCTUnwrap(fixture.state.vocabularySettings.entries.first?.id)
+        // Explicit edit routed from a History conflict: removals take effect.
+        XCTAssertNil(fixture.state.saveVocabularyEntry(id: claudeID, text: "Claude", spellings: ["cloud"], isFromHistory: true))
+        XCTAssertEqual(fixture.state.vocabularySettings.entries.count, 1)
+        XCTAssertEqual(fixture.state.vocabularySettings.entries.first?.id, claudeID)
+        XCTAssertEqual(fixture.state.vocabularySettings.entries.first?.replacementSpellings, ["cloud"])
+        XCTAssertEqual(fixture.state.enabledVocabularyRules.map(\.trigger), ["cloud"])
+        // Initial History correction still merges into the existing entry.
+        XCTAssertNil(fixture.state.saveVocabularyEntry(id: nil, text: "Claude", spellings: ["clawd"], isFromHistory: true))
+        XCTAssertEqual(fixture.state.vocabularySettings.entries.count, 1)
+        XCTAssertEqual(fixture.state.vocabularySettings.entries.first?.id, claudeID)
+        XCTAssertEqual(fixture.state.vocabularySettings.entries.first?.replacementSpellings, ["cloud", "clawd"])
+    }
+
     func testTonePipelineWithRefinementOffOnAndFailure() async throws {
         for refinementEnabled in [false, true] {
             for fails in [false, true] where refinementEnabled || !fails {
