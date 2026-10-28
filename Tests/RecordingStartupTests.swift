@@ -236,6 +236,15 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(fixture.state.vocabularySettings.entries.count, 1)
         XCTAssertEqual(fixture.state.vocabularySettings.entries.first?.id, claudeID)
         XCTAssertEqual(fixture.state.vocabularySettings.entries.first?.replacementSpellings, ["cloud", "clawd"])
+        // An explicit History edit cannot rename Claude onto another term.
+        XCTAssertNil(fixture.state.saveVocabularyEntry(id: nil, text: "Notion", spellings: ["note"]))
+        let notion = try XCTUnwrap(fixture.state.vocabularySettings.entry(matchingTerm: "Notion"))
+        XCTAssertEqual(
+            fixture.state.saveVocabularyEntry(id: claudeID, text: "Notion", spellings: ["cloud"], isFromHistory: true),
+            .duplicateTerm(existing: notion))
+        XCTAssertEqual(fixture.state.vocabularySettings.entries.filter { $0.text == "Notion" }.count, 1)
+        XCTAssertEqual(fixture.state.vocabularySettings.entries.count, 2)
+        XCTAssertEqual(fixture.state.vocabularySettings.entry(matchingTerm: "Claude")?.id, claudeID)
     }
 
     func testTonePipelineWithRefinementOffOnAndFailure() async throws {

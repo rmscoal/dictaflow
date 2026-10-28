@@ -107,7 +107,11 @@ nonisolated struct VocabularySettings: Codable, Equatable {
         }
         let cleaned = spellings.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         for spelling in cleaned where !Self.isValidTerm(spelling) { return .invalidSpelling }
-        if let existing = entry(matchingTerm: term), existing.id != editingID, !isFromHistory {
+        // Initial History corrections (no editingID) merge into the matching
+        // entry, so an existing term is not a duplicate there. Explicit edits
+        // replace the entry and must not rename onto another entry's term.
+        let isInitialHistoryCorrection = isFromHistory && editingID == nil
+        if let existing = entry(matchingTerm: term), existing.id != editingID, !isInitialHistoryCorrection {
             return .duplicateTerm(existing: existing)
         }
         // Duplicates within the candidate.
@@ -123,11 +127,11 @@ nonisolated struct VocabularySettings: Codable, Equatable {
             if let owner = entryOwningSpelling(spelling, excludingEntryID: editingID) {
                 // When merging from History into the matching term entry, spellings
                 // already owned by that same entry are not a conflict.
-                if isFromHistory, let target = entry(matchingTerm: term), owner.id == target.id { continue }
+                if isInitialHistoryCorrection, let target = entry(matchingTerm: term), owner.id == target.id { continue }
                 return .spellingConflict(spelling: spelling, owner: owner)
             }
         }
-        if isFromHistory && cleaned.isEmpty { return .missingSpelling }
+        if isInitialHistoryCorrection && cleaned.isEmpty { return .missingSpelling }
         if editingID == nil && entry(matchingTerm: term) == nil && entries.count >= Self.maxEntries {
             return .limitReached
         }

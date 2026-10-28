@@ -88,6 +88,29 @@ final class VocabularyTests: XCTestCase {
         XCTAssertNotNil(settings.validationError(text: "New", spellings: ["of"]))
     }
 
+    func testExplicitHistoryEditCannotRenameOntoAnotherTerm() {
+        let settings = VocabularySettings(entries: [
+            VocabularyEntry(text: "Claude", replacementSpellings: ["cloud", "clod"]),
+            VocabularyEntry(text: "Notion", replacementSpellings: ["note"])
+        ])
+        let claude = settings.entries[0]
+        let notion = settings.entries[1]
+        // Explicit edit opened from History must not create a duplicate term.
+        XCTAssertEqual(
+            settings.validationError(text: "Notion", spellings: ["cloud"], editingID: claude.id, isFromHistory: true),
+            .duplicateTerm(existing: notion))
+        // The duplicate-term error wins even when the spelling is also owned
+        // by the rename target.
+        XCTAssertEqual(
+            settings.validationError(text: "Notion", spellings: ["note"], editingID: claude.id, isFromHistory: true),
+            .duplicateTerm(existing: notion))
+        // Explicit edits may remove every spelling, like manager edits.
+        XCTAssertNil(settings.validationError(text: "Claude", spellings: [], editingID: claude.id, isFromHistory: true))
+        // Initial History corrections still merge into the matching entry.
+        XCTAssertNil(settings.validationError(text: "Claude", spellings: ["clawd"], isFromHistory: true))
+        XCTAssertEqual(settings.validationError(text: "Claude", spellings: [], isFromHistory: true), .missingSpelling)
+    }
+
     func testHistoryCorrectionCannotExceedEntryLimitButCanMerge() {
         let settings = VocabularySettings(entries: (1...VocabularySettings.maxEntries).map { VocabularyEntry(text: "Term \($0)") })
         XCTAssertEqual(settings.entries.count, VocabularySettings.maxEntries)

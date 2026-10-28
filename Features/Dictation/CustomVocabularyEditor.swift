@@ -319,7 +319,7 @@ struct VocabularyEntryEditorView: View {
         if let error = appState.saveVocabularyEntry(id: editingID, text: term, spellings: spellingTexts, isFromHistory: isFromHistory) {
             errorMessage = error.message
             if case .spellingConflict(_, let owner) = error { conflictOwner = owner }
-            if case .duplicateTerm(let existing) = error, !isFromHistory { conflictOwner = existing }
+            if case .duplicateTerm(let existing) = error, !(isFromHistory && editingID == nil) { conflictOwner = existing }
             return
         }
         dismiss()
