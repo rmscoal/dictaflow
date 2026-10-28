@@ -26,6 +26,9 @@ build/
 .build/
 .swiftpm/
 
+# Generated previews and prototypes
+/output/
+
 # Editor / tool state
 .codex/
 *.swp
