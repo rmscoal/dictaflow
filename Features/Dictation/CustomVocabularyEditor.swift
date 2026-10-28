@@ -100,7 +100,7 @@ struct VocabularyManagerView: View {
                 }
             }
             let enabledCount = appState.vocabularySettings.entries.filter(\.isEnabled).count
-            Text("\(enabledCount) enabled · \(appState.vocabularySettings.entries.count) total")
+            Text("\(enabledCount) active · \(appState.vocabularySettings.entries.count) total")
                 .font(.system(size: 11))
                 .foregroundStyle(AppTheme.secondaryText)
             Spacer(minLength: 0)
@@ -142,11 +142,8 @@ private struct VocabularyRow: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        Button("Edit", action: onEdit)
-            .buttonStyle(EmberButtonStyle())
-            .disabled(appState.whisperSettingsLocked)
         HStack(spacing: 6) {
-            Text(entry.isEnabled ? "On" : "Off")
+            Text(entry.isEnabled ? "Active" : "Inactive")
                 .font(.system(size: 11))
                 .foregroundStyle(AppTheme.secondaryText)
             Toggle("Enable \(entry.text)", isOn: Binding(
@@ -158,8 +155,11 @@ private struct VocabularyRow: View {
             .labelsHidden()
             .disabled(appState.whisperSettingsLocked)
             .accessibilityLabel("Enable \(entry.text)")
-            .accessibilityValue(entry.isEnabled ? "On" : "Off")
+            .accessibilityValue(entry.isEnabled ? "Active" : "Inactive")
         }
+        Button("Edit", action: onEdit)
+            .buttonStyle(EmberButtonStyle())
+            .disabled(appState.whisperSettingsLocked)
     }
 }
 
@@ -205,7 +205,7 @@ struct VocabularyEntryEditorView: View {
             return "This correction is already saved in your vocabulary."
         }
         var notice = "This word is already in your vocabulary. Saving adds this spelling to \(existing.text)."
-        if !existing.isEnabled { notice += " This entry is disabled and will stay disabled." }
+        if !existing.isEnabled { notice += " This entry is inactive and will stay inactive." }
         return notice
     }
 
@@ -283,8 +283,13 @@ struct VocabularyEntryEditorView: View {
                         .buttonStyle(EmberButtonStyle())
                     }
                 }
+                // Inset the fields so their focus rings are not clipped by
+                // the scroll view; the matching negative margin below keeps
+                // the fields aligned with the title and buttons.
+                .padding(.horizontal, 4)
                 .padding(.bottom, 8)
             }
+            .padding(.horizontal, -4)
             HStack(spacing: 8) {
                 if let editingID {
                     Button(role: .destructive) {

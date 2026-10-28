@@ -98,13 +98,26 @@ struct TranscriptionSettingsView: View {
 
     private var soundCues: some View {
         VStack(alignment: .leading, spacing: 15) {
-            Toggle("Play sound cues", isOn: Binding(get: { appState.soundCuesEnabled }, set: { appState.updateSoundCuesEnabled($0) }))
-                .toggleStyle(.switch).controlSize(.mini)
-            Picker("Sound style", selection: Binding(get: { appState.soundCueStyle }, set: { appState.updateSoundCueStyle($0) })) {
-                ForEach(SoundCueStyle.allCases) { Text($0.title).tag($0) }
+            HStack(spacing: 14) {
+                Text("Play sound cues")
+                Spacer(minLength: 12)
+                Toggle("Play sound cues", isOn: Binding(get: { appState.soundCuesEnabled }, set: { appState.updateSoundCuesEnabled($0) }))
+                    .toggleStyle(.switch).controlSize(.mini).labelsHidden()
+                    .accessibilityLabel("Play sound cues")
             }
-            .disabled(!appState.soundCuesEnabled)
+            HStack(spacing: 14) {
+                Text("Sound style")
+                Spacer(minLength: 12)
+                selectionMenu(label: "Sound style", title: appState.soundCueStyle.title) {
+                    Picker("Sound style", selection: Binding(get: { appState.soundCueStyle }, set: { appState.updateSoundCueStyle($0) })) {
+                        ForEach(SoundCueStyle.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.inline).labelsHidden()
+                }
+                .disabled(!appState.soundCuesEnabled)
+            }
             HStack(spacing: 8) {
+                Spacer(minLength: 0)
                 ForEach(SoundCue.allCases) { cue in
                     Button { appState.previewSoundCue(cue) } label: { Label(cue.title, systemImage: "play.fill") }
                         .buttonStyle(EmberButtonStyle())
@@ -113,7 +126,10 @@ struct TranscriptionSettingsView: View {
             }
             .disabled(!appState.soundCuesEnabled)
             if let message = appState.soundCuePlaybackMessage {
-                Text(message).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    Text(message).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+                }
             }
         }
         .disabled(appState.whisperSettingsLocked)
