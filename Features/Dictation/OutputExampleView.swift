@@ -34,7 +34,11 @@ struct OutputExampleView: View {
     }
 
     private var styleTagValue: String {
-        refinementUsable ? appState.effectiveRefinementStyle.mode.title : "Off"
+        guard refinementUsable else { return "Off" }
+        // DIY custom instructions are never executed in the preview.
+        return appState.effectiveRefinementStyle.mode == .diy
+            ? "DIY (not previewed)"
+            : appState.effectiveRefinementStyle.mode.title
     }
 
     var body: some View {
