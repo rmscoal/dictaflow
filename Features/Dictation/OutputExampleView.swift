@@ -33,15 +33,8 @@ struct OutputExampleView: View {
         )
     }
 
-    private var footerText: String {
-        if refinementUsable {
-            return appState.effectiveRefinementStyle.mode.title + (appState.effectiveRefinementStyle.source == .rule
-                ? " · per-app rule for " + (appState.lastKnownExternalTargetApplication?.displayName ?? "app")
-                : " · default style")
-        }
-        return appState.refinementConfiguration.isEnabled
-            ? "Formatting only · refinement unavailable"
-            : "Formatting only · refinement off"
+    private var styleTagValue: String {
+        refinementUsable ? appState.effectiveRefinementStyle.mode.title : "Off"
     }
 
     var body: some View {
@@ -57,15 +50,18 @@ struct OutputExampleView: View {
                 Text(OutputExampleComposer.originalSample).font(.system(size: 13)).lineSpacing(7)
                     .foregroundStyle(AppTheme.paperSecondaryText).padding(.top, 10).padding(.bottom, 25)
                 Rectangle().fill(AppTheme.paperBorder).frame(height: 1)
-                caption("Ready to share" + (appState.lastKnownExternalTargetApplication.map { " · " + $0.displayName } ?? "")).padding(.top, 25)
+                caption("Result").padding(.top, 25)
                 Text(result).font(.system(size: 21)).tracking(-0.35).lineSpacing(9)
                     .foregroundStyle(AppTheme.paperText)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 10).padding(.bottom, 30)
                 Spacer(minLength: 0)
-                Rectangle().fill(AppTheme.paperBorder).frame(height: 1)
-                Text(footerText)
-                    .font(.system(size: 11)).foregroundStyle(AppTheme.paperSecondaryText).padding(.top, 16)
+                HStack(spacing: 6) {
+                    tag(label: "Style", value: styleTagValue)
+                    tag(label: "Formatting", value: appState.textTone.finalFormattingTitle)
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 16)
             }
             .padding(24).frame(maxWidth: .infinity, minHeight: 410, alignment: .topLeading)
             .background(AppTheme.paper, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -77,5 +73,16 @@ struct OutputExampleView: View {
 
     private func caption(_ text: String) -> some View {
         Text(text).font(.system(size: 11)).foregroundStyle(AppTheme.paperSecondaryText)
+    }
+
+    private func tag(label: String, value: String) -> some View {
+        HStack(spacing: 4) {
+            Text(label + ":").foregroundStyle(AppTheme.paperSecondaryText)
+            Text(value).fontWeight(.semibold).foregroundStyle(AppTheme.paperText)
+        }
+        .font(.system(size: 11))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 2)
+        .overlay { Capsule().stroke(AppTheme.paperBorder, lineWidth: 1) }
     }
 }
