@@ -128,7 +128,7 @@ nonisolated struct VocabularySettings: Codable, Equatable {
             }
         }
         if isFromHistory && cleaned.isEmpty { return .missingSpelling }
-        if editingID == nil && entry(matchingTerm: term) == nil && entries.count >= Self.maxEntries && !isFromHistory {
+        if editingID == nil && entry(matchingTerm: term) == nil && entries.count >= Self.maxEntries {
             return .limitReached
         }
         return nil
@@ -144,6 +144,7 @@ nonisolated enum VocabularyValidationError: Equatable {
     case spellingConflict(spelling: String, owner: VocabularyEntry)
     case missingSpelling
     case limitReached
+    case settingsLocked
 
     var message: String {
         switch self {
@@ -154,6 +155,7 @@ nonisolated enum VocabularyValidationError: Equatable {
         case .spellingConflict(let spelling, let owner): return "\u{201C}\(spelling)\u{201D} is already replaced with \u{201C}\(owner.text)\u{201D}. Edit that entry to change it."
         case .missingSpelling: return "Enter the transcript spelling you want corrected."
         case .limitReached: return "You already have \(VocabularySettings.maxEntries) vocabulary entries. Remove one to add another."
+        case .settingsLocked: return "Vocabulary can't be changed while dictation or processing is active. Try again when it finishes."
         }
     }
 }

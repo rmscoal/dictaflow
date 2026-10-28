@@ -181,7 +181,7 @@ actor WhisperCPPService: WhisperServiceProtocol {
             candidate.withCString { Int(whisper_token_count(context.pointer, $0)) }
         }, budget: available)
         if !result.excluded.isEmpty {
-            logger.info("Whisper initial prompt excluded \(result.excluded.count, privacy: .public) vocabulary terms over token budget: \(result.excluded.joined(separator: ", "), privacy: .public)")
+            logger.info("Whisper initial prompt excluded \(result.excluded.count, privacy: .public) vocabulary terms over token budget: \(result.excluded.joined(separator: ", "), privacy: .private)")
         }
         return (result.included.isEmpty ? nil : result.included.joined(separator: ", "), result.excluded)
     }

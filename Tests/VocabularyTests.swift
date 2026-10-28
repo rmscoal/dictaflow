@@ -88,6 +88,14 @@ final class VocabularyTests: XCTestCase {
         XCTAssertNotNil(settings.validationError(text: "New", spellings: ["of"]))
     }
 
+    func testHistoryCorrectionCannotExceedEntryLimitButCanMerge() {
+        let settings = VocabularySettings(entries: (1...VocabularySettings.maxEntries).map { VocabularyEntry(text: "Term \($0)") })
+        XCTAssertEqual(settings.entries.count, VocabularySettings.maxEntries)
+        XCTAssertEqual(settings.validationError(text: "New Term", spellings: ["new term"], isFromHistory: true), .limitReached)
+        // Merging a spelling into an existing term stays allowed at the limit.
+        XCTAssertNil(settings.validationError(text: "Term 1", spellings: ["term one"], isFromHistory: true))
+    }
+
     // MARK: Persistence and migration
 
     func testLegacyMigrationAndRoundTrip() throws {

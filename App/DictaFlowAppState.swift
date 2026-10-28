@@ -1005,7 +1005,7 @@ final class DictaFlowAppState: ObservableObject {
     /// Returns a validation error to show inline, or nil on success.
     @discardableResult
     func saveVocabularyEntry(id editingID: UUID?, text: String, spellings: [String], isFromHistory: Bool = false) -> VocabularyValidationError? {
-        guard !whisperSettingsLocked else { return nil }
+        guard !whisperSettingsLocked else { return .settingsLocked }
         if let error = vocabularySettings.validationError(text: text, spellings: spellings, editingID: editingID, isFromHistory: isFromHistory) {
             return error
         }

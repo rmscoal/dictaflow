@@ -163,25 +163,34 @@ private struct VocabularyRow: View {
     }
 }
 
+private struct SpellingRow: Identifiable {
+    let id = UUID()
+    var text: String
+}
+
 /// Shared editor for Add, Edit, and History correction.
 struct VocabularyEntryEditorView: View {
     @ObservedObject var appState: DictaFlowAppState
     @Environment(\.dismiss) private var dismiss
     @State private var editingID: UUID?
     @State private var term: String
-    @State private var spellings: [String]
+    @State private var spellings: [SpellingRow]
     @State private var errorMessage: String?
     @State private var conflictOwner: VocabularyEntry?
     let isFromHistory: Bool
 
-    @FocusState private var focusedSpelling: Int?
+    @FocusState private var focusedSpelling: UUID?
 
     init(appState: DictaFlowAppState, entryID: UUID?, initialTerm: String, initialSpellings: [String], isFromHistory: Bool) {
         self.appState = appState
         self.isFromHistory = isFromHistory
         _editingID = State(initialValue: entryID)
         _term = State(initialValue: initialTerm)
-        _spellings = State(initialValue: initialSpellings)
+        _spellings = State(initialValue: initialSpellings.map { SpellingRow(text: $0) })
+    }
+
+    private var spellingTexts: [String] {
+        spellings.map(\.text)
     }
 
     private var existingEntry: VocabularyEntry? {
@@ -190,7 +199,7 @@ struct VocabularyEntryEditorView: View {
 
     private var mergeNotice: String? {
         guard isFromHistory, let existing = existingEntry, editingID == nil else { return nil }
-        let cleaned = spellings.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let cleaned = spellingTexts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !cleaned.isEmpty else { return nil }
         if !cleaned.isEmpty, cleaned.allSatisfy({ candidate in existing.replacementSpellings.contains { VocabularySettings.normalizedKey($0) == VocabularySettings.normalizedKey(candidate) } }) {
             return "This correction is already saved in your vocabulary."
@@ -218,20 +227,21 @@ struct VocabularyEntryEditorView: View {
                     Text("Also replace these spellings (optional)")
                         .font(.system(size: 12, weight: .semibold))
                         .padding(.top, 12)
-                    ForEach(spellings.indices, id: \.self) { index in
+                    ForEach($spellings) { $row in
                         HStack(spacing: 8) {
-                            TextField("e.g. dicta flow", text: $spellings[index])
+                            TextField("e.g. dicta flow", text: $row.text)
                                 .textFieldStyle(.roundedBorder)
-                                .focused($focusedSpelling, equals: index)
+                                .focused($focusedSpelling, equals: row.id)
                             Button("Remove") {
-                                spellings.remove(at: index)
+                                spellings.removeAll { $0.id == row.id }
                             }
                             .buttonStyle(EmberButtonStyle())
                         }
                     }
                     Button("Add spelling") {
-                        spellings.append("")
-                        focusedSpelling = spellings.count - 1
+                        let row = SpellingRow(text: "")
+                        spellings.append(row)
+                        focusedSpelling = row.id
                     }
                     .buttonStyle(EmberButtonStyle())
                     .padding(.top, 4)
@@ -259,14 +269,14 @@ struct VocabularyEntryEditorView: View {
                     }
                     if let conflictOwner {
                         Button("Edit the entry for \(conflictOwner.text)") {
-                            let entered = spellings.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                            let entered = spellingTexts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
                             var merged = conflictOwner.replacementSpellings
                             for spelling in entered where !merged.contains(where: { VocabularySettings.normalizedKey($0) == VocabularySettings.normalizedKey(spelling) }) {
                                 merged.append(spelling)
                             }
                             editingID = conflictOwner.id
                             term = conflictOwner.text
-                            spellings = merged
+                            spellings = merged.map { SpellingRow(text: $0) }
                             self.conflictOwner = nil
                             errorMessage = nil
                         }
@@ -306,7 +316,7 @@ struct VocabularyEntryEditorView: View {
 
     private func save() {
         conflictOwner = nil
-        if let error = appState.saveVocabularyEntry(id: editingID, text: term, spellings: spellings, isFromHistory: isFromHistory) {
+        if let error = appState.saveVocabularyEntry(id: editingID, text: term, spellings: spellingTexts, isFromHistory: isFromHistory) {
             errorMessage = error.message
             if case .spellingConflict(_, let owner) = error { conflictOwner = owner }
             if case .duplicateTerm(let existing) = error, !isFromHistory { conflictOwner = existing }
