@@ -55,9 +55,9 @@ struct TranscriptionSettingsView: View {
                     CustomVocabularyEditor(appState: appState).padding(.top, 15)
                 } label: {
                     HStack {
-                        Text("Custom vocabulary")
+                        Text("Vocabulary")
                         Spacer()
-                        Text("\(appState.whisperConfiguration.customVocabulary.count) words").font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+                        Text("\(appState.enabledVocabularyTerms.count) active").font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
                     }
                 }
                 .disclosureGroupStyle(EmberDisclosureGroupStyle())

@@ -182,6 +182,44 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertFalse(state.canDeleteRefinementModel(original))
     }
 
+    func testVocabularyReplacementRunsOnceAfterFormattingWithRefinementOffAndOn() async throws {
+        for refinementEnabled in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("VocabularyPipeline-\(UUID())")
+            let store = SQLiteHistoryStore(root: root)
+            let text = "Send dicta flow to cloud."
+            let service = PipelineRefinementService(expectedTranscript: text, refinedText: "Please send dicta flow to cloud today.")
+            let fixture = try RecordingStartupFixture(
+                whisper: PipelineWhisperService(text: text, languageCode: "en"), refinement: service,
+                usePipelineModels: true, refinementEnabled: refinementEnabled, historyStore: store, allowsInsertion: true)
+            defer { fixture.cleanup(); try? FileManager.default.removeItem(at: root) }
+            fixture.volume.shouldWait = false
+            fixture.permissions.accessibilityGranted = true
+            XCTAssertNil(fixture.state.saveVocabularyEntry(id: nil, text: "DictaFlow", spellings: ["dicta flow"]))
+            XCTAssertNil(fixture.state.saveVocabularyEntry(id: nil, text: "Claude", spellings: ["cloud"]))
+            let recording = expectation(description: "Recording starts")
+            let observation = fixture.state.$recordingState.sink { if $0.isRecording { recording.fulfill() } }
+            fixture.state.toggleDictation()
+            await fulfillment(of: [recording], timeout: 2)
+            observation.cancel()
+            // Mid-recording edits are locked, so this attempt cannot affect the run.
+            fixture.state.saveVocabularyEntry(id: nil, text: "Late", spellings: ["today"])
+            XCTAssertEqual(fixture.state.vocabularySettings.entries.count, 2)
+            fixture.state.toggleDictation()
+            for _ in 0..<200 where !fixture.state.canProcessHistory { try await Task.sleep(for: .milliseconds(10)) }
+            let final = refinementEnabled ? "Please send DictaFlow to Claude today." : "Send DictaFlow to Claude."
+            XCTAssertEqual(fixture.state.lastTranscription?.insertionText, final)
+            XCTAssertEqual(fixture.state.lastTranscription?.text, text)
+            XCTAssertEqual(fixture.insertion.insertedTexts.last, final)
+            let entries = try await store.entries(search: "", limit: 50, offset: 0)
+            let id = try XCTUnwrap(entries.first?.id)
+            await fixture.state.history.select(id)
+            XCTAssertEqual(fixture.state.history.displayedText, final)
+            XCTAssertTrue(fixture.state.history.hasVocabularyReplacement)
+            fixture.state.history.textView = .original
+            XCTAssertEqual(fixture.state.history.displayedText, text)
+        }
+    }
+
     func testTonePipelineWithRefinementOffOnAndFailure() async throws {
         for refinementEnabled in [false, true] {
             for fails in [false, true] where refinementEnabled || !fails {

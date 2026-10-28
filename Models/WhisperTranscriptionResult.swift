@@ -11,9 +11,14 @@ nonisolated struct WhisperTranscriptionResult: Codable, Equatable {
     var refinementStatus: TranscriptRefinementStatus = .disabled
 
     var toneFormatting: ToneFormattingResult? = nil
+    var vocabularyReplacement: VocabularyReplacementResult? = nil
+    var initialPromptExcludedTerms: [String]? = nil
 
     var insertionText: String {
-        (refinement?.insertionText ?? toneFormatting?.text ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
+        if let refinement {
+            return refinement.insertionText
+        }
+        return (vocabularyReplacement?.text ?? toneFormatting?.text ?? text).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var detectedLanguageDisplayName: String {

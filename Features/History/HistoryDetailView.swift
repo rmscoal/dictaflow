@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// Seed for the Save correction sheet. Using an item-based sheet ensures the
+/// editor is built at presentation time with the current selection.
+struct CorrectionSeed: Identifiable {
+    let id = UUID()
+    let spelling: String
+}
+
 struct HistoryDetailView: View {
     @ObservedObject var appState: DictaFlowAppState
     @ObservedObject var model: HistoryViewModel
@@ -8,6 +15,8 @@ struct HistoryDetailView: View {
     var scrollsEntireDetail = false
     @State private var showsPreviousResults = false
     @State private var showsRetryConfirmation = false
+    @State private var selectedTranscriptText = ""
+    @State private var correctionSeed: CorrectionSeed?
     @State private var retryModel: WhisperModelDescriptor?
 
     private var hasText: Bool { model.displayedText != nil }
@@ -61,11 +70,24 @@ struct HistoryDetailView: View {
             if showsPreviousResults { previousResults }
         }
         .padding(24)
+        .onChange(of: model.displayedText) { _, _ in selectedTranscriptText = "" }
+        .onChange(of: detail.entry.id) { _, _ in selectedTranscriptText = "" }
+        .onChange(of: model.textView) { _, _ in selectedTranscriptText = "" }
+        .sheet(item: $correctionSeed) { seed in
+            VocabularyEntryEditorView(
+                appState: appState,
+                entryID: nil,
+                initialTerm: "",
+                initialSpellings: [seed.spelling],
+                isFromHistory: true
+            )
+        }
     }
 
     private var transcript: some View {
-        Text(model.displayedText ?? "").font(.system(size: 16)).lineSpacing(7).textSelection(.enabled)
+        SelectableTranscriptView(text: model.displayedText ?? "", selectedText: $selectedTranscriptText)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+            .accessibilityLabel("Transcript")
     }
 
     @ViewBuilder private var primaryActions: some View {
@@ -82,6 +104,12 @@ struct HistoryDetailView: View {
         .buttonStyle(EmberButtonStyle()).disabled(!canMutate || !detail.entry.audioAvailable)
         .popover(isPresented: $showsRetryConfirmation, arrowEdge: .top) { retryConfirmation }
         Menu {
+            Button("Save correction…") {
+                // Item-based sheet: built at presentation time with this seed.
+                correctionSeed = CorrectionSeed(spelling: selectedTranscriptText)
+            }
+                .disabled(!canMutate || !hasText)
+            Divider()
             Button(model.refinements.isEmpty ? "Refine text" : "Refine again") { appState.retryHistoryRefinement() }
                 .disabled(!canMutate || model.transcription?.result?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false || !appState.isSelectedRefinementModelPrepared)
             Button(showsPreviousResults ? "Hide previous results" : "Previous results") { showsPreviousResults.toggle() }
@@ -94,7 +122,7 @@ struct HistoryDetailView: View {
     }
 
     @ViewBuilder private var textViewPicker: some View {
-        if !model.refinements.isEmpty || model.hasToneFormatting {
+        if !model.refinements.isEmpty || model.hasFinalFormatting {
             Picker("Text view", selection: $model.textView) {
                 Text("Original").tag(HistoryViewModel.TextView.original)
                 if model.refinement?.result != nil { Text("Refined").tag(HistoryViewModel.TextView.refined) }
@@ -136,7 +164,10 @@ struct HistoryDetailView: View {
                 LabeledContent("Language", value: appState.whisperConfiguration.inputLanguage.displayName)
                 LabeledContent("Tone", value: appState.textTone.title)
                 LabeledContent("Refinement", value: appState.refinementConfiguration.isEnabled ? "On" : "Off")
+                LabeledContent("Vocabulary", value: "\(appState.enabledVocabularyTerms.count) active")
             }
+            Text("Current vocabulary replacements will apply to the new result.")
+                .foregroundStyle(AppTheme.secondaryText)
             Text("Processes the saved audio again. Previous results are kept. Text will not be inserted automatically.")
                 .foregroundStyle(AppTheme.secondaryText)
             if !appState.isWhisperModelPrepared(selectedModel) {

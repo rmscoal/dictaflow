@@ -26,6 +26,10 @@ final class HistoryViewModel: ObservableObject {
     var hasToneFormatting: Bool {
         (refinement?.result?.toneFormatting ?? transcription?.result?.toneFormatting)?.tone != nil
     }
+    var hasVocabularyReplacement: Bool {
+        refinement?.result?.vocabularyReplacement != nil || transcription?.result?.vocabularyReplacement != nil
+    }
+    var hasFinalFormatting: Bool { hasToneFormatting || hasVocabularyReplacement }
     let player = HistoryAudioPlayer()
     private let store: HistoryStoreProtocol?
     private var playbackID: UUID?
@@ -206,7 +210,7 @@ final class HistoryViewModel: ObservableObject {
 
     func selectTranscription() {
         selectedRefinementID = refinements.first(where: { $0.result != nil })?.id ?? refinements.first?.id
-        textView = refinement?.result == nil && !hasToneFormatting ? .original : .final
+        textView = refinement?.result == nil && !hasFinalFormatting ? .original : .final
     }
 
     private func clearSelection() async {

@@ -106,6 +106,8 @@ final class DictaFlowAppState: ObservableObject {
     let launchExperience: AppLaunchExperience
     @Published private(set) var whisperConfiguration: WhisperConfiguration
     @Published private(set) var refinementConfiguration: RefinementConfiguration
+    @Published private(set) var vocabularySettings: VocabularySettings
+    private var recordingVocabulary: VocabularySettings = .empty
 
     private let settingsStore: SettingsStoreProtocol
     private let permissionService: PermissionServiceProtocol
@@ -231,7 +233,14 @@ final class DictaFlowAppState: ObservableObject {
         self.localNotificationService = localNotificationService
         self.appUpdateService = appUpdateService
         self.launchExperience = settingsStore.shouldShowMainWindowOnLaunch ? .firstLaunch : .returningUser
-        self.whisperConfiguration = settingsStore.whisperConfiguration
+        let initialVocabulary = settingsStore.vocabularySettings
+        if !settingsStore.hasVocabularySettings {
+            settingsStore.saveVocabularySettings(initialVocabulary)
+        }
+        var initialWhisperConfiguration = settingsStore.whisperConfiguration
+        initialWhisperConfiguration.customVocabulary = initialVocabulary.enabledTerms
+        self.vocabularySettings = initialVocabulary
+        self.whisperConfiguration = initialWhisperConfiguration
         self.textTone = settingsStore.textTone
         self.refinementConfiguration = initialRefinementConfiguration
         self.refinementPromptText = initialPromptText
@@ -980,41 +989,64 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
     }
 
-    func addCustomVocabularyKeyword(_ rawText: String) -> CustomVocabularyKeywordError? {
-        guard !whisperSettingsLocked else {
-            return nil
-        }
-        let term = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !term.isEmpty else {
-            return nil
-        }
-        guard term.rangeOfCharacter(from: .whitespacesAndNewlines) == nil, !term.contains(",") else {
-            return .multiWord
-        }
-        guard !whisperConfiguration.customVocabulary.contains(where: { $0.lowercased() == term.lowercased() }) else {
-            return .duplicate
-        }
-        guard whisperConfiguration.customVocabulary.count < WhisperConfiguration.maxCustomVocabularyTerms else {
-            return .limitReached
-        }
+    // MARK: Vocabulary
 
-        whisperConfiguration.customVocabulary.append(term)
+    var enabledVocabularyTerms: [String] { vocabularySettings.enabledTerms }
+    var enabledVocabularyRules: [VocabularyReplacementRule] { vocabularySettings.enabledRules }
+
+    private func persistVocabularySettings() {
+        settingsStore.saveVocabularySettings(vocabularySettings)
+        whisperConfiguration.customVocabulary = vocabularySettings.enabledTerms
         persistWhisperConfiguration()
         updateStatusMessage()
+    }
+
+    /// Saves an add/edit, or merges spellings into an existing entry from History.
+    /// Returns a validation error to show inline, or nil on success.
+    @discardableResult
+    func saveVocabularyEntry(id editingID: UUID?, text: String, spellings: [String], isFromHistory: Bool = false) -> VocabularyValidationError? {
+        guard !whisperSettingsLocked else { return nil }
+        if let error = vocabularySettings.validationError(text: text, spellings: spellings, editingID: editingID, isFromHistory: isFromHistory) {
+            return error
+        }
+        let term = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = spellings.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if isFromHistory, let existing = vocabularySettings.entry(matchingTerm: term) {
+            var updated = existing
+            for spelling in cleaned where !updated.replacementSpellings.contains(where: { VocabularySettings.normalizedKey($0) == VocabularySettings.normalizedKey(spelling) }) {
+                updated.replacementSpellings.append(spelling)
+            }
+            if let index = vocabularySettings.entries.firstIndex(where: { $0.id == existing.id }) {
+                vocabularySettings.entries[index] = updated
+            }
+        } else if let editingID, let index = vocabularySettings.entries.firstIndex(where: { $0.id == editingID }) {
+            vocabularySettings.entries[index].text = term
+            vocabularySettings.entries[index].replacementSpellings = cleaned
+        } else {
+            vocabularySettings.entries.append(VocabularyEntry(text: term, replacementSpellings: cleaned))
+        }
+        persistVocabularySettings()
         return nil
     }
 
-    func removeCustomVocabularyKeyword(_ keyword: String) {
-        guard !whisperSettingsLocked else {
-            return
-        }
-        guard whisperConfiguration.customVocabulary.contains(keyword) else {
-            return
-        }
+    func deleteVocabularyEntry(id: UUID) {
+        guard !whisperSettingsLocked else { return }
+        vocabularySettings.entries.removeAll { $0.id == id }
+        persistVocabularySettings()
+    }
 
-        whisperConfiguration.customVocabulary.removeAll { $0 == keyword }
-        persistWhisperConfiguration()
-        updateStatusMessage()
+    func setVocabularyEntryEnabled(id: UUID, isEnabled: Bool) {
+        guard !whisperSettingsLocked,
+              let index = vocabularySettings.entries.firstIndex(where: { $0.id == id }) else { return }
+        vocabularySettings.entries[index].isEnabled = isEnabled
+        persistVocabularySettings()
+    }
+
+    func applyVocabularyReplacements(to text: String, rules: [VocabularyReplacementRule]) -> VocabularyReplacementResult? {
+        guard !rules.isEmpty, !text.isEmpty else { return nil }
+        let output = TextReplacementProcessor.apply(text, rules: rules)
+        guard output.text != text, !output.appliedSpellings.isEmpty else { return nil }
+        return VocabularyReplacementResult(text: output.text, appliedSpellings: output.appliedSpellings)
     }
 
     func updateRefinementEnabled(_ isEnabled: Bool) {
@@ -1752,6 +1784,7 @@ final class DictaFlowAppState: ObservableObject {
         history.retryMessages[id] = nil
         history.errorMessage = nil
         let retryTone = textTone
+        let retryVocabulary = vocabularySettings
         let previousLatestAttemptID = history.detail?.transcriptions.first?.id
         var configuration = whisperConfiguration
         if let model { configuration.model = model }
@@ -1765,7 +1798,7 @@ final class DictaFlowAppState: ObservableObject {
                 let url = try await historyStore.acquireAudio(id)
                 acquired = true
                 let entry = try await historyStore.detail(id).entry
-                await transcribe(capture: DictationCapture(fileURL: url, duration: entry.duration, capturedAt: entry.capturedAt), historyID: id, insertResult: false, configuration: configuration, tone: retryTone)
+                await transcribe(capture: DictationCapture(fileURL: url, duration: entry.duration, capturedAt: entry.capturedAt), historyID: id, insertResult: false, configuration: configuration, tone: retryTone, vocabulary: retryVocabulary)
                 await historyStore.releaseAudio(id)
                 acquired = false
                 let updated = try await historyStore.detail(id)
@@ -1802,6 +1835,8 @@ final class DictaFlowAppState: ObservableObject {
         result.toneFormatting = TextToneFormatter.format(result.text, tone: textTone,
             isEnglish: result.taskMode == .translateToEnglish || result.detectedLanguageCode == "en",
             protectedTerms: attempt.configuration.customVocabulary)
+        let retryRules = vocabularySettings.enabledRules
+        let retryProtectedTerms = vocabularySettings.enabledTerms
         let previousLatestRefinementID = history.refinements.first?.id
         processingHistoryID = id
         isHistoryProcessing = true
@@ -1812,7 +1847,7 @@ final class DictaFlowAppState: ObservableObject {
             do {
                 try await historyStore.acquireRecording(id)
                 acquired = true
-                _ = await refinedTranscriptionIfNeeded(result, historyTranscriptionID: attempt.id, forceEnabled: true, protectedTerms: attempt.configuration.customVocabulary)
+                _ = await refinedTranscriptionIfNeeded(result, historyTranscriptionID: attempt.id, forceEnabled: true, protectedTerms: retryProtectedTerms, replacementRules: retryRules)
                 transcriptionState = .idle
                 await historyStore.releaseAudio(id)
                 acquired = false
@@ -1842,8 +1877,8 @@ final class DictaFlowAppState: ObservableObject {
         guard canProcessHistory, let result = history.transcription?.result else { return }
         var selected = result
         selected.refinement = history.showsOriginal ? nil : history.refinement?.result
-        if history.showsOriginal { selected.toneFormatting = nil }
-        if history.showsRawRefinement { selected.refinement?.toneFormatting = nil }
+        if history.showsOriginal { selected.toneFormatting = nil; selected.vocabularyReplacement = nil }
+        if history.showsRawRefinement { selected.refinement?.toneFormatting = nil; selected.refinement?.vocabularyReplacement = nil }
         isHistoryProcessing = true
         historyRetryTask = Task { [weak self] in
             guard let self else { return }
@@ -2689,6 +2724,7 @@ final class DictaFlowAppState: ObservableObject {
     private func beginRecordingFlow() async {
         interfaceIssue = nil
         recordingTone = textTone
+        recordingVocabulary = vocabularySettings
         let requestedAt = ProcessInfo.processInfo.systemUptime
         recordingFailureMessage = nil
         clearPreservedStatusMessage()
@@ -2811,7 +2847,7 @@ final class DictaFlowAppState: ObservableObject {
             microphonePermissionState = permissionService.currentMicrophonePermissionStatus()
             recordingState = .idle
             updateStatusMessage()
-            await transcribe(capture: capture, historyID: historyID, tone: recordingTone, refinementMode: recordingRefinementMode)
+            await transcribe(capture: capture, historyID: historyID, tone: recordingTone, refinementMode: recordingRefinementMode, vocabulary: recordingVocabulary)
             if let historyID { await historyStore?.releaseAudio(historyID) }
             await history.refresh()
         } catch {
@@ -3098,9 +3134,10 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func transcribe(capture: DictationCapture, historyID: UUID? = nil, insertResult: Bool = true, configuration override: WhisperConfiguration? = nil, tone: TextTone? = nil, refinementMode: RefinementMode? = nil) async {
+    private func transcribe(capture: DictationCapture, historyID: UUID? = nil, insertResult: Bool = true, configuration override: WhisperConfiguration? = nil, tone: TextTone? = nil, refinementMode: RefinementMode? = nil, vocabulary: VocabularySettings? = nil) async {
         let configuration = override ?? whisperConfiguration
         let selectedTone = tone ?? textTone
+        let vocabularySnapshot = vocabulary ?? recordingVocabulary
         var historyAttempt: UUID?
         if let historyID, let historyStore {
             do { historyAttempt = try await historyStore.startTranscription(historyID, configuration: configuration) }
@@ -3142,13 +3179,16 @@ final class DictaFlowAppState: ObservableObject {
                 transcription.text, tone: selectedTone,
                 isEnglish: transcription.taskMode == .translateToEnglish || transcription.detectedLanguageCode == "en",
                 protectedTerms: configuration.customVocabulary)
+            transcription.vocabularyReplacement = applyVocabularyReplacements(
+                to: transcription.toneFormatting?.text ?? transcription.text,
+                rules: vocabularySnapshot.enabledRules)
             if let attempt = historyAttempt {
                 do { try await historyStore?.finishTranscription(attempt, result: transcription, error: nil) }
                 catch { history.report(error); historyAttempt = nil }
             }
             lastTranscription = transcription
             clearPreservedStatusMessage()
-            let insertionTranscription = await refinedTranscriptionIfNeeded(transcription, historyTranscriptionID: historyAttempt, protectedTerms: configuration.customVocabulary, mode: refinementMode)
+            let insertionTranscription = await refinedTranscriptionIfNeeded(transcription, historyTranscriptionID: historyAttempt, protectedTerms: configuration.customVocabulary, mode: refinementMode, replacementRules: vocabularySnapshot.enabledRules)
             guard !isTerminating else { return }
 
             if isOnboardingPracticeSession {
@@ -3221,7 +3261,7 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func refinedTranscriptionIfNeeded(_ transcription: WhisperTranscriptionResult, historyTranscriptionID: UUID? = nil, forceEnabled: Bool = false, protectedTerms: [String] = [], mode: RefinementMode? = nil) async -> WhisperTranscriptionResult {
+    private func refinedTranscriptionIfNeeded(_ transcription: WhisperTranscriptionResult, historyTranscriptionID: UUID? = nil, forceEnabled: Bool = false, protectedTerms: [String] = [], mode: RefinementMode? = nil, replacementRules: [VocabularyReplacementRule] = []) async -> WhisperTranscriptionResult {
         guard !isTerminating, refinementConfiguration.isEnabled || forceEnabled else {
             return transcription
         }
@@ -3290,6 +3330,9 @@ final class DictaFlowAppState: ObservableObject {
                 refinement.refinedText, tone: transcription.toneFormatting?.tone ?? textTone,
                 isEnglish: transcription.taskMode == .translateToEnglish || transcription.detectedLanguageCode == "en",
                 protectedTerms: protectedTerms)
+            refinement.vocabularyReplacement = applyVocabularyReplacements(
+                to: refinement.toneFormatting?.text ?? refinement.refinedText,
+                rules: replacementRules)
             if let historyAttempt {
                 do { try await historyStore?.finishRefinement(historyAttempt, result: refinement, error: nil) }
                 catch { history.report(error) }

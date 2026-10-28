@@ -64,24 +64,22 @@ nonisolated struct WhisperConfiguration: Codable, Equatable {
         var overflowEntryCount = 0
         var totalValidCount = 0
 
+        // Comma/newline parsing exists only for legacy migration; phrases
+        // themselves may contain spaces.
         let entries = vocabulary
             .components(separatedBy: CharacterSet(charactersIn: ",\n"))
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
 
         for entry in entries {
-            if entry.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            guard VocabularySettings.isValidTerm(entry) else { continue }
+            if entry.rangeOfCharacter(from: .whitespaces) != nil {
                 multiWordEntryCount += 1
-                continue
             }
-
-            let key = entry.lowercased()
-            guard !seen.contains(key) else {
-                continue
-            }
+            let key = VocabularySettings.normalizedKey(entry)
+            guard !seen.contains(key) else { continue }
             seen.insert(key)
             totalValidCount += 1
-
             if terms.count < maxCustomVocabularyTerms {
                 terms.append(entry)
             } else {
@@ -100,43 +98,33 @@ nonisolated struct WhisperConfiguration: Codable, Equatable {
     private static func sanitizedKeywords(_ terms: [String]) -> [String] {
         var seen = Set<String>()
         var result: [String] = []
-
         for term in terms {
             let cleaned = term.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !cleaned.isEmpty,
-                  cleaned.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
-                  !seen.contains(cleaned.lowercased()) else {
-                continue
-            }
-            seen.insert(cleaned.lowercased())
+            guard VocabularySettings.isValidTerm(cleaned) else { continue }
+            let key = VocabularySettings.normalizedKey(cleaned)
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
             result.append(cleaned)
-
-            if result.count == maxCustomVocabularyTerms {
-                break
-            }
+            if result.count == maxCustomVocabularyTerms { break }
         }
-
         return result
     }
 
-    // whisper.cpp only consumes the last ~224 prompt tokens, so 50 short
-    // single-word keywords stay well inside that budget.
+    // Entry ceiling for the library; the actual Whisper prompt is budgeted
+    // by token count at the model boundary.
     static let maxCustomVocabularyTerms = 50
 }
 
 enum CustomVocabularyKeywordError: Equatable {
-    case multiWord
     case duplicate
     case limitReached
 
     var message: String {
         switch self {
-        case .multiWord:
-            return "Use single words only. Entries with spaces are not added."
         case .duplicate:
-            return "That keyword is already in your vocabulary."
+            return "That word or phrase is already in your vocabulary."
         case .limitReached:
-            return "You already have 50 keywords. Remove one to add another."
+            return "You already have 50 vocabulary entries. Remove one to add another."
         }
     }
 }

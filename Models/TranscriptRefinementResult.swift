@@ -7,8 +7,9 @@ nonisolated struct TranscriptRefinementResult: Codable, Equatable {
     let mode: RefinementMode
     let completedAt: Date
     var toneFormatting: ToneFormattingResult? = nil
+    var vocabularyReplacement: VocabularyReplacementResult? = nil
 
     var insertionText: String {
-        (toneFormatting?.text ?? refinedText).trimmingCharacters(in: .whitespacesAndNewlines)
+        (vocabularyReplacement?.text ?? toneFormatting?.text ?? refinedText).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
