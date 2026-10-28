@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <img src="public/dictaflow-overview.png" alt="DictaFlow Dictation workspace with local speech and refinement models, tone controls, and a sample text preview" width="900"><br>
+  <img src="public/dictaflow-overview.png" alt="DictaFlow Dictation workspace with local speech and refinement models, final formatting, and a sample text preview" width="900"><br>
   <sub>Your voice, your models, your Mac.</sub>
 </p>
 
@@ -63,16 +63,17 @@ Formal, Casual Text Messaging, or Technical and Engineering. Add your own
 instructions, or use DIY for a fully custom prompt.
 
 You can assign styles to individual apps and let DictaFlow switch when you
-start recording. Separate **Tone** controls offer Original, Balanced, Casual,
-and Formal options, even when refinement is off.
+start recording. Below the styles, a **Final formatting** slider offers
+Casual, Original, and Formal finishing for every app, even when refinement
+is off.
 
 <p align="center">
-  <img src="public/dictaflow-refinement.png" alt="Local refinement settings with a writing style selector and per-app style assignments" width="900"><br>
+  <img src="public/dictaflow-refinement.png" alt="Local refinement settings with a writing style selector, per-app style assignments, and the Final formatting slider" width="900"><br>
   <sub>Choose how your text reads, with processing that stays on your Mac. The preview uses sample text.</sub>
 </p>
 
 Refinement is optional. If it cannot complete, DictaFlow keeps the original
-transcription and applies your selected tone. You can review saved results in
+transcription and applies your selected final formatting. You can review saved results in
 **History** before reusing them.
 
 ## Local by design
