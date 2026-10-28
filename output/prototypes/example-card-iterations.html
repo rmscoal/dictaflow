@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DictaFlow · EXAMPLE card content iterations</title>
+<style>
+  :root{
+    --bg:#171816; --tile:#242521; --control:#2e3029; --ink:#f0ede5; --muted:#b6b4a8;
+    --line:#414239; --accent:#e6be83; --selected:#393226; --paper:#34352e;
+    --paper-ink:#f4eddd; --paper-muted:#c3bfae; --paper-line:#535447;
+    --radius:24px;
+    font:13px/1.45 -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);padding:28px 28px 40px}
+  h1{font-size:21px;font-weight:600;letter-spacing:-.4px;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:12.5px;max-width:880px;margin:0 0 18px}
+  .sub b{color:var(--ink);font-weight:600}
+  h2{font-size:13px;font-weight:600;margin:22px 0 8px}
+  a{color:var(--accent)}
+  .refs{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;max-width:1180px}
+  .ref{background:var(--tile);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+  .ref .t{font-weight:600;font-size:12.5px;margin-bottom:3px}
+  .ref .d{color:var(--muted);font-size:12px}
+  .controls{position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 0 10px;display:flex;flex-wrap:wrap;gap:14px 22px;align-items:center;border-bottom:1px solid var(--line);max-width:1180px}
+  .ctl{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+  .seg{display:flex;background:var(--control);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .seg button{appearance:none;border:0;background:transparent;color:var(--muted);font:inherit;font-size:12px;padding:6px 12px;cursor:pointer}
+  .seg button[aria-pressed="true"]{background:var(--selected);color:var(--accent);font-weight:600}
+  select{background:var(--control);color:var(--ink);border:1px solid var(--line);border-radius:8px;font:inherit;font-size:12px;padding:6px 8px}
+  select:disabled{opacity:.45}
+  .switch{position:relative;width:38px;height:22px;appearance:none;background:var(--control);border:1px solid var(--line);border-radius:99px;cursor:pointer;vertical-align:middle}
+  .switch:checked{background:var(--accent)}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}
+  .switch:checked::after{left:18px;background:#27251f}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:18px;max-width:1180px;margin-top:18px}
+  .iter-head{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+  .iter-head .name{font-size:13px;font-weight:600}
+  .iter-head .tag{font-size:11px;color:var(--accent);border:1px solid var(--line);border-radius:99px;padding:1px 8px}
+  .why{color:var(--muted);font-size:12px;margin:0 0 10px;min-height:34px}
+  .paper{background:var(--paper);color:var(--paper-ink);border:1px solid var(--paper-line);border-radius:var(--radius);padding:24px;min-height:410px;display:flex;flex-direction:column}
+  .eyebrow{font-size:11px;letter-spacing:1.1px;color:var(--paper-muted);margin-bottom:30px}
+  .cap{font-size:11px;color:var(--paper-muted);margin-bottom:10px}
+  .orig{font-size:13px;line-height:1.75;color:var(--paper-muted)}
+  .rule{height:1px;background:var(--paper-line);margin:25px 0}
+  .result{font-size:21px;letter-spacing:-.35px;line-height:1.45;margin-top:10px}
+  .foot{margin-top:auto;padding-top:16px;border-top:1px solid var(--paper-line);font-size:11px;color:var(--paper-muted)}
+  .step{display:flex;gap:8px;align-items:flex-start;margin:14px 0 0}
+  .step .n{flex:none;width:17px;height:17px;border-radius:50%;border:1px solid var(--accent);color:var(--accent);font-size:10px;display:flex;align-items:center;justify-content:center;margin-top:1px}
+  .step .tx{font-size:12px;color:var(--paper-muted)}
+  .step .tx b{color:var(--paper-ink);font-weight:600}
+  .mid{font-size:13px;line-height:1.6;color:var(--paper-muted);margin-top:6px;padding-left:25px}
+  .legend{display:flex;gap:6px;flex-wrap:wrap;margin-top:14px}
+  .chip{font-size:11px;color:var(--paper-muted);border:1px solid var(--paper-line);border-radius:99px;padding:2px 9px}
+  .chip b{color:var(--accent);font-weight:600}
+  .recap{display:flex;gap:9px;align-items:flex-start;padding:9px 0;border-top:1px solid var(--paper-line)}
+  .recap:first-of-type{margin-top:16px}
+  .recap .ic{flex:none;width:22px;height:22px;border-radius:7px;background:rgba(230,190,131,.16);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:11px}
+  .recap .rt{font-size:12px}
+  .recap .rt b{font-weight:600}
+  .recap .rd{font-size:11.5px;color:var(--paper-muted)}
+  .trade{color:var(--muted);font-size:11.5px;margin-top:10px}
+  .trade b{color:var(--ink)}
+  .mini-toggle{font-size:11px;color:var(--accent);background:none;border:0;cursor:pointer;padding:0;font:inherit}
+  @media (prefers-reduced-motion: reduce){ .switch::after{transition:none} }
+</style>
+</head>
+<body>
+<h1>EXAMPLE card: three content iterations</h1>
+<p class="sub">Same Ember paper card, same type sizes, same controls as the app. Only the <b>content structure</b> changes.
+Use the controls to see every iteration react to refinement on/off, writing style, and final formatting — exactly like the real card.
+Current problem with the shipped card: it shows input and output, but not <b>which stage changed what</b>, so users cannot tell the writing style apart from final formatting.</p>
+
+<h2>References used (Dribbble)</h2>
+<div class="refs">
+  <div class="ref"><div class="t"><a href="https://dribbble.com/shots/27449309-AI-Writing-Assistant-Light" target="_blank" rel="noopener">AI Writing Assistant – Light</a> · Dmitry Sergushkin</div><div class="d">Side-by-side original vs. suggested rewrite with an explicit improvement step between them. Basis for Iteration A: make the two processing stages visible as steps.</div></div>
+  <div class="ref"><div class="t"><a href="https://dribbble.com/shots/23598140-Diffchecker-Compare-merge-and-explain" target="_blank" rel="noopener">Diffchecker – Compare, merge and explain</a> · Mikolaj Dobrucki</div><div class="d">Highlight mode that walks through each change individually instead of dumping a wall of text. Basis for Iteration B: highlight exactly what formatting changed.</div></div>
+  <div class="ref"><div class="t"><a href="https://dribbble.com/uishariar" target="_blank" rel="noopener">AI Voice Notes – Transcription &amp; Smart Rewrite</a> · Sahariar Hossain</div><div class="d">Voice-note card that pairs a raw transcript with its smart rewrite and a short plain-language recap of the transformation. Basis for Iteration C: replace the one-line footer with a two-line recap.</div></div>
+</div>
+
+<div class="controls" role="group" aria-label="Preview state">
+  <label class="ctl">Refine before insertion <input id="refine" class="switch" type="checkbox" checked></label>
+  <label class="ctl">Writing style
+    <select id="style">
+      <option value="casual">Casual Text Messaging (per-app · ChatGPT)</option>
+      <option value="technical">Technical and Engineering (default)</option>
+      <option value="normal">Normal Cleanup (default)</option>
+    </select>
+  </label>
+  <div class="ctl">Final formatting
+    <div class="seg" id="toneseg">
+      <button data-tone="casual" aria-pressed="false">Casual</button>
+      <button data-tone="original" aria-pressed="false">Original</button>
+      <button data-tone="formal" aria-pressed="true">Formal</button>
+    </div>
+  </div>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<script>
+'use strict';
+const ORIGINAL = "Hey um can you review the auth PR by Wednesday? I think it might fix the login issue but yeah we can't ship until we're done testing.";
+const STYLES = {
+  casual:    { label: "Casual Text Messaging", source: "per-app rule for ChatGPT",
+               text: "hey, can u review the auth PR by Wed? might fix the login issue, but we can't ship until we're done testing.",
+               effect: "Shortened Wednesday to Wed, dropped filler words, relaxed wording." },
+  technical: { label: "Technical and Engineering", source: "default style",
+               text: "Please review the authentication PR by Wednesday. It may fix the login issue, but we can't ship until testing is complete.",
+               effect: "Expanded auth to authentication, split into two sentences, removed filler words." },
+  normal:    { label: "Normal Cleanup", source: "default style",
+               text: "Hey, can you review the auth PR by Wednesday? It might fix the login issue, but we can't ship until we're done testing.",
+               effect: "Removed filler words and added punctuation, wording kept." }
+};
+const TONE_LABEL = { casual: "Casual", original: "Original", formal: "Formal" };
+const state = { refine: true, style: "casual", tone: "formal" };
+
+function applyTone(text, tone) {
+  if (tone === "original") return text;
+  if (tone === "formal") {
+    let t = text.replace(/\bcan't\b/gi, m => m[0] === "C" ? "Cannot" : "cannot")
+                .replace(/\bwe're\b/gi, m => m[0] === "W" ? "We are" : "we are")
+                .replace(/^\s*[a-z]/, m => m.toUpperCase());
+    if (!/[.!?]$/.test(t.trim())) t = t.trim() + ".";
+    return t;
+  }
+  // casual
+  return text.toLowerCase().replace(/,/g, "").replace(/\.\s*$/, "");
+}
+function toneEffect(tone) {
+  if (tone === "formal") return "Expanded contractions (can't → cannot, we're → we are).";
+  if (tone === "casual") return "Lowercased everything and dropped commas and the final period.";
+  return "Left the text exactly as the previous stage produced it.";
+}
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+function compute() {
+  const style = STYLES[state.style];
+  const mid = state.refine ? style.text : ORIGINAL;
+  const result = applyTone(mid, state.tone);
+  return { style, mid, result };
+}
+function footText() {
+  if (!state.refine) return "Formatting only · refinement off";
+  return STYLES[state.style].label + " · " + STYLES[state.style].source;
+}
+
+function cardBaseline(c) {
+  return `<div class="paper">
+    <div class="eyebrow">EXAMPLE</div>
+    <div class="cap">As dictated</div><div class="orig">${esc(ORIGINAL)}</div>
+    <div class="rule"></div>
+    <div class="cap">Ready to share · ChatGPT</div>
+    <div class="result">${esc(c.result)}</div>
+    <div class="foot">${esc(footText())}</div></div>`;
+}
+function cardA(c) {
+  const step2 = state.refine
+    ? `<div class="step"><span class="n">1</span><div class="tx"><b>Writing style · ${esc(c.style.label)}</b><br>${esc(c.style.effect)}</div></div>
+       <div class="mid">${esc(c.mid)}</div>
+       <div class="step"><span class="n">2</span><div class="tx"><b>Final formatting · ${TONE_LABEL[state.tone]}</b><br>${esc(toneEffect(state.tone))}</div></div>`
+    : `<div class="step"><span class="n">1</span><div class="tx"><b>Final formatting · ${TONE_LABEL[state.tone]}</b><br>${esc(toneEffect(state.tone))} Writing style skipped — refinement is off.</div></div>`;
+  return `<div class="paper">
+    <div class="eyebrow">EXAMPLE</div>
+    <div class="cap">As dictated</div><div class="orig">${esc(ORIGINAL)}</div>
+    ${step2}
+    <div class="rule"></div>
+    <div class="cap">Result</div>
+    <div class="result">${esc(c.result)}</div></div>`;
+}
+function cardB(c) {
+  const styleTag = state.refine ? esc(c.style.label) : "Off";
+  return `<div class="paper">
+    <div class="eyebrow">EXAMPLE</div>
+    <div class="cap">As dictated</div><div class="orig">${esc(ORIGINAL)}</div>
+    <div class="rule"></div>
+    <div class="cap">Result</div>
+    <div class="result">${esc(c.result)}</div>
+    <div class="legend" style="margin-top:auto;padding-top:16px"><span class="chip">Style: <b>${styleTag}</b></span><span class="chip">Formatting: <b>${TONE_LABEL[state.tone]}</b></span></div>
+    </div>`;
+}
+function cardC(c) {
+  const styleRow = state.refine
+    ? `<div class="recap"><span class="ic">✎</span><div><div class="rt"><b>Writing style</b> · ${esc(c.style.label)}</div><div class="rd">${esc(c.style.effect)} Applied for ChatGPT.</div></div></div>`
+    : `<div class="recap"><span class="ic">✎</span><div><div class="rt"><b>Writing style</b> · Off</div><div class="rd">Refinement is off, so the transcript is used as dictated.</div></div></div>`;
+  return `<div class="paper">
+    <div class="eyebrow">EXAMPLE</div>
+    <div class="cap">As dictated</div><div class="orig">${esc(ORIGINAL)}</div>
+    <div class="rule"></div>
+    <div class="cap">Result</div>
+    <div class="result">${esc(c.result)}</div>
+    ${styleRow}
+    <div class="recap"><span class="ic">Aa</span><div><div class="rt"><b>Final formatting</b> · ${TONE_LABEL[state.tone]}</div><div class="rd">${esc(toneEffect(state.tone))} Applies to every app.</div></div></div>
+    </div>`;
+}
+
+const ITERATIONS = [
+  { name: "Current card (baseline)", tag: "shipped", why: "Shows input and output, but the two processing stages are invisible. The footer mixes style, rule source, and formatting into one line.",
+    trade: "<b>Cost:</b> none. <b>Risk:</b> users keep asking why the text changed.", render: cardBaseline },
+  { name: "Iteration A — Show the two steps", tag: "steps", why: "Names each stage, shows the intermediate text after the writing style, and says in plain words what each stage did. Best when users ask “why does my text look like this?”",
+    trade: "<b>Cost:</b> tallest card (+2 blocks). <b>Risk:</b> effect sentences must be generated or templated per style.", render: cardA },
+  { name: "Iteration B — Applied tags", tag: "tags", why: "Same two text blocks as today, captioned “Result”, with two plain tags at the bottom naming what was applied. No highlights, no sentence footer.",
+    trade: "<b>Cost:</b> smallest change of the three. <b>Risk:</b> tags name the stages but do not explain their effects.", render: cardB },
+  { name: "Iteration C — Two-line recap", tag: "recap", why: "Keeps today's two text blocks and replaces the footer with two short recap rows: what the style did, what formatting did. Smallest change, easiest to scan.",
+    trade: "<b>Cost:</b> two extra rows. <b>Risk:</b> recap wording must stay honest for DIY (custom instructions are not previewed).", render: cardC }
+];
+
+function render() {
+  const c = compute();
+  document.getElementById("grid").innerHTML = ITERATIONS.map((it, i) => `
+    <section>
+      <div class="iter-head"><span class="name">${it.name}</span><span class="tag">${it.tag}</span></div>
+      <p class="why">${it.why}</p>
+      ${it.render(c)}
+      <p class="trade">${it.trade}</p>
+    </section>`).join("");
+  document.getElementById("style").disabled = !state.refine;
+}
+document.getElementById("refine").addEventListener("change", e => { state.refine = e.target.checked; render(); });
+document.getElementById("style").addEventListener("change", e => { state.style = e.target.value; render(); });
+document.getElementById("toneseg").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  state.tone = b.dataset.tone;
+  document.querySelectorAll("#toneseg button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  render();
+});
+render();
+</script>
+</body>
+</html>
