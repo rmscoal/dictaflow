@@ -1,0 +1,63 @@
+@use "../styles/tokens" as *;
+
+.mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7c6cff, $primary-dark);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2.3px;
+  box-shadow: 0 6px 14px rgba(109, 93, 246, 0.2);
+  flex: none;
+
+  i {
+    display: block;
+    width: 3px;
+    border-radius: 99px;
+    background: #fff;
+  }
+}
+
+.bars {
+  display: flex;
+  gap: 2.4px;
+  align-items: center;
+  height: 20px;
+  flex: 1;
+  justify-content: center;
+
+  i {
+    width: 2.6px;
+    border-radius: 99px;
+    background: #26262b;
+    display: block;
+    animation: wave-pulse 1s ease-in-out infinite;
+
+    &:nth-child(2n) {
+      animation-delay: 0.12s;
+    }
+
+    &:nth-child(3n) {
+      animation-delay: 0.24s;
+    }
+
+    &:nth-child(4n) {
+      animation-delay: 0.36s;
+    }
+  }
+}
+
+@keyframes wave-pulse {
+  0%,
+  100% {
+    height: 5px;
+    opacity: 0.5;
+  }
+
+  50% {
+    height: 16px;
+    opacity: 1;
+  }
+}
