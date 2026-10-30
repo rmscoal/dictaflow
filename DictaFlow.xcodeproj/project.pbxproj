@@ -389,7 +389,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.8.7;
+				MARKETING_VERSION = 2.8.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -445,7 +445,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.8.7;
+				MARKETING_VERSION = 2.8.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = NO;
@@ -617,7 +617,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.8.7;
+				MARKETING_VERSION = 2.8.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -671,7 +671,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 2.8.7;
+				MARKETING_VERSION = 2.8.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
