@@ -7,6 +7,7 @@ private struct DictationExampleHeightKey: PreferenceKey {
 
 struct DictationWorkspaceView: View {
     @ObservedObject var appState: DictaFlowAppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var columnsFrame: CGRect = .zero
     @State private var exampleHeight: CGFloat = 0
 
@@ -45,7 +46,10 @@ struct DictationWorkspaceView: View {
                     }
                     .background {
                         ScrollViewportPositionReader { frame in
-                            if columnsFrame != frame { columnsFrame = frame }
+                            guard columnsFrame != frame else { return }
+                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                                columnsFrame = frame
+                            }
                         }
                     }
                 }

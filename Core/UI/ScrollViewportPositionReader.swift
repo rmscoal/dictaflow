@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Tracks the columns in the native clip view, including scroll-only changes.
+/// Reports the columns after native scrolling has been idle for 150 milliseconds.
 struct ScrollViewportPositionReader: NSViewRepresentable {
     var onChange: (CGRect) -> Void
 
@@ -13,9 +13,14 @@ struct ScrollViewportPositionReader: NSViewRepresentable {
     final class PositionView: NSView {
         var onChange: ((CGRect) -> Void)?
         private weak var clipView: NSClipView?
+        private var pendingUpdate: DispatchWorkItem?
+        private var lastObservedFrame: CGRect?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            pendingUpdate?.cancel()
+            pendingUpdate = nil
+            lastObservedFrame = nil
             NotificationCenter.default.removeObserver(self)
             clipView = enclosingScrollView?.contentView
             if let clipView {
@@ -35,10 +40,22 @@ struct ScrollViewportPositionReader: NSViewRepresentable {
             guard let clipView else { return }
             let frame = convert(bounds, to: clipView).offsetBy(
                 dx: -clipView.bounds.minX, dy: -clipView.bounds.minY)
-            // Deliver outside AppKit layout to avoid mutating SwiftUI during updates.
-            DispatchQueue.main.async { [weak self] in self?.onChange?(frame) }
+            guard frame != lastObservedFrame else { return }
+            lastObservedFrame = frame
+            pendingUpdate?.cancel()
+            let update = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pendingUpdate = nil
+                self.onChange?(frame)
+            }
+            pendingUpdate = update
+            // Each movement, including momentum scrolling, restarts the quiet period.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: update)
         }
 
-        deinit { NotificationCenter.default.removeObserver(self) }
+        deinit {
+            pendingUpdate?.cancel()
+            NotificationCenter.default.removeObserver(self)
+        }
     }
 }
