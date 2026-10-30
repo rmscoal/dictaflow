@@ -11,6 +11,21 @@ final class VocabularyTests: XCTestCase {
         TextReplacementProcessor.apply(text, rules: rules).text
     }
 
+    func testConflictEditorMergeKeepsSpellingsWithTheirSavedOwners() {
+        let original = VocabularyEntry(text: "Claude", replacementSpellings: ["cloud"])
+        let target = VocabularyEntry(text: "Notion", replacementSpellings: ["note"])
+        let inactive = VocabularyEntry(text: "Other", replacementSpellings: ["owned"], isEnabled: false)
+        let settings = VocabularySettings(entries: [original, target, inactive])
+
+        let merged = settings.mergingUnclaimedSpellings(
+            [" CLOUD ", "NOTE", "new spelling", "NEW SPELLING", "owned", " "], into: target)
+
+        XCTAssertEqual(merged, ["note", "new spelling"])
+        XCTAssertNil(settings.validationError(text: target.text, spellings: merged, editingID: target.id))
+        XCTAssertEqual(settings.entries[0].replacementSpellings, ["cloud"])
+        XCTAssertEqual(settings.entries[2].replacementSpellings, ["owned"])
+    }
+
     // MARK: Matcher contract
 
     func testExactPhraseCaseVariantsAndSavedCasing() {

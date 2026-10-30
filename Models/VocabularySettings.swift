@@ -98,6 +98,20 @@ nonisolated struct VocabularySettings: Codable, Equatable {
         }
     }
 
+    /// Keeps saved spellings with their owner when switching an editor to another entry.
+    func mergingUnclaimedSpellings(_ spellings: [String], into entry: VocabularyEntry) -> [String] {
+        var merged = entry.replacementSpellings
+        var seen = Set(merged.map(Self.normalizedKey))
+        for spelling in spellings {
+            let cleaned = spelling.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty,
+                  entryOwningSpelling(cleaned, excludingEntryID: entry.id) == nil,
+                  seen.insert(Self.normalizedKey(cleaned)).inserted else { continue }
+            merged.append(cleaned)
+        }
+        return merged
+    }
+
     /// Validates a candidate entry. `editingID` is the entry being edited, if any.
     func validationError(text: String, spellings: [String], editingID: UUID? = nil, isFromHistory: Bool = false) -> VocabularyValidationError? {
         let term = text.trimmingCharacters(in: .whitespacesAndNewlines)

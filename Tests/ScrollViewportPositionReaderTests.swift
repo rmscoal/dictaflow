@@ -11,8 +11,9 @@ final class ScrollViewportPositionReaderTests: XCTestCase {
         var frames: [CGRect] = []
         reader.onChange = { frames.append($0) }
         scrollView.documentView = reader
-        // Attach the observer without opening a window.
-        reader.viewDidMoveToWindow()
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView = scrollView
+        defer { window.contentView = nil }
 
         scrollView.contentView.bounds.origin.y = 100
         try await Task.sleep(for: .milliseconds(80))
@@ -40,10 +41,30 @@ final class ScrollViewportPositionReaderTests: XCTestCase {
         var calls = 0
         reader.onChange = { _ in calls += 1 }
         scrollView.documentView = reader
-        reader.viewDidMoveToWindow()
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView = scrollView
+        defer { window.contentView = nil }
         scrollView.contentView.bounds.origin.y = 100
         reader.removeFromSuperview()
         reader.viewDidMoveToWindow()
+
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(calls, 0)
+    }
+
+    func testRemovingScrollViewFromWindowCancelsPendingUpdate() async throws {
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        let reader = ScrollViewportPositionReader.PositionView(
+            frame: NSRect(x: 0, y: 0, width: 400, height: 2000))
+        var calls = 0
+        reader.onChange = { _ in calls += 1 }
+        scrollView.documentView = reader
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView = scrollView
+        scrollView.contentView.bounds.origin.y = 100
+        window.contentView = nil
+        XCTAssertNil(reader.window)
+        XCTAssertNotNil(reader.enclosingScrollView)
 
         try await Task.sleep(for: .milliseconds(250))
         XCTAssertEqual(calls, 0)

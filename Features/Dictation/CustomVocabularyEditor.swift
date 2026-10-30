@@ -269,11 +269,7 @@ struct VocabularyEntryEditorView: View {
                     }
                     if let conflictOwner {
                         Button("Edit the entry for \(conflictOwner.text)") {
-                            let entered = spellingTexts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-                            var merged = conflictOwner.replacementSpellings
-                            for spelling in entered where !merged.contains(where: { VocabularySettings.normalizedKey($0) == VocabularySettings.normalizedKey(spelling) }) {
-                                merged.append(spelling)
-                            }
+                            let merged = appState.vocabularySettings.mergingUnclaimedSpellings(spellingTexts, into: conflictOwner)
                             editingID = conflictOwner.id
                             term = conflictOwner.text
                             spellings = merged.map { SpellingRow(text: $0) }
@@ -283,6 +279,8 @@ struct VocabularyEntryEditorView: View {
                         .buttonStyle(EmberButtonStyle())
                     }
                 }
+                .onChange(of: term) { conflictOwner = nil; errorMessage = nil }
+                .onChange(of: spellingTexts) { conflictOwner = nil; errorMessage = nil }
                 // Inset the fields so their focus rings are not clipped by
                 // the scroll view; the matching negative margin below keeps
                 // the fields aligned with the title and buttons.

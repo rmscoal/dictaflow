@@ -22,7 +22,7 @@ struct ScrollViewportPositionReader: NSViewRepresentable {
             pendingUpdate = nil
             lastObservedFrame = nil
             NotificationCenter.default.removeObserver(self)
-            clipView = enclosingScrollView?.contentView
+            clipView = window == nil ? nil : enclosingScrollView?.contentView
             if let clipView {
                 clipView.postsBoundsChangedNotifications = true
                 NotificationCenter.default.addObserver(self, selector: #selector(positionChanged),
