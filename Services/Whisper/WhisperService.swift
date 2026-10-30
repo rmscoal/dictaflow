@@ -100,7 +100,8 @@ actor WhisperCPPService: WhisperServiceProtocol {
         logDecodedAudioStats(samples)
         let context = try context(for: modelURL)
         let languageCode = configuration.inputLanguage.whisperCode ?? "auto"
-        let initialPrompt = configuration.initialPrompt
+        let budgeted = budgetedInitialPrompt(context: context, configuration: configuration)
+        let initialPrompt = budgeted.prompt
         let vadModelPath = vadModelURL?.path
 
         return try languageCode.withCString { languagePointer in
@@ -112,7 +113,8 @@ actor WhisperCPPService: WhisperServiceProtocol {
                         configuration: configuration,
                         languagePointer: languagePointer,
                         promptPointer: initialPrompt == nil ? nil : promptPointer,
-                        vadModelPointer: vadModelPath == nil ? nil : vadModelPointer
+                        vadModelPointer: vadModelPath == nil ? nil : vadModelPointer,
+                        excludedVocabularyTerms: budgeted.excluded
                     )
                 }
             }
@@ -168,13 +170,30 @@ actor WhisperCPPService: WhisperServiceProtocol {
         return context
     }
 
+    /// Measures the joined prompt with the loaded model's tokenizer and keeps
+    /// whole terms in stable order. Excluded terms are reported, never truncated.
+    private func budgetedInitialPrompt(context: WhisperContextBox, configuration: WhisperConfiguration) -> (prompt: String?, excluded: [String]) {
+        let terms = Array(configuration.customVocabulary.prefix(WhisperConfiguration.maxCustomVocabularyTerms))
+        guard !terms.isEmpty else { return (nil, []) }
+        let textContext = Int(whisper_n_text_ctx(context.pointer))
+        let available = textContext > 0 ? min(VocabularyPromptBudget.maxPromptTokens, max(1, textContext / 2)) : VocabularyPromptBudget.maxPromptTokens
+        let result = VocabularyPromptBudget.includedTerms(terms: terms, tokenCount: { candidate in
+            candidate.withCString { Int(whisper_token_count(context.pointer, $0)) }
+        }, budget: available)
+        if !result.excluded.isEmpty {
+            logger.info("Whisper initial prompt excluded \(result.excluded.count, privacy: .public) vocabulary terms over token budget: \(result.excluded.joined(separator: ", "), privacy: .private)")
+        }
+        return (result.included.isEmpty ? nil : result.included.joined(separator: ", "), result.excluded)
+    }
+
     private func runTranscription(
         context: WhisperContextBox,
         samples: [Float],
         configuration: WhisperConfiguration,
         languagePointer: UnsafePointer<CChar>?,
         promptPointer: UnsafePointer<CChar>?,
-        vadModelPointer: UnsafePointer<CChar>?
+        vadModelPointer: UnsafePointer<CChar>?,
+        excludedVocabularyTerms: [String] = []
     ) throws -> WhisperTranscriptionResult {
         var parameters = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
         parameters.print_realtime = false
@@ -232,7 +251,7 @@ actor WhisperCPPService: WhisperServiceProtocol {
             "Whisper inference completed: segments=\(segmentCount, privacy: .public), detectedLanguage=\(languageCode ?? "unknown", privacy: .public), transcriptCharacters=\(transcriptText.count, privacy: .public)"
         )
 
-        return WhisperTranscriptionResult(
+        var result = WhisperTranscriptionResult(
             text: transcriptText,
             segments: transcriptText.isEmpty ? [] : segments,
             detectedLanguageCode: transcriptText.isEmpty ? nil : languageCode,
@@ -240,6 +259,8 @@ actor WhisperCPPService: WhisperServiceProtocol {
             taskMode: configuration.taskMode,
             completedAt: Date()
         )
+        result.initialPromptExcludedTerms = excludedVocabularyTerms.isEmpty ? nil : excludedVocabularyTerms
+        return result
     }
 
     private func logDecodedAudioStats(_ samples: [Float]) {

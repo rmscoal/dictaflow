@@ -1,10 +1,5 @@
 import SwiftUI
 
-private struct DictationColumnsFrameKey: PreferenceKey {
-    static var defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
-}
-
 private struct DictationExampleHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
@@ -12,25 +7,18 @@ private struct DictationExampleHeightKey: PreferenceKey {
 
 struct DictationWorkspaceView: View {
     @ObservedObject var appState: DictaFlowAppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var columnsFrame: CGRect = .zero
     @State private var exampleHeight: CGFloat = 0
 
     /// Gap kept between the pinned example and the top of the scroll viewport.
     private static let stickyTopInset: CGFloat = 16
-    /// Space reserved below the pinned example before it stops following.
-    private static let stickyBottomInset: CGFloat = 28
 
     var body: some View {
         GeometryReader { geometry in
             let contentWidth = geometry.size.width - AppLayout.contentPadding * 2
             let sideBySide = contentWidth > AppLayout.workspaceStackingWidth
-            let exampleFitsViewport = exampleHeight > 0
-                && exampleHeight + Self.stickyTopInset + Self.stickyBottomInset <= geometry.size.height
-            let stickyOffset = stickyOffset(
-                sideBySide: sideBySide,
-                exampleFitsViewport: exampleFitsViewport,
-                viewportTop: geometry.frame(in: .global).minY
-            )
+            let stickyOffset = stickyOffset(sideBySide: sideBySide)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     EmberPageHeading(title: "Dictation")
@@ -48,7 +36,7 @@ struct DictationWorkspaceView: View {
                             case .refinement: RefinementSettingsView(appState: appState)
                             }
                         }
-                        OutputExampleView(appState: appState)
+                        OutputExampleView(appState: appState, compact: sideBySide && geometry.size.height < 640)
                             .background {
                                 GeometryReader { proxy in
                                     Color.clear.preference(key: DictationExampleHeightKey.self, value: proxy.size.height)
@@ -57,8 +45,11 @@ struct DictationWorkspaceView: View {
                             .offset(y: stickyOffset)
                     }
                     .background {
-                        GeometryReader { proxy in
-                            Color.clear.preference(key: DictationColumnsFrameKey.self, value: proxy.frame(in: .global))
+                        ScrollViewportPositionReader { frame in
+                            guard columnsFrame != frame else { return }
+                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                                columnsFrame = frame
+                            }
                         }
                     }
                 }
@@ -68,16 +59,15 @@ struct DictationWorkspaceView: View {
                 .padding(.bottom, 28)
             }
             .scrollBounceBehavior(.basedOnSize)
-            .onPreferenceChange(DictationColumnsFrameKey.self) { columnsFrame = $0 }
             .onPreferenceChange(DictationExampleHeightKey.self) { exampleHeight = $0 }
         }
     }
 
     /// Pushes the example down only enough to keep its top at the viewport
     /// inset, bounded so its bottom never passes the two-column region.
-    private func stickyOffset(sideBySide: Bool, exampleFitsViewport: Bool, viewportTop: CGFloat) -> CGFloat {
-        guard sideBySide, exampleFitsViewport, columnsFrame.height > 0, exampleHeight > 0 else { return 0 }
-        let pinnedTop = viewportTop + Self.stickyTopInset
+    private func stickyOffset(sideBySide: Bool) -> CGFloat {
+        guard sideBySide, columnsFrame.height > 0, exampleHeight > 0 else { return 0 }
+        let pinnedTop = Self.stickyTopInset
         let desired = pinnedTop - columnsFrame.minY
         let maximum = max(0, columnsFrame.height - exampleHeight)
         return min(max(desired, 0), maximum)

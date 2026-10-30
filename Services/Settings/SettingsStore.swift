@@ -17,6 +17,9 @@ protocol SettingsStoreProtocol: AnyObject {
     var soundCueStyle: SoundCueStyle { get }
     var whisperConfiguration: WhisperConfiguration { get }
     var refinementConfiguration: RefinementConfiguration { get }
+    var vocabularySettings: VocabularySettings { get }
+    var hasVocabularySettings: Bool { get }
+    func saveVocabularySettings(_ settings: VocabularySettings)
     func saveAppAppearance(_ appearance: AppAppearance)
     func markInitialWindowPresentationComplete()
     func markAccessibilityPermissionRequested()
@@ -46,6 +49,7 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
         static let soundCueStyle = "audio.soundCueStyle"
         static let whisperConfiguration = "whisper.configuration"
         static let refinementConfiguration = "refinement.configuration"
+        static let vocabularySettings = "vocabulary.settings"
     }
 
     private let defaults: UserDefaults
@@ -219,5 +223,24 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
         }
 
         defaults.set(data, forKey: Keys.refinementConfiguration)
+    }
+
+    var hasVocabularySettings: Bool {
+        defaults.data(forKey: Keys.vocabularySettings) != nil
+    }
+
+    var vocabularySettings: VocabularySettings {
+        if let data = defaults.data(forKey: Keys.vocabularySettings) {
+            // Malformed data is left untouched for recovery; callers see an
+            // empty library until a successful save replaces it.
+            return (try? JSONDecoder().decode(VocabularySettings.self, from: data)) ?? .empty
+        }
+        // Legacy migration: existing whisper terms become enabled hint-only entries.
+        return .migrated(fromLegacyTerms: whisperConfiguration.customVocabulary)
+    }
+
+    func saveVocabularySettings(_ settings: VocabularySettings) {
+        guard let data = try? JSONEncoder().encode(settings) else { return }
+        defaults.set(data, forKey: Keys.vocabularySettings)
     }
 }

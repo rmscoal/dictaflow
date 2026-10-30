@@ -16,6 +16,8 @@ nonisolated enum OutputExampleComposer {
 
 struct OutputExampleView: View {
     @ObservedObject var appState: DictaFlowAppState
+    // Reduce whitespace and result typography in short two-column windows.
+    var compact = false
 
     /// Mirrors the dictation fallback: refinement only contributes when it
     /// is enabled and its runtime and selected model are ready.
@@ -49,25 +51,25 @@ struct OutputExampleView: View {
                         .font(.system(size: 11)).tracking(1.1)
                     Spacer()
                 }
-                .foregroundStyle(AppTheme.paperSecondaryText).padding(.bottom, 30)
+                .foregroundStyle(AppTheme.paperSecondaryText).padding(.bottom, compact ? 12 : 30)
                 caption("As dictated")
-                Text(OutputExampleComposer.originalSample).font(.system(size: 13)).lineSpacing(7)
-                    .foregroundStyle(AppTheme.paperSecondaryText).padding(.top, 10).padding(.bottom, 25)
+                Text(OutputExampleComposer.originalSample).font(.system(size: 13)).lineSpacing(compact ? 3 : 7)
+                    .foregroundStyle(AppTheme.paperSecondaryText).padding(.top, 10).padding(.bottom, compact ? 12 : 25)
                 Rectangle().fill(AppTheme.paperBorder).frame(height: 1)
-                caption("Result").padding(.top, 25)
-                Text(result).font(.system(size: 21)).tracking(-0.35).lineSpacing(9)
+                caption("Result").padding(.top, compact ? 12 : 25)
+                Text(result).font(.system(size: compact ? 17 : 21)).tracking(-0.35).lineSpacing(compact ? 4 : 9)
                     .foregroundStyle(AppTheme.paperText)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 10).padding(.bottom, 30)
+                    .padding(.top, 10).padding(.bottom, compact ? 12 : 30)
                 Spacer(minLength: 0)
                 HStack(spacing: 6) {
                     tag(label: "Style", value: styleTagValue)
                     tag(label: "Formatting", value: appState.textTone.finalFormattingTitle)
                     Spacer(minLength: 0)
                 }
-                .padding(.top, 16)
+                .padding(.top, compact ? 8 : 16)
             }
-            .padding(24).frame(maxWidth: .infinity, minHeight: 410, alignment: .topLeading)
+            .padding(compact ? 18 : 24).frame(maxWidth: .infinity, minHeight: compact ? 0 : 410, alignment: .topLeading)
             .background(AppTheme.paper, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay { RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(AppTheme.paperBorder, lineWidth: 1) }
         }
