@@ -1,0 +1,98 @@
+@use "../styles/tokens" as *;
+
+.nav {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  padding: 22px 20px;
+  gap: 12px;
+  max-width: $page-max;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: $font-display;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  font-size: 19px;
+  color: $primary;
+  text-decoration: none;
+}
+
+.pillNav {
+  margin: 0 auto;
+  display: flex;
+  gap: 2px;
+  background: #fff;
+  border-radius: $radius-pill;
+  padding: 5px;
+  box-shadow: $shadow-nav;
+
+  a {
+    font-size: 12.5px;
+    padding: 8px 12px;
+    border-radius: $radius-pill;
+    color: #555860;
+    font-weight: 500;
+    white-space: nowrap;
+    text-decoration: none;
+
+    &:hover {
+      color: $ink;
+    }
+
+    &.active {
+      background: $primary;
+      color: #fff;
+      font-weight: 600;
+      box-shadow: 0 6px 14px rgba(109, 93, 246, 0.22);
+    }
+  }
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.github {
+  font-weight: 600;
+  color: $ink-soft;
+  font-size: 13.5px;
+  text-decoration: none;
+
+  &:hover {
+    color: $ink;
+  }
+}
+
+.download {
+  background: #17171b;
+  color: #fff;
+  padding: 11px 15px;
+  border-radius: $radius-pill;
+  font-weight: 600;
+  font-size: 13px;
+  text-decoration: none;
+
+  &:hover {
+    background: #000;
+  }
+}
+
+@media (max-width: 760px) {
+  .pillNav {
+    display: none;
+  }
+
+  .actions {
+    margin-left: auto;
+  }
+}
