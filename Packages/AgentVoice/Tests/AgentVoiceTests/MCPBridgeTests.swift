@@ -5,6 +5,60 @@ import MCP
 import Testing
 
 struct MCPBridgeTests {
+    @Test func lostCommittedReplyRetiresAttachmentAndIdenticalRetryReadsReceipt() async throws {
+        let root = URL(fileURLWithPath: "/tmp/df-test-\(UUID().uuidString.prefix(8))")
+        let socket = root.appendingPathComponent("voice.sock")
+        let store = try VoiceStore(url: root.appendingPathComponent("voice.sqlite"))
+        let fixture = LostReplyFixture()
+        let server = LocalVoiceServer(socketURL: socket, handler: { request, connection in
+            let reply = (try? await store.handle(request, connectionID: connection)) ?? VoiceReply(accepted: false, code: "test_storage_failure")
+            if request.operation == .prepare {
+                let shouldLoseReply = await fixture.record(request, reply: reply)
+                if shouldLoseReply { try? await Task.sleep(for: .seconds(1)) }
+            }
+            return reply
+        }, onDisconnect: { connection in
+            try? await store.disconnect(connectionID: connection)
+            await fixture.disconnected()
+        })
+        try server.start()
+        defer { server.stop(); try? FileManager.default.removeItem(at: root) }
+        let adapter = VoiceAdapter(client: LocalVoiceClient(socketURL: socket), installationID: UUID(), host: "fixture")
+        let first = try await adapter.call(name: "on_user_prompt_submit", arguments: ["session_id": "session", "turn_id": "old"])
+        let oldInput = try #require(first.inputID)
+        let arguments: [String: Value] = ["session_id": "session", "input_id": .string(oldInput.uuidString),
+                                          "request_id": .string(UUID().uuidString), "text": "A committed response."]
+        do {
+            _ = try await adapter.call(name: "prepare_spoken_response", arguments: arguments)
+            Issue.record("The committed reply must be lost")
+        } catch let error as VoiceBridgeTransportError {
+            #expect(error.requestMayHaveBeenAccepted)
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !(await fixture.didDisconnect), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await fixture.didDisconnect)
+        let fresh = try await adapter.call(name: "on_user_prompt_submit", arguments: ["session_id": "session", "turn_id": "fresh"])
+        let freshInput = try #require(fresh.inputID)
+        #expect(fresh.accepted && freshInput != oldInput)
+        let receipt = try await adapter.call(name: "prepare_spoken_response", arguments: arguments)
+        let captured = await fixture.captured
+        try #require(captured.count == 2)
+        #expect(captured[0].0 == captured[1].0)
+        #expect(receipt == captured[0].1)
+        let oldDrafts = try await store.drafts().filter { $0.inputID == oldInput }
+        #expect(oldDrafts.count == 1)
+        #expect(oldDrafts.first?.revision == 1)
+        #expect(oldDrafts.first?.state == .interrupted)
+        do {
+            _ = try await adapter.call(name: "on_stop", arguments: ["session_id": "session", "turn_id": "old"])
+            Issue.record("The old native mapping must be retired")
+        } catch {}
+        let prepared = try await adapter.call(name: "prepare_spoken_response", arguments: ["session_id": "session", "input_id": .string(freshInput.uuidString), "request_id": .string(UUID().uuidString), "text": "Fresh response."])
+        #expect(prepared.accepted)
+        let stop = try await adapter.call(name: "on_stop", arguments: ["session_id": "session", "turn_id": "fresh"])
+        #expect(stop.state == .awaitingCompletion)
+    }
+
     @Test func realSocketRestartDeliversTheFirstPromptAndFencesTheOldInput() async throws {
         let root = URL(fileURLWithPath: "/tmp/df-test-\(UUID().uuidString.prefix(8))")
         let socket = root.appendingPathComponent("voice.sock")
@@ -106,6 +160,16 @@ struct MCPBridgeTests {
         #expect(try await store.nextJob() == nil)
         await client.disconnect()
     }
+}
+
+private actor LostReplyFixture {
+    var captured: [(VoiceRequest, VoiceReply)] = []
+    var didDisconnect = false
+    func record(_ request: VoiceRequest, reply: VoiceReply) -> Bool {
+        captured.append((request, reply))
+        return captured.count == 1
+    }
+    func disconnected() { didDisconnect = true }
 }
 
 private actor DisconnectFixture {

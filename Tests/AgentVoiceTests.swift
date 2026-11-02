@@ -116,11 +116,55 @@ final class AgentVoiceTests: XCTestCase {
         voice.shutdown(); await voice.waitForShutdown()
     }
 
+    func testSynthesisFailureCanBeRetriedExplicitly() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let runtime = FailingOnceVoiceRuntimeFixture()
+        let player = VoicePlayerFixture()
+        let appID = "df-test-\(UUID().uuidString.prefix(8))"
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root, runtime: runtime, appIdentity: appID)
+        defer {
+            voice.shutdown(); defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        voice.setEnabled(true)
+        let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: appID))
+        let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "turn")
+        let attachment = try await client.send(.init(session: session, operation: .attach)).attachment
+        let input = try await client.send(.init(session: session, operation: .prompt, attachment: attachment)).inputID
+        _ = try await client.send(.init(session: session, operation: .prepare, attachment: attachment, inputID: input, text: "Retry this response."))
+        voice.speak(try XCTUnwrap(voice.drafts.first))
+        try await waitUntil { voice.drafts.first?.state == .failed }
+        let failed = try XCTUnwrap(voice.drafts.first)
+        XCTAssertTrue(voice.status.contains("Agent speech failed"))
+        XCTAssertEqual(player.playCount, 0)
+        voice.speak(failed)
+        try await waitUntil { player.playCount == 1 }
+        XCTAssertNotEqual(voice.drafts.first?.id, failed.id)
+        XCTAssertEqual(voice.drafts.first?.text, failed.text)
+        let calls = await runtime.synthesisCount
+        XCTAssertEqual(calls, 2)
+        voice.shutdown(); await voice.waitForShutdown()
+    }
+
     private func waitUntil(_ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertTrue(condition())
     }
+}
+
+private actor FailingOnceVoiceRuntimeFixture: LiquidRuntimeProtocol {
+    var synthesisCount = 0
+    func synthesize(_ text: String) async throws -> LiquidSpeech {
+        synthesisCount += 1
+        if synthesisCount == 1 { throw VoiceError.unavailable("Injected synthesis failure") }
+        return LiquidSpeech(wav: Data(), duration: 60)
+    }
+    func transcribe(wav: Data, english: Bool) async throws -> String { "Fixture transcription" }
+    func stop() async {}
+    func hasExited() async -> Bool { true }
 }
 
 private actor VoiceRuntimeFixture: LiquidRuntimeProtocol {
