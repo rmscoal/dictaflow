@@ -1,5 +1,12 @@
 # DictaFlow verification
 
+Agent Voice contract/helper tests run with `swift test --package-path Packages/AgentVoice`.
+Hosted `AgentVoiceTests` cover foreground leases, queue admission, immediate local
+silence, cancellation during synthesis with a late result, and history/settings
+compatibility without microphone access or playback.
+The optional real Liquid check, pins, measured results, hook setup, and outstanding
+host qualification are documented in [Agent Voice](../Docs/AgentVoice.md).
+
 `DictaFlowTests` is hosted by the Dev app. It checks preference migration,
 startup failure, readiness retry pacing, shared preparation, shutdown during
 startup, waking a sleeping server, rejection of incomplete output, verified

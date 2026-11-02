@@ -3,12 +3,14 @@ import Foundation
 enum TranscriptionPipelineState: Equatable {
     case idle
     case transcribing(WhisperModelDescriptor)
+    case transcribingLiquid
     case refining(RefinementModelDescriptor)
 
     var isTranscribing: Bool {
         if case .transcribing = self {
             return true
         }
+        if case .transcribingLiquid = self { return true }
 
         return false
     }
@@ -25,7 +27,7 @@ enum TranscriptionPipelineState: Equatable {
         switch self {
         case .idle:
             return false
-        case .transcribing, .refining:
+        case .transcribing, .transcribingLiquid, .refining:
             return true
         }
     }

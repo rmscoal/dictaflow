@@ -5,6 +5,12 @@ nonisolated struct WhisperConfiguration: Codable, Equatable {
     var inputLanguage: WhisperInputLanguage
     var taskMode: WhisperTaskMode
     var customVocabulary: [String]
+    // Keep the existing persisted configuration key and Whisper preferences for compatibility.
+    var recognitionProvider: SpeechRecognitionProvider = .whisper
+
+    var speechModelName: String {
+        recognitionProvider == .whisper ? "Whisper \(model.displayName)" : "Liquid LFM3-Audio-2B"
+    }
 
     static let `default` = WhisperConfiguration(
         model: .recommendedDefault,
@@ -29,6 +35,7 @@ nonisolated struct WhisperConfiguration: Codable, Equatable {
         case inputLanguage
         case taskMode
         case customVocabulary
+        case recognitionProvider
     }
 
     init(
@@ -48,6 +55,7 @@ nonisolated struct WhisperConfiguration: Codable, Equatable {
         model = try container.decode(WhisperModelDescriptor.self, forKey: .model)
         inputLanguage = try container.decode(WhisperInputLanguage.self, forKey: .inputLanguage)
         taskMode = try container.decode(WhisperTaskMode.self, forKey: .taskMode)
+        recognitionProvider = try container.decodeIfPresent(SpeechRecognitionProvider.self, forKey: .recognitionProvider) ?? .whisper
         if let storedTerms = try? container.decode([String].self, forKey: .customVocabulary) {
             customVocabulary = Self.sanitizedKeywords(storedTerms)
         } else if let legacyText = try? container.decode(String.self, forKey: .customVocabulary) {

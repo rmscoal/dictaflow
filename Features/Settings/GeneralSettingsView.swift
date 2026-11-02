@@ -34,6 +34,7 @@ struct GeneralSettingsView: View {
                             .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 5))
                     }
                 }
+                if let voice = appState.agentVoice { AgentVoiceSettingsView(voice: voice) }
             }
             VStack(alignment: .leading, spacing: 0) {
                 EmberModuleHeading(title: "Storage")

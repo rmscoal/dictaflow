@@ -8,20 +8,30 @@ struct TranscriptionSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !prepared {
-                EmberErrorBanner(title: "Download your speech model", message: "Whisper \(model.displayName) is selected, but its local file is missing. Download it or choose an installed model.", actionTitle: "Choose a speech model") {
-                    appState.showSpeechModels(focusing: model)
+            Picker("Recognition engine", selection: Binding(get: { appState.whisperConfiguration.recognitionProvider }, set: { appState.updateRecognitionProvider($0) })) {
+                ForEach(SpeechRecognitionProvider.allCases) { Text($0.title).tag($0) }
+            }
+            .disabled(appState.whisperSettingsLocked)
+            .padding(.bottom, 18)
+            if appState.whisperConfiguration.recognitionProvider == .liquid {
+                Text("Liquid LFM3-Audio-2B uses the same press-to-start, press-to-stop recording flow. Download its shared ASR/TTS assets in General settings. Vocabulary replacements still apply; Whisper decoding hints are not used.")
+                    .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText).padding(.bottom, 18)
+            } else {
+                if !prepared {
+                    EmberErrorBanner(title: "Download your speech model", message: "Whisper \(model.displayName) is selected, but its local file is missing. Download it or choose an installed model.", actionTitle: "Choose a speech model") {
+                        appState.showSpeechModels(focusing: model)
+                    }
+                    .padding(.bottom, 18)
+                }
+                EmberSectionHeading(title: "Speech model")
+                SelectedModelCard(name: "Whisper \(model.displayName)", providerAsset: "provider-openai",
+                                  status: prepared ? "Ready" : "Download needed",
+                                  size: model.approximateDiskSizeDescription + (appState.isWhisperEncoderPrepared(model) ? " · Neural Engine" : ""),
+                                  hasError: !prepared, actionTitle: prepared ? "Change…" : "Download…", disabled: appState.whisperSettingsLocked) {
+                    appState.showSpeechModels()
                 }
                 .padding(.bottom, 18)
             }
-            EmberSectionHeading(title: "Speech model")
-            SelectedModelCard(name: "Whisper \(model.displayName)", providerAsset: "provider-openai",
-                              status: prepared ? "Ready" : "Download needed",
-                              size: model.approximateDiskSizeDescription + (appState.isWhisperEncoderPrepared(model) ? " · Neural Engine" : ""),
-                              hasError: !prepared, actionTitle: prepared ? "Change…" : "Download…", disabled: appState.whisperSettingsLocked) {
-                appState.showSpeechModels()
-            }
-            .padding(.bottom, 18)
             EmberPanel {
                 EmberRow(title: "Task") {
                     selectionMenu(label: "Task", title: appState.whisperConfiguration.taskMode == .transcribe ? "Transcribe" : "Translate to English") {
@@ -47,6 +57,7 @@ struct TranscriptionSettingsView: View {
                         .pickerStyle(.inline).labelsHidden()
                     }
                 }
+                .disabled(appState.whisperConfiguration.recognitionProvider == .liquid)
             }
             .disabled(appState.whisperSettingsLocked)
             .padding(.bottom, 18)

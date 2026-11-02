@@ -137,7 +137,7 @@ struct HistoryDetailView: View {
         HStack(spacing: 9) {
             if model.textView == .original {
                 EmberProviderIcon(asset: "provider-openai", size: 25)
-                Text("Whisper \(model.transcription?.configuration.model.displayName ?? "")")
+                Text(model.transcription?.configuration.speechModelName ?? "")
             } else if model.textView == .refined, let refinement = model.refinement {
                 if let provider = refinement.configuration.model.provider { EmberProviderIcon(asset: provider.iconName, size: 25) }
                 Text(refinement.configuration.model.displayName)

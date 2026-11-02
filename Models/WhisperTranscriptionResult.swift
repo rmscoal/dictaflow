@@ -4,7 +4,7 @@ nonisolated struct WhisperTranscriptionResult: Codable, Equatable {
     let text: String
     let segments: [WhisperTranscriptionSegment]
     let detectedLanguageCode: String?
-    let model: WhisperModelDescriptor
+    let model: WhisperModelDescriptor?
     let taskMode: WhisperTaskMode
     let completedAt: Date
     var refinement: TranscriptRefinementResult? = nil
@@ -13,6 +13,12 @@ nonisolated struct WhisperTranscriptionResult: Codable, Equatable {
     var toneFormatting: ToneFormattingResult? = nil
     var vocabularyReplacement: VocabularyReplacementResult? = nil
     var initialPromptExcludedTerms: [String]? = nil
+    // Missing in older history rows means Whisper. Liquid results have no Whisper model.
+    var recognitionProvider: SpeechRecognitionProvider? = nil
+
+    var speechModelName: String {
+        recognitionProvider == .liquid ? "Liquid LFM3-Audio-2B" : "Whisper \(model?.displayName ?? "Unknown")"
+    }
 
     var insertionText: String {
         if let refinement {
