@@ -2,11 +2,23 @@ import AgentVoice
 import AVFoundation
 import Combine
 import Foundation
+import OSLog
 
 @MainActor
 protocol AgentSpeechPlayerProtocol: AnyObject {
     func play(_ wav: Data) throws -> TimeInterval
     func stop()
+}
+
+/// Explicit actionable Agent Voice error. Views switch on `scope`, never on
+/// message text, so raw authorization and resource messages stay visible
+/// without substring matching. Set only at real failure points; cleared only
+/// by an explicit user action or a later success, never by heartbeats,
+/// refreshes, or routine status updates.
+struct AgentVoiceError: Equatable, Sendable {
+    enum Scope: String, Equatable, Sendable { case setup, models, playback }
+    let scope: Scope
+    let message: String
 }
 
 @MainActor
@@ -31,6 +43,8 @@ final class AgentVoiceCoordinator: ObservableObject {
     @Published private(set) var isDownloading = false
     @Published private(set) var drafts: [VoiceDraft] = []
     @Published private(set) var isSpeaking = false
+    @Published private(set) var isGenerating = false
+    @Published private(set) var activeError: AgentVoiceError?
 
     let assets: LiquidAssets
     let runtime: any LiquidRuntimeProtocol
@@ -39,6 +53,7 @@ final class AgentVoiceCoordinator: ObservableObject {
     var prepareSpeechResources: (() async -> Void)?
     private let defaults: UserDefaults
     private let player: AgentSpeechPlayerProtocol
+    private let logger = Logger(subsystem: "com.dictaflow.agentvoice", category: "Coordinator")
     private var store: VoiceStore?
     private var bridge: LocalVoiceServer?
     private var worker: Task<Void, Never>?
@@ -49,7 +64,8 @@ final class AgentVoiceCoordinator: ObservableObject {
     private var stopped = false
 
     init(defaults: UserDefaults = .standard, player: AgentSpeechPlayerProtocol? = nil,
-         supportDirectory: URL? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil) {
+         supportDirectory: URL? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil,
+         limits: VoiceLimits = VoiceLimits()) {
         self.defaults = defaults; self.player = player ?? AgentSpeechPlayer()
         appID = appIdentity ?? (Bundle.main.bundleIdentifier == "com.dictaflow" ? "com.dictaflow" : "com.dictaflow.dev")
         let name = appID == "com.dictaflow" ? "DictaFlow" : "DictaFlow Dev"
@@ -59,10 +75,17 @@ final class AgentVoiceCoordinator: ObservableObject {
         let installation = defaults.string(forKey: "agentVoice.installationID").flatMap(UUID.init(uuidString:)) ?? UUID()
         installationID = installation; defaults.set(installation.uuidString, forKey: "agentVoice.installationID")
         isEnabled = defaults.bool(forKey: "agentVoice.enabled")
-        do { store = try VoiceStore(url: support.appendingPathComponent("AgentVoice/voice.sqlite")) }
-        catch { status = "Agent Voice storage failed: \(error.localizedDescription)"; isEnabled = false }
+        do { store = try VoiceStore(url: support.appendingPathComponent("AgentVoice/voice.sqlite"), limits: limits) }
+        catch {
+            status = "Agent Voice storage failed: \(error.localizedDescription)"
+            activeError = AgentVoiceError(scope: .setup, message: status)
+            isEnabled = false
+        }
         if isEnabled { startBridge() }
-        Task { [weak self, assets] in self?.isModelReady = (try? await assets.isReady()) == true }
+        Task { [weak self, assets] in
+            await self?.refresh()
+            self?.isModelReady = (try? await assets.isReady()) == true
+        }
     }
 
     var connectionCommand: String {
@@ -72,13 +95,19 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func setEnabled(_ enabled: Bool) {
         guard !stopped else { return }
+        // An explicit toggle supersedes every prior actionable error. Fresh
+        // failures below set a new one; heartbeats and refreshes never clear.
+        activeError = nil
         defaults.set(enabled, forKey: "agentVoice.enabled"); isEnabled = enabled
         if enabled { startBridge() }
         else {
             bridge?.stop(); bridge = nil; interruptActiveSpeech()
             Task { [weak self, store] in
                 do { try await store?.cancelAll(); await self?.refresh() }
-                catch { self?.status = error.localizedDescription }
+                catch {
+                    self?.status = error.localizedDescription
+                    self?.activeError = AgentVoiceError(scope: .setup, message: error.localizedDescription)
+                }
             }
             status = "Agent Voice is off."
         }
@@ -86,13 +115,19 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func downloadModel() {
         guard !isDownloading else { return }
+        // An explicit retry supersedes a prior model error; other scopes stay.
+        if activeError?.scope == .models { activeError = nil }
         isDownloading = true; status = "Downloading and verifying Liquid audio (1.4 GB)…"
         Task { [weak self, assets] in
             do {
                 try await assets.download()
                 self?.isModelReady = true
                 self?.status = "Liquid audio is ready. Automatic host completion is not qualified."
-            } catch { self?.status = "Liquid download failed: \(error.localizedDescription)" }
+            } catch {
+                let message = "Liquid download failed: \(error.localizedDescription)"
+                self?.status = message
+                self?.activeError = AgentVoiceError(scope: .models, message: message)
+            }
             self?.isDownloading = false
         }
     }
@@ -110,21 +145,37 @@ final class AgentVoiceCoordinator: ObservableObject {
     }
 
     func waitForForegroundResources() async throws {
+        let started = ContinuousClock.now
         await resourceRelease?.value
         guard await runtime.hasExited() else { throw VoiceError.unavailable("Liquid audio has not stopped. The recording is kept; try transcription again.") }
+        logger.info("Foreground resource_wait_seconds=\(Self.seconds(since: started), privacy: .public)")
     }
 
     func speak(_ draft: VoiceDraft) {
         guard isEnabled, let store else { return }
+        let requestedAt = ContinuousClock.now
         Task { [weak self] in
-            do { _ = try await store.authorizeByUser(draftID: draft.id); await self?.refresh(); self?.pump() }
-            catch { self?.status = error.localizedDescription }
+            do {
+                _ = try await store.authorizeByUser(draftID: draft.id)
+                self?.logger.info("Speech admission_seconds=\(Self.seconds(since: requestedAt), privacy: .public)")
+                // Authorized Play is a valid action: it clears a stale playback error.
+                if self?.activeError?.scope == .playback { self?.activeError = nil }
+                await self?.refresh(); self?.pump()
+            }
+            catch {
+                self?.status = error.localizedDescription
+                self?.activeError = AgentVoiceError(scope: .playback, message: error.localizedDescription)
+                // A rejected Play must refresh so a stale, expired, or deleted
+                // row updates its eligibility instead of staying playable.
+                await self?.refresh()
+            }
         }
     }
 
     func stopSpeech() { interruptActiveSpeech() }
 
     func recognize(_ audioURL: URL, configuration: WhisperConfiguration) async throws -> WhisperTranscriptionResult {
+        try Self.preflightASRDuration(audioURL)
         let samples = try await AVAudioDecodingService().decodePCMFloatSamples(from: audioURL)
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
         defer { try? FileManager.default.removeItem(at: temporary) }
@@ -143,6 +194,24 @@ final class AgentVoiceCoordinator: ObservableObject {
             return WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: configuration.taskMode == .translateToEnglish ? "en" : nil,
                                               model: nil, taskMode: configuration.taskMode, completedAt: Date(), recognitionProvider: .liquid)
         } catch { await runtime.stop(); throw error }
+    }
+
+    /// Metadata-only duration check before the potentially unbounded full decode.
+    /// Missing or unreadable files propagate the decoder's existing error. Invalid
+    /// or nonfinite durations fail explicitly. Overlimit clips fail with retention
+    /// so the user can retry with Whisper; they are never truncated or switched.
+    private static func preflightASRDuration(_ audioURL: URL) throws {
+        let file = try AVAudioFile(forReading: audioURL)
+        let rate = file.processingFormat.sampleRate
+        let frames = Double(file.length)
+        guard rate.isFinite, rate > 0, frames.isFinite, frames >= 0 else {
+            throw VoiceError.unavailable("Liquid could not read the recording length.")
+        }
+        let duration = frames / rate
+        guard duration.isFinite else { throw VoiceError.unavailable("Liquid could not read the recording length.") }
+        guard duration <= LiquidRuntime.maxASRDuration else {
+            throw VoiceError.inputTooLong("Liquid ASR supports up to 2 minutes. The recording is kept; use Whisper or a shorter recording.")
+        }
     }
 
     func shutdown() {
@@ -168,7 +237,12 @@ final class AgentVoiceCoordinator: ObservableObject {
         do {
             try bridge.start(); self.bridge = bridge
             status = "Connected locally. Automatic playback awaits host qualification; prepared speech can be played here."
-        } catch { status = error.localizedDescription; isEnabled = false; defaults.set(false, forKey: "agentVoice.enabled") }
+            if activeError?.scope == .setup { activeError = nil }
+        } catch {
+            status = error.localizedDescription
+            activeError = AgentVoiceError(scope: .setup, message: status)
+            isEnabled = false; defaults.set(false, forKey: "agentVoice.enabled")
+        }
     }
 
     private func didReceiveRequest() async {
@@ -179,12 +253,17 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     private func refresh() async {
         do { drafts = try await store?.drafts().sorted { $0.createdAt > $1.createdAt } ?? [] }
-        catch { status = "Agent Voice storage failed: \(error.localizedDescription)" }
+        catch {
+            status = "Agent Voice storage failed: \(error.localizedDescription)"
+            activeError = AgentVoiceError(scope: .setup, message: status)
+        }
+        // Success never clears: heartbeat and routine refreshes must not
+        // hide an actionable error set by a real failure.
     }
 
     private func interruptActiveSpeech(stopAllInference: Bool = false, reason: String = "Agent speech stopped.") {
         generation = UUID()
-        player.stop(); isSpeaking = false
+        player.stop(); isSpeaking = false; isGenerating = false
         worker?.cancel()
         let oldWorker = worker; worker = nil
         let job = activeJob; activeJob = nil
@@ -211,7 +290,7 @@ final class AgentVoiceCoordinator: ObservableObject {
             guard let self else { return }
             await release?.value
             defer {
-                if generation == token { worker = nil; activeJob = nil; isSpeaking = false }
+                if generation == token { worker = nil; activeJob = nil; isSpeaking = false; isGenerating = false }
             }
             while !Task.isCancelled, generation == token, foregroundLeases.isEmpty, isEnabled {
                 do {
@@ -220,8 +299,10 @@ final class AgentVoiceCoordinator: ObservableObject {
                         _ = try? await store.transition(job.id, from: .synthesizing, to: .cancelled)
                         return
                     }
-                    activeJob = job.id; status = "Generating agent speech…"
+                    activeJob = job.id; isGenerating = true; status = "Generating agent speech…"
+                    let processingStarted = ContinuousClock.now
                     await prepareSpeechResources?()
+                    logger.info("Speech resource_preparation_seconds=\(Self.seconds(since: processingStarted), privacy: .public)")
                     guard !Task.isCancelled, generation == token, foregroundLeases.isEmpty else { return }
                     let speech = try await runtime.synthesize(job.text)
                     // Retire model compute before playback or foreground inference.
@@ -229,12 +310,15 @@ final class AgentVoiceCoordinator: ObservableObject {
                     guard !Task.isCancelled, generation == token, foregroundLeases.isEmpty,
                           try await store.transition(job.id, from: .synthesizing, to: .playing) else { continue }
                     guard !Task.isCancelled, generation == token, foregroundLeases.isEmpty else { return }
+                    let playerStarted = ContinuousClock.now
                     let duration = try player.play(speech.wav)
-                    isSpeaking = true; status = "Speaking agent response."
+                    isGenerating = false; isSpeaking = true; status = "Speaking agent response."
+                    logger.info("Speech processing_to_player_start_seconds=\(Self.seconds(since: processingStarted), privacy: .public) player_start_seconds=\(Self.seconds(since: playerStarted), privacy: .public)")
                     try await Task.sleep(for: .seconds(duration))
                     player.stop(); isSpeaking = false
                     _ = try await store.transition(job.id, from: .playing, to: .completed)
                     activeJob = nil; status = "Agent speech finished."
+                    if activeError?.scope == .playback { activeError = nil }
                     await refresh()
                 } catch {
                     if generation != token { return }
@@ -243,7 +327,8 @@ final class AgentVoiceCoordinator: ObservableObject {
                         _ = try? await store.transition(activeJob, from: .synthesizing, to: .failed, failure: error.localizedDescription)
                         _ = try? await store.transition(activeJob, from: .playing, to: .failed, failure: error.localizedDescription)
                     }
-                    player.stop(); isSpeaking = false; status = "Agent speech failed: \(error.localizedDescription)"
+                    player.stop(); isSpeaking = false; isGenerating = false; status = "Agent speech failed: \(error.localizedDescription)"
+                    activeError = AgentVoiceError(scope: .playback, message: status)
                     await runtime.stop(); await refresh()
                     activeJob = nil
                     if failedJob == nil { return }
@@ -251,5 +336,10 @@ final class AgentVoiceCoordinator: ObservableObject {
                 }
             }
         }
+    }
+
+    private static func seconds(since started: ContinuousClock.Instant) -> Double {
+        let duration = started.duration(to: .now).components
+        return Double(duration.seconds) + Double(duration.attoseconds) / 1e18
     }
 }

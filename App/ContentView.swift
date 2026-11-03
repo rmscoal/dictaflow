@@ -67,6 +67,7 @@ struct ContentView: View {
     @ViewBuilder private var page: some View {
         switch appState.mainWindowPage {
         case .dictation: DictationWorkspaceView(appState: appState)
+        case .agentVoice: AgentVoiceView(appState: appState)
         case .history: HistoryView(appState: appState, model: appState.history)
         case .settings: SettingsView(appState: appState)
         case .updates: UpdatesView(appState: appState)

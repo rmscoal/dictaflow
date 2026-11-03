@@ -51,6 +51,69 @@ struct VoiceAdapterTests {
         #expect(sent[4].inputID == input)
     }
 
+    @Test func cachedPromptRetryAfterUnknownOutcomeReturnsActionableErrorWithoutClobberingFreshWork() async throws {
+        let firstID = UUID()
+        let freshInput = UUID()
+        let client = BridgeFixture(actions: [
+            .reply(.init(accepted: true, code: "attached", attachment: .init(id: UUID(), epoch: 1))),
+            .unknownFailure,
+            .reply(.init(accepted: true, code: "attached", attachment: .init(id: UUID(), epoch: 2))),
+            .reply(.init(accepted: true, code: "input_opened", inputID: freshInput)),
+            .reply(.init(accepted: false, code: "stale_attachment")),
+            .reply(.init(accepted: true, code: "completion_unverified", state: .awaitingCompletion))
+        ])
+        let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "fixture")
+        let staleArgs: [String: Value] = ["session_id": "session", "turn_id": "old-turn",
+                                          "request_id": .string(firstID.uuidString)]
+        do {
+            _ = try await adapter.call(name: "on_user_prompt_submit", arguments: staleArgs)
+            Issue.record("Unknown-outcome prompt must throw.")
+        } catch let error as VoiceBridgeTransportError {
+            #expect(error.requestMayHaveBeenAccepted)
+        }
+        let fresh = try await adapter.call(name: "on_user_prompt_submit",
+                                           arguments: ["session_id": "session", "turn_id": "new-turn"])
+        #expect(fresh.inputID == freshInput)
+        let retry = try await adapter.call(name: "on_user_prompt_submit", arguments: staleArgs)
+        #expect(!retry.accepted)
+        #expect(retry.code == "new_prompt_required")
+        let sent = await client.sent
+        #expect(sent.map(\.operation) == [.attach, .prompt, .attach, .prompt, .prompt])
+        #expect(sent[1].requestID == firstID)
+        #expect(sent[4].requestID == firstID)
+        #expect(sent[1] == sent[4], "Identical retry must reuse the original envelope for receipt lookup.")
+        // The fresh turn stays usable: the stale retry must not retire its mapping.
+        _ = try await adapter.call(name: "on_stop", arguments: ["session_id": "session", "turn_id": "new-turn"])
+        let afterStop = await client.sent
+        #expect(afterStop.map(\.operation) == [.attach, .prompt, .attach, .prompt, .prompt, .stop])
+        #expect(afterStop[5].inputID == freshInput)
+    }
+
+    @Test func cachedPromptCommittedReceiptStillReturnsOriginalReply() async throws {
+        let firstID = UUID()
+        let originalInput = UUID()
+        let originalAttachment = VoiceAttachment(id: UUID(), epoch: 1)
+        let client = BridgeFixture(actions: [
+            .reply(.init(accepted: true, code: "attached", attachment: originalAttachment)),
+            .unknownFailure,
+            .reply(.init(accepted: true, code: "attached", attachment: .init(id: UUID(), epoch: 2))),
+            .reply(.init(accepted: true, code: "input_opened", inputID: UUID())),
+            .reply(.init(accepted: true, code: "input_opened", inputID: originalInput))
+        ])
+        let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "fixture")
+        let args: [String: Value] = ["session_id": "session", "turn_id": "old-turn",
+                                     "request_id": .string(firstID.uuidString)]
+        do { _ = try await adapter.call(name: "on_user_prompt_submit", arguments: args) } catch {}
+        _ = try await adapter.call(name: "on_user_prompt_submit",
+                                   arguments: ["session_id": "session", "turn_id": "new-turn"])
+        let receipt = try await adapter.call(name: "on_user_prompt_submit", arguments: args)
+        #expect(receipt.accepted)
+        #expect(receipt.inputID == originalInput)
+        let sent = await client.sent
+        #expect(sent[1] == sent[4], "Committed receipt must use the original attachment, payload and timestamp.")
+        #expect(sent[4].attachment == originalAttachment)
+    }
+
     @Test func transportFailureRetiresOwnershipButPreservesOriginalRetryEnvelope() async throws {
         let oldInput = UUID()
         let newInput = UUID()
@@ -78,7 +141,7 @@ struct VoiceAdapterTests {
 }
 
 private actor BridgeFixture: VoiceBridgeClientProtocol {
-    enum Action: Sendable { case reply(VoiceReply), failure, notSentFailure }
+    enum Action: Sendable { case reply(VoiceReply), failure, notSentFailure, unknownFailure }
     var sent: [VoiceRequest] = []
     private var actions: [Action]
     init(actions: [Action]) { self.actions = actions }
@@ -89,6 +152,7 @@ private actor BridgeFixture: VoiceBridgeClientProtocol {
         case .reply(let reply): return reply
         case .failure: throw VoiceError.unavailable("Injected connection loss.")
         case .notSentFailure: throw VoiceBridgeTransportError(requestMayHaveBeenAccepted: false, message: "Injected dead idle socket.")
+        case .unknownFailure: throw VoiceBridgeTransportError(requestMayHaveBeenAccepted: true, message: "Injected unknown-outcome timeout.")
         }
     }
 }

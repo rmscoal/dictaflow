@@ -14,7 +14,7 @@ struct TranscriptionSettingsView: View {
             .disabled(appState.whisperSettingsLocked)
             .padding(.bottom, 18)
             if appState.whisperConfiguration.recognitionProvider == .liquid {
-                Text("Liquid LFM3-Audio-2B uses the same press-to-start, press-to-stop recording flow. Download its shared ASR/TTS assets in General settings. Vocabulary replacements still apply; Whisper decoding hints are not used.")
+                Text("Liquid LFM3-Audio-2B uses the same press-to-start, press-to-stop recording flow. Download its shared ASR/TTS assets in Agent Voice, under Models. Vocabulary replacements still apply; Whisper decoding hints are not used.")
                     .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText).padding(.bottom, 18)
             } else {
                 if !prepared {

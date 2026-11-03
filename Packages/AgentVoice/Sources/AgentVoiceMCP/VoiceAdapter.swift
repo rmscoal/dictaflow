@@ -54,7 +54,15 @@ public actor VoiceAdapter {
                 throw VoiceError.unavailable("request_id was already used with different arguments.")
             }
             // Preserve the original envelope for receipt lookup, including after reconnect.
-            return try await send(cached.request)
+            // A stale reply means no receipt exists for this envelope. Do not reattach or
+            // resend with changed identity: the original may still commit, and a new
+            // attachment would conflict with that receipt or supersede fresher work.
+            // Return an actionable error without retiring the current valid attachment.
+            let retry = try await send(cached.request)
+            if retry.code == "stale_attachment" {
+                return VoiceReply(accepted: false, code: "new_prompt_required", message: "The app connection changed. Finish the written answer normally; begin a new prompt for speech.")
+            }
+            return retry
         }
 
         let session = VoiceSession(installationID: installationID, host: host, sessionID: nativeSession)

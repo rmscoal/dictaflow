@@ -1,6 +1,16 @@
 import AVFoundation
 import Darwin
 import Foundation
+import OSLog
+
+/// Local diagnostic timings. Contains no rendition text, audio, paths, or credentials.
+public struct LiquidSynthesisTimings: Codable, Sendable {
+    public let startupSeconds: Double
+    public let requestSeconds: Double
+    public let responseHeaderSeconds: Double
+    public let responseBodySeconds: Double
+    public let validationSeconds: Double
+}
 
 public struct LiquidSpeech: Sendable {
     public let wav: Data
@@ -15,10 +25,39 @@ public protocol LiquidRuntimeProtocol: Sendable {
     func hasExited() async -> Bool
 }
 
+/// Benchmark/test-only overrides. Production uses `.productionDefault`, which
+/// preserves the exact inherited environment, argument shape, and unseeded payload.
+public struct LiquidRuntimeConfiguration: Sendable {
+    public var ttsSeed: UInt32?
+    /// Trusted diagnostic-only flags for the bundled benchmark harness. Never
+    /// wired to user preferences or host-supplied settings.
+    public var extraServerArguments: [String]
+    public var serverEnvironment: [String: String]?
+    public var healthPollInterval: Duration
+
+    public static let productionDefault = LiquidRuntimeConfiguration()
+
+    /// 20 ms readiness polling: measured ~20 ms faster startup detection
+    /// than 100 ms with no behavior change (2026-11-02, M2 Pro). Cost is a
+    /// few dozen extra loopback health checks during sub-second startup.
+    public init(ttsSeed: UInt32? = nil, extraServerArguments: [String] = [],
+                serverEnvironment: [String: String]? = nil,
+                healthPollInterval: Duration = .milliseconds(20)) {
+        self.ttsSeed = ttsSeed
+        self.extraServerArguments = extraServerArguments
+        self.serverEnvironment = serverEnvironment
+        self.healthPollInterval = healthPollInterval
+    }
+}
+
 /// One owned sidecar, serial requests. Cancellation fences results and retires that process.
 public actor LiquidRuntime: LiquidRuntimeProtocol {
+    public private(set) var lastSynthesisTimings: LiquidSynthesisTimings?
+    public private(set) var lastStopSeconds: Double = 0
+    private let logger = Logger(subsystem: "com.dictaflow.agentvoice", category: "LiquidRuntime")
     private let executable: URL
     private let assets: LiquidAssets
+    private let configuration: LiquidRuntimeConfiguration
     private var process: Process?
     private var endpoint: URL?
     private var generation = UUID()
@@ -26,8 +65,9 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
     private let http: URLSession
     private var apiKey = UUID().uuidString
 
-    public init(executable: URL, assets: LiquidAssets) {
-        self.executable = executable; self.assets = assets
+    public init(executable: URL, assets: LiquidAssets,
+                configuration: LiquidRuntimeConfiguration = .productionDefault) {
+        self.executable = executable; self.assets = assets; self.configuration = configuration
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 60
@@ -38,15 +78,25 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
         guard !busy else { throw VoiceError.unavailable("Liquid audio is busy.") }
         guard !text.isEmpty, text.count <= 8_000 else { throw VoiceError.unavailable("The spoken rendition is empty or too long.") }
         busy = true; defer { busy = false }
+        lastSynthesisTimings = nil
         let token = generation
         do {
+            let startupStarted = ContinuousClock.now
             let endpoint = try await start(token: token)
-            let payload: [String: Any] = ["input": text, "lang": "en", "voice": "female", "stream": false,
-                                           "response_format": "wav", "n_predict": 2048, "repeat_penalty": 1.1]
-            let data = try await post(endpoint.appendingPathComponent("tts"), payload: payload, maxBytes: 12 * 1024 * 1024)
+            let startupSeconds = Self.seconds(since: startupStarted)
+            let payload = Self.ttsPayload(text: text, seed: configuration.ttsSeed)
+            let requestStarted = ContinuousClock.now
+            let response = try await post(endpoint.appendingPathComponent("tts"), payload: payload, maxBytes: 12 * 1024 * 1024)
+            let requestSeconds = Self.seconds(since: requestStarted)
             try check(token)
-            let duration = try Self.validateWAV(data)
-            return LiquidSpeech(wav: data, duration: duration)
+            let validationStarted = ContinuousClock.now
+            let duration = try Self.validateWAV(response.data)
+            let validationSeconds = Self.seconds(since: validationStarted)
+            lastSynthesisTimings = LiquidSynthesisTimings(startupSeconds: startupSeconds, requestSeconds: requestSeconds,
+                                                         responseHeaderSeconds: response.headerSeconds, responseBodySeconds: response.bodySeconds,
+                                                         validationSeconds: validationSeconds)
+            logger.info("TTS startup_seconds=\(startupSeconds, privacy: .public) request_seconds=\(requestSeconds, privacy: .public) header_seconds=\(response.headerSeconds, privacy: .public) body_seconds=\(response.bodySeconds, privacy: .public) validation_seconds=\(validationSeconds, privacy: .public) audio_seconds=\(duration, privacy: .public)")
+            return LiquidSpeech(wav: response.data, duration: duration)
         } catch {
             await stop()
             throw error
@@ -55,6 +105,7 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
 
     public func transcribe(wav: Data, english: Bool) async throws -> String {
         guard !busy else { throw VoiceError.unavailable("Liquid audio is busy.") }
+        try Self.validateASRInput(wav)
         busy = true; defer { busy = false }
         let token = generation
         do {
@@ -64,7 +115,7 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
                     ["role": "system", "content": english ? "Perform ASR in English." : "Perform ASR."],
                     ["role": "user", "content": [["type": "input_audio", "input_audio": ["data": wav.base64EncodedString()]]]]
                 ]]
-            let data = try await post(endpoint.appendingPathComponent("v1/chat/completions"), payload: payload, maxBytes: 1024 * 1024)
+            let response = try await post(endpoint.appendingPathComponent("v1/chat/completions"), payload: payload, maxBytes: 1024 * 1024)
             try check(token)
             struct Response: Decodable {
                 struct Choice: Decodable {
@@ -74,7 +125,7 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
                 }
                 let choices: [Choice]
             }
-            guard let choice = try JSONDecoder().decode(Response.self, from: data).choices.first else {
+            guard let choice = try JSONDecoder().decode(Response.self, from: response.data).choices.first else {
                 throw VoiceError.unavailable("Liquid returned no transcription.")
             }
             guard choice.finish_reason != "length" else { throw VoiceError.unavailable("Liquid reached its transcription limit. Use a shorter recording.") }
@@ -84,6 +135,10 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
 
     /// Bounded shutdown attempt. Callers check hasExited before admitting foreground inference.
     public func stop() async {
+        let started = ContinuousClock.now
+        defer {
+            lastStopSeconds = Self.seconds(since: started)
+        }
         generation = UUID()
         endpoint = nil
         guard let owned = process else { return }
@@ -94,13 +149,44 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
         let hardDeadline = ContinuousClock.now.advanced(by: .milliseconds(500))
         while owned.isRunning, ContinuousClock.now < hardDeadline { await pauseDuringShutdown() }
         if !owned.isRunning, process === owned { process = nil }
+        logger.info("Liquid retirement_seconds=\(Self.seconds(since: started), privacy: .public) exited=\(!owned.isRunning, privacy: .public)")
     }
 
     public func hasExited() -> Bool { process?.isRunning != true }
 
+    private static func seconds(since started: ContinuousClock.Instant) -> Double {
+        let duration = started.duration(to: .now).components
+        return Double(duration.seconds) + Double(duration.attoseconds) / 1e18
+    }
+
     private func pauseDuringShutdown() async {
         // Cleanup still paces its polling when the inference caller has been cancelled.
         await Task.detached { try? await Task.sleep(for: .milliseconds(20)) }.value
+    }
+
+    /// Production payload keys are unchanged when no seed is configured.
+    /// A configured seed is passed through to `/tts`, which reproduces
+    /// byte-identical audio for the same text and seed.
+    public static func ttsPayload(text: String, seed: UInt32?) -> [String: Any] {
+        var payload: [String: Any] = ["input": text, "lang": "en", "voice": "female", "stream": false,
+                                       "response_format": "wav", "n_predict": 2048, "repeat_penalty": 1.1]
+        if let seed { payload["seed"] = seed }
+        return payload
+    }
+
+    /// Test seam for the exact server invocation. Never logged: the api key
+    /// travels as a command argument, so callers must redact its value.
+    /// `--poll 0` disables spin-waiting for work: measured -75% server CPU
+    /// seconds per single-request cycle with neutral wall time and
+    /// byte-identical output (2026-11-02, M2 Pro). Single-request sidecars
+    /// never benefit from polling; wakeup latency is negligible for one shot.
+    public func serverArguments(apiKey: String, port: UInt16) -> [String] {
+        ["--model", assets.directory.appendingPathComponent(LiquidAssets.files[0].name).path,
+         "--mmproj", assets.directory.appendingPathComponent(LiquidAssets.files[1].name).path,
+         "--host", "127.0.0.1", "--port", String(port), "--alias", "dictaflow-liquid",
+         "--ctx-size", "4096", "--parallel", "1", "--no-webui", "--api-key", apiKey,
+         "--poll", "0", "--poll-batch", "0"]
+         + configuration.extraServerArguments
     }
 
     private func start(token: UUID) async throws -> URL {
@@ -115,10 +201,10 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
         let owned = Process()
         apiKey = UUID().uuidString
         owned.executableURL = executable
-        owned.arguments = ["--model", assets.directory.appendingPathComponent(LiquidAssets.files[0].name).path,
-                           "--mmproj", assets.directory.appendingPathComponent(LiquidAssets.files[1].name).path,
-                           "--host", "127.0.0.1", "--port", String(port), "--alias", "dictaflow-liquid",
-                           "--ctx-size", "4096", "--parallel", "1", "--no-webui", "--api-key", apiKey]
+        owned.arguments = serverArguments(apiKey: apiKey, port: port)
+        // A configured environment fully replaces inheritance so benchmark
+        // candidates run isolated. Production leaves this unset (inherits).
+        if let environment = configuration.serverEnvironment { owned.environment = environment }
         owned.standardOutput = FileHandle.nullDevice; owned.standardError = FileHandle.nullDevice
         try owned.run()
         process = owned
@@ -130,27 +216,30 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
             if let (_, response) = try? await http.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200 {
                 try check(token); self.endpoint = endpoint; return endpoint
             }
-            try await Task.sleep(for: .milliseconds(100))
+            try await Task.sleep(for: configuration.healthPollInterval)
         }
         throw VoiceError.unavailable("Liquid audio took too long to start.")
     }
 
-    private func post(_ url: URL, payload: [String: Any], maxBytes: Int) async throws -> Data {
+    private func post(_ url: URL, payload: [String: Any], maxBytes: Int) async throws -> (data: Data, headerSeconds: Double, bodySeconds: Double) {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer " + apiKey, forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         // Count while receiving so an unbounded response is never retained or played.
+        let started = ContinuousClock.now
         let (bytes, response) = try await http.bytes(for: request)
+        let headerSeconds = Self.seconds(since: started)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw VoiceError.unavailable("Liquid audio rejected the request.") }
         if response.expectedContentLength > maxBytes { throw VoiceError.unavailable("Generated audio exceeds the output limit.") }
         var data = Data(); data.reserveCapacity(min(maxBytes, 1024 * 1024))
+        let bodyStarted = ContinuousClock.now
         let deadline = ContinuousClock.now.advanced(by: .seconds(60))
         for try await byte in bytes {
             guard data.count < maxBytes, ContinuousClock.now < deadline else { throw VoiceError.unavailable("Liquid output exceeded the size or synthesis-time limit.") }
             data.append(byte)
         }
-        return data
+        return (data, headerSeconds, Self.seconds(since: bodyStarted))
     }
 
     private func check(_ token: UUID) throws {
@@ -167,6 +256,43 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
         let duration = Double(file.length) / file.processingFormat.sampleRate
         guard duration > 0, duration.isFinite, duration < 120 else { throw VoiceError.unavailable("Generated audio is empty or exceeds the 120-second playback limit.") }
         return duration
+    }
+
+    /// ASR input cap, derived from the pinned runtime, not copied from the TTS
+    /// output cap. Estimated 2026-11-02 on b11960 (no retained raw token probe):
+    /// 16 kHz mono input costs about
+    /// 12.5 prompt tokens per second plus ~20 tokens of framing (5 s/83, 15 s/208,
+    /// 30 s/395, 60 s/770 prompt tokens). With --ctx-size 4096 and max_tokens 2048
+    /// reserved for the transcript, (2048-20)/12.5 is about 162 s. 120 s keeps
+    /// 120*12.5+20+2048=3568 tokens, a 528-token margin, and keeps a normal
+    /// 150 wpm transcript (about 400 tokens) well inside max_tokens. 8 MiB covers
+    /// 120 s of 16 kHz mono float32 (7.68 MB, 7.32 MiB) with margin while bounding the
+    /// base64 POST and transient memory. Longer clips fail explicitly; they are
+    /// never truncated or auto-switched to another provider.
+    public static let maxASRDuration: TimeInterval = 120
+    public static let maxASRBytes = 8 * 1024 * 1024
+
+    public static func validateASRInput(_ wav: Data) throws {
+        guard wav.count <= maxASRBytes else {
+            throw VoiceError.inputTooLong("Liquid ASR supports up to 8 MiB of audio. The recording is kept; use Whisper or a shorter recording.")
+        }
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
+        try wav.write(to: temporary, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let file: AVAudioFile
+        do { file = try AVAudioFile(forReading: temporary) }
+        catch { throw VoiceError.unavailable("Liquid could not read the audio for recognition.") }
+        let rate = file.processingFormat.sampleRate
+        let frames = Double(file.length)
+        guard rate.isFinite, rate > 0, frames.isFinite, frames >= 0 else {
+            throw VoiceError.unavailable("Liquid could not read the audio length.")
+        }
+        let duration = frames / rate
+        guard duration.isFinite else { throw VoiceError.unavailable("Liquid could not read the audio length.") }
+        guard duration > 0 else { throw VoiceError.unavailable("The recorded audio is empty.") }
+        guard duration <= maxASRDuration else {
+            throw VoiceError.inputTooLong("Liquid ASR supports up to 2 minutes. The recording is kept; use Whisper or a shorter recording.")
+        }
     }
 
     private static func availablePort() throws -> UInt16 {

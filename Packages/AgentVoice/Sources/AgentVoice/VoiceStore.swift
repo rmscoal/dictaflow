@@ -101,12 +101,14 @@ public actor VoiceStore {
 
     /// Only an explicit app UI action may use this path. It is absent from the MCP contract.
     /// It creates a playback attempt without reopening or claiming host completion for an input.
+    /// Interrupted and superseded rows keep their retained text replayable: each retry mints a
+    /// fresh attempt identity while the host input stays closed, so host mutation rights never reopen.
     public func authorizeByUser(draftID: UUID, now: Date = Date()) throws -> VoiceDraft {
         try database.write { db in
             try expire(db, now: now)
             guard var draft = try allDrafts(db).first(where: { $0.id == draftID }),
-                  [.prepared, .awaitingCompletion, .completed, .failed, .cancelled].contains(draft.state),
-                  !draft.text.isEmpty else { throw VoiceError.unavailable("This rendition is no longer available.") }
+                  [.prepared, .awaitingCompletion, .completed, .failed, .cancelled, .interrupted, .superseded].contains(draft.state),
+                  !draft.text.isEmpty else { throw VoiceError.unavailable("This response is no longer available.") }
             let pending = try allDrafts(db).filter { [.queued, .synthesizing, .playing].contains($0.state) }
             guard pending.count < limits.maxPending,
                   pending.filter({ $0.session == draft.session }).count < limits.maxPendingPerSession else {
@@ -235,7 +237,7 @@ public actor VoiceStore {
             if let data: Data = row["draft"] {
                 var draft = try decoder.decode(VoiceDraft.self, from: data); draft.state = state
                 try save(draft, db: db)
-            } else { try db.execute(sql: "UPDATE inputs SET state = ? WHERE id = ?", arguments: [state.rawValue, row["id"] as String]) }
+            } else { try db.execute(sql: "UPDATE inputs SET state = ?, host_closed = 1 WHERE id = ?", arguments: [state.rawValue, row["id"] as String]) }
         }
     }
 
@@ -275,5 +277,12 @@ public actor VoiceStore {
 
 public enum VoiceError: Error, LocalizedError, Sendable {
     case unavailable(String)
-    public var errorDescription: String? { if case .unavailable(let message) = self { return message }; return nil }
+    /// Liquid ASR input exceeds the documented duration/size cap. Callers retain
+    /// the recording so the user can retry with Whisper or a shorter clip.
+    case inputTooLong(String)
+    public var errorDescription: String? {
+        switch self {
+        case .unavailable(let message), .inputTooLong(let message): return message
+        }
+    }
 }

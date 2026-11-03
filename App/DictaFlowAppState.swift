@@ -472,7 +472,7 @@ final class DictaFlowAppState: ObservableObject {
         switch transcriptionState {
         case .idle:
             if whisperConfiguration.recognitionProvider == .liquid {
-                return agentVoice?.isModelReady == true ? "Liquid LFM3-Audio is ready." : "Download Liquid audio in General settings."
+                return agentVoice?.isModelReady == true ? "Liquid LFM3-Audio is ready." : "Download Liquid audio in Agent Voice, under Models."
             }
             if isWhisperModelPrepared(whisperConfiguration.model) {
                 return "\(whisperConfiguration.model.displayName) model stored in \(modelsDirectoryPath)"
@@ -3283,6 +3283,9 @@ final class DictaFlowAppState: ObservableObject {
             }
             shouldSurfaceCleanupFailure = true
         } catch {
+            if let voice = error as? VoiceError, case .inputTooLong = voice {
+                retainCaptureForResourceFailure = true
+            }
             if let historyAttempt {
                 do { try await historyStore?.finishTranscription(historyAttempt, result: nil, error: error.localizedDescription) }
                 catch { history.report(error) }

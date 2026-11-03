@@ -1,12 +1,18 @@
 import Foundation
 
 enum MainWindowPage: String, CaseIterable, Identifiable {
-    case dictation, history, settings, updates
+    case dictation, agentVoice, history, settings, updates
     var id: String { rawValue }
-    var title: String { rawValue.capitalized }
+    var title: String {
+        switch self {
+        case .agentVoice: "Agent Voice"
+        default: rawValue.capitalized
+        }
+    }
     var symbol: String {
         switch self {
         case .dictation: "waveform"
+        case .agentVoice: "person.wave.2"
         case .history: "clock"
         case .settings: "slider.horizontal.3"
         case .updates: "arrow.triangle.2.circlepath"

@@ -59,6 +59,56 @@ struct MCPBridgeTests {
         #expect(stop.state == .awaitingCompletion)
     }
 
+    @Test func unknownPromptNeverAcceptedThenIdenticalRetryNeedsNewPrompt() async throws {
+        let root = URL(fileURLWithPath: "/tmp/df-test-\(UUID().uuidString.prefix(8))")
+        let socket = root.appendingPathComponent("voice.sock")
+        let store = try VoiceStore(url: root.appendingPathComponent("voice.sqlite"))
+        let fixture = DroppedPromptFixture()
+        let server = LocalVoiceServer(socketURL: socket, handler: { request, connection in
+            if request.operation == .prompt, await fixture.shouldDrop() {
+                await fixture.record(request)
+                try? await Task.sleep(for: .seconds(1))
+                return VoiceReply(accepted: true, code: "input_opened", inputID: UUID())
+            }
+            if request.operation == .prompt { await fixture.record(request) }
+            return (try? await store.handle(request, connectionID: connection)) ?? VoiceReply(accepted: false, code: "test_storage_failure")
+        }, onDisconnect: { connection in
+            try? await store.disconnect(connectionID: connection)
+            await fixture.disconnected()
+        })
+        try server.start()
+        defer { server.stop(); try? FileManager.default.removeItem(at: root) }
+        let adapter = VoiceAdapter(client: LocalVoiceClient(socketURL: socket), installationID: UUID(), host: "fixture")
+        let firstID = UUID()
+        let staleArgs: [String: Value] = ["session_id": "session", "turn_id": "old",
+                                          "request_id": .string(firstID.uuidString)]
+        do {
+            _ = try await adapter.call(name: "on_user_prompt_submit", arguments: staleArgs)
+            Issue.record("Dropped prompt must time out.")
+        } catch let error as VoiceBridgeTransportError {
+            #expect(error.requestMayHaveBeenAccepted)
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !(await fixture.didDisconnect), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(await fixture.didDisconnect)
+        let fresh = try await adapter.call(name: "on_user_prompt_submit", arguments: ["session_id": "session", "turn_id": "fresh"])
+        let freshInput = try #require(fresh.inputID)
+        #expect(fresh.accepted)
+        let retry = try await adapter.call(name: "on_user_prompt_submit", arguments: staleArgs)
+        #expect(!retry.accepted)
+        #expect(retry.code == "new_prompt_required")
+        let captured = await fixture.captured
+        try #require(captured.count == 3)
+        #expect(captured[0] == captured[2], "Identical retry must reuse the original envelope.")
+        #expect(captured[0].requestID == firstID)
+        // No duplicate input: the fresh turn stays open and usable.
+        let status = try await adapter.call(name: "get_speech_status", arguments: ["session_id": "session",
+            "input_id": .string(freshInput.uuidString), "request_id": .string(UUID().uuidString)])
+        #expect(status.state == .open)
+        let stop = try await adapter.call(name: "on_stop", arguments: ["session_id": "session", "turn_id": "fresh"])
+        #expect(stop.state == .awaitingCompletion || stop.state == .skippedMissingDraft)
+    }
+
     @Test func realSocketRestartDeliversTheFirstPromptAndFencesTheOldInput() async throws {
         let root = URL(fileURLWithPath: "/tmp/df-test-\(UUID().uuidString.prefix(8))")
         let socket = root.appendingPathComponent("voice.sock")
@@ -175,4 +225,17 @@ private actor LostReplyFixture {
 private actor DisconnectFixture {
     var value = false
     func mark() { value = true }
+}
+
+private actor DroppedPromptFixture {
+    var captured: [VoiceRequest] = []
+    var didDisconnect = false
+    private var dropped = false
+    func shouldDrop() -> Bool {
+        if dropped { return false }
+        dropped = true
+        return true
+    }
+    func record(_ request: VoiceRequest) { captured.append(request) }
+    func disconnected() { didDisconnect = true }
 }
