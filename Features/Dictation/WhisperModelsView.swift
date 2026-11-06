@@ -9,14 +9,6 @@ struct WhisperModelsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 7) {
-                EmberProviderIcon(asset: "provider-openai", size: 24)
-                Text("OpenAI").font(.system(size: 12, weight: .medium))
-            }
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(AppTheme.selectedFill, in: Capsule())
-            .overlay { Capsule().stroke(AppTheme.accent, lineWidth: 1) }
-            .accessibilityElement(children: .combine)
             VStack(spacing: 0) {
                 ForEach(WhisperModelDescriptor.allCases, id: \.self) { model in
                     modelRow(model).id(model.modelIdentifier)
@@ -48,14 +40,14 @@ struct WhisperModelsView: View {
 
     private func modelRow(_ model: WhisperModelDescriptor) -> some View {
         let prepared = appState.isWhisperModelPrepared(model)
-        let selected = model == appState.whisperConfiguration.model
+        let selected = model == appState.whisperConfiguration.model && appState.whisperConfiguration.recognitionProvider == .whisper
         let downloading = appState.isDownloadingWhisperModel(model)
         let encoderDownloading = appState.isDownloadingWhisperEncoder(model)
         let error = appState.whisperDownloadError(for: model)
         let encoderError = appState.whisperEncoderDownloadError(for: model)
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
-                EmberProviderIcon(asset: "provider-openai", size: 30)
+                EmberProviderIcon(asset: SpeechRecognitionProvider.whisper.iconName, size: 30)
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Whisper \(model.displayName)").font(.system(size: 14, weight: .medium))
                     Text("\(model.approximateDiskSizeDescription) · Multilingual").font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)

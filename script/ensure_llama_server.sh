@@ -92,12 +92,17 @@ SIGN_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:-${CODE_SIGN_IDENTITY:-}}"
 if [ -n "$SIGN_IDENTITY" ] && [ "${CODE_SIGNING_ALLOWED:-YES}" != "NO" ]; then
   SIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
   if [ "$SIGN_IDENTITY" != "-" ]; then
-    SIGN_ARGS+=(--options runtime --timestamp)
+    SIGN_ARGS+=(--options runtime)
+    if [ "${CONFIGURATION:-Release}" = Release ]; then SIGN_ARGS+=(--timestamp); else SIGN_ARGS+=(--timestamp=none); fi
   fi
 
-  while IFS= read -r mach_o_file; do
-    codesign "${SIGN_ARGS[@]}" "$mach_o_file"
-  done < <(find "$DESTINATION_DIR" -maxdepth 1 -type f \( -name '*.dylib' -o -name llama-server \) | sort)
+  # Sign only files owned by this runtime. Xcode signs the app's own debug dylib.
+  for runtime_file in "$RUNTIME_CACHE_DIR"/*.dylib "$RUNTIME_CACHE_DIR/llama-server"; do
+    [ -e "$runtime_file" ] || continue
+    destination_file="$DESTINATION_DIR/$(basename "$runtime_file")"
+    [ ! -L "$destination_file" ] || continue
+    codesign "${SIGN_ARGS[@]}" "$destination_file"
+  done
 fi
 
 echo "Bundled llama-server at $DESTINATION_PATH"
