@@ -114,6 +114,37 @@ struct VoiceAdapterTests {
         #expect(sent[4].attachment == originalAttachment)
     }
 
+    @Test func sessionOnlyStopIsForwardedForHostsWithoutTurnID() async throws {
+        let client = BridgeFixture(actions: [
+            .reply(.init(accepted: true, code: "attached", attachment: .init(id: UUID(), epoch: 1))),
+            .reply(.init(accepted: true, code: "auto_admitted", state: .queued))
+        ])
+        let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "claude")
+        let result = try await adapter.call(name: "on_stop", arguments: ["session_id": "session"])
+        #expect(result.code == "auto_admitted")
+        let sent = await client.sent
+        #expect(sent[1].operation == .stop)
+        #expect(sent[1].inputID == nil && sent[1].nativeTurnID == nil)
+    }
+
+    @Test func freshAdapterForwardsNativeTurnForDurableResolution() async throws {
+        let client = BridgeFixture(actions: [
+            .reply(.init(accepted: true, code: "attached", attachment: .init(id: UUID(), epoch: 1))),
+            .reply(.init(accepted: true, code: "auto_admitted", state: .queued))
+        ])
+        // A fresh adapter has no in-memory turn mapping. It must still send
+        // the call, carrying the native turn for store-side resolution,
+        // instead of failing locally or substituting another turn.
+        let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "fixture")
+        let result = try await adapter.call(name: "on_stop", arguments: ["session_id": "session", "turn_id": "turn-7"])
+        #expect(result.code == "auto_admitted")
+        let sent = await client.sent
+        #expect(sent.count == 2)
+        #expect(sent[1].operation == .stop)
+        #expect(sent[1].inputID == nil)
+        #expect(sent[1].nativeTurnID == "turn-7")
+    }
+
     @Test func transportFailureRetiresOwnershipButPreservesOriginalRetryEnvelope() async throws {
         let oldInput = UUID()
         let newInput = UUID()

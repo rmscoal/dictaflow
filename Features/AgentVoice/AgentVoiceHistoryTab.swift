@@ -1,182 +1,170 @@
 import AgentVoice
 import SwiftUI
 
-/// Third Agent Voice tab. Lists every retained voice response (the full
-/// `drafts` list, not just the first five). DictaFlow keeps response text,
-/// not audio history: Play generates speech from that text. States that
-/// can no longer produce speech explain why instead of offering Play.
+/// Retained interactions are independent of queue eligibility. Replay synthesizes
+/// the chosen immutable rendition; it does not reopen the host's turn.
 struct AgentVoiceHistoryTab: View {
     @ObservedObject var voice: AgentVoiceCoordinator
     @State private var searchQuery = ""
-    @State private var stateFilter: AgentVoiceHistoryFilter = .all
+    @State private var pendingDeletion: UUID?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            EmberModuleHeading(title: "Responses")
-            Text("Play generates speech from the saved text.")
+        VStack(alignment: .leading, spacing: 14) {
+            EmberModuleHeading(title: "Voice history")
+            Text("Interactions are kept for up to 30 days, limited to 500. Replay generates speech from saved text.")
                 .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.bottom, 14)
-            HStack(spacing: 8) {
-                if voice.isSpeaking {
-                    Text("Speaking…")
-                        .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
-                } else if voice.isGenerating {
-                    Text("Generating…")
-                        .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
-                } else if let error = voice.activeError {
-                    Text(error.message)
-                        .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
-                }
-                Spacer(minLength: 8)
+            HStack {
+                Text(voice.status).font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+                Spacer()
                 if voice.isSpeaking || voice.isGenerating {
                     Button("Stop") { voice.stopSpeech() }
                         .buttonStyle(EmberButtonStyle())
-                        .accessibilityLabel("Stop agent speech")
                         .accessibilityIdentifier("agent-voice-history-stop")
                 }
             }
-            .padding(.bottom, 16)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Voice status: \(voice.status)\(voice.isSpeaking ? ". Speaking now." : "")")
-
-            VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(AppTheme.secondaryText)
-                    TextField("Search responses", text: $searchQuery)
-                        .textFieldStyle(.plain).font(.system(size: 12))
-                        .accessibilityLabel("Search responses")
-                    Picker("State", selection: $stateFilter) {
-                        ForEach(AgentVoiceHistoryFilter.allCases) { Text($0.title).tag($0) }
+            TextField("Search sessions and responses", text: $searchQuery)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityLabel("Search voice history")
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if records.isEmpty {
+                        Text(searchQuery.isEmpty ? "No voice interactions yet." : "No matching interactions.")
+                            .foregroundStyle(AppTheme.secondaryText).padding(20)
                     }
-                    .pickerStyle(.menu).labelsHidden().font(.system(size: 12))
-                    .accessibilityLabel("Filter by state")
+                    ForEach(records) { record in interactionRow(record) }
                 }
-                .padding(11).background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 10)).padding(14)
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 5) {
-                        if filteredDrafts.isEmpty {
-                            Text(searchQuery.isEmpty && stateFilter == .all ? "No voice responses yet." : "No matching responses.")
-                                .font(.system(size: 13)).foregroundStyle(AppTheme.secondaryText).padding(20)
-                        } else {
-                            ForEach(filteredDrafts) { draft in
-                                draftRow(draft)
-                            }
+            }
+        }
+        .confirmationDialog("Delete this voice interaction and its saved responses?", isPresented: Binding(
+            get: { pendingDeletion != nil },
+            set: { if !$0 { pendingDeletion = nil } }
+        ), titleVisibility: .visible) {
+            Button("Delete interaction", role: .destructive) {
+                if let id = pendingDeletion { voice.deleteInteraction(id) }
+                pendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+        }
+    }
+
+    private var records: [VoiceHistoryRecord] {
+        voice.history.filter { record in
+            searchQuery.isEmpty ||
+            record.interaction.session.host.localizedCaseInsensitiveContains(searchQuery) ||
+            record.interaction.session.sessionID.localizedCaseInsensitiveContains(searchQuery) ||
+            (record.interaction.promptText?.localizedCaseInsensitiveContains(searchQuery) == true) ||
+            record.renditions.contains { $0.text.localizedCaseInsensitiveContains(searchQuery) }
+        }
+    }
+
+    private func interactionRow(_ record: VoiceHistoryRecord) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(record.interaction.session.host).font(.system(size: 13, weight: .medium))
+                Text(String(record.interaction.session.sessionID.prefix(8)))
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(AppTheme.secondaryText)
+                Spacer()
+                Text(record.interaction.createdAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+            }
+            if let prompt = record.interaction.promptText, !prompt.isEmpty {
+                Text(prompt).font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+                    .lineLimit(3).textSelection(.enabled)
+            }
+            if record.interaction.isSuppressed {
+                Label("Automatic speech stopped for this interaction", systemImage: "speaker.slash")
+                    .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+            }
+            if let current = record.renditions.first(where: { $0.id == record.interaction.currentRenditionID }) {
+                renditionRow(current, attempts: record.attempts)
+            } else {
+                Text("No spoken response retained.").font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+            }
+            DisclosureGroup("Activity · \(record.events.count) events") {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(record.renditions.filter { $0.id != record.interaction.currentRenditionID }) { rendition in
+                        renditionRow(rendition, attempts: record.attempts)
+                    }
+                    ForEach(record.attempts) { attempt in
+                        HStack(alignment: .top) {
+                            Text(attempt.createdAt.formatted(date: .omitted, time: .standard))
+                            Text("Revision \(attempt.revision) · \(attempt.kind == .automatic ? "Automatic" : attempt.kind == .manual ? "Replay" : "Earlier playback") · \(stateTitle(attempt.state))")
+                        }
+                        .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+                        if let failure = attempt.failure {
+                            Text(failure).font(.system(size: 11)).foregroundStyle(AppTheme.errorText)
                         }
                     }
-                    .padding(.horizontal, 9).padding(.bottom, 14)
-                }
-            }
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 20))
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-            .overlay { RoundedRectangle(cornerRadius: 20).stroke(AppTheme.border, lineWidth: 1) }
-        }
-    }
-
-    private var filteredDrafts: [VoiceDraft] {
-        voice.drafts.filter { draft in
-            let matchesQuery = searchQuery.isEmpty ||
-                draft.text.localizedCaseInsensitiveContains(searchQuery)
-            let matchesFilter: Bool = {
-                switch stateFilter {
-                case .all: return true
-                case .playable: return Self.isPlayable(draft.state)
-                case .active: return !draft.state.isTerminal
-                case .unavailable: return draft.state.isTerminal && !Self.isPlayable(draft.state)
-                }
-            }()
-            return matchesQuery && matchesFilter
-        }
-    }
-
-    private func draftRow(_ draft: VoiceDraft) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(draft.createdAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
-                Spacer(minLength: 8)
-                if let badge = Self.statusBadge(draft.state) {
-                    Text(badge)
-                        .font(.system(size: 11))
-                        .foregroundStyle(draft.state == .failed ? AppTheme.errorText : AppTheme.modelActive)
-                        .padding(.horizontal, 7).padding(.vertical, 4)
-                        .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 5))
-                }
-            }
-            Text(draft.text)
-                .font(.system(size: 13))
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-            HStack(spacing: 8) {
-                Spacer(minLength: 0)
-                if Self.isPlayable(draft.state) {
-                    Button(Self.playTitle(draft.state)) { voice.speak(draft) }
-                        .buttonStyle(EmberButtonStyle(primary: true))
-                        .disabled(!voice.isModelReady || !voice.isEnabled)
-                        .accessibilityLabel("\(Self.playTitle(draft.state)) response from \(draft.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                    if !voice.isModelReady {
-                        Text("Download the Liquid model in Models to play.")
-                            .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
-                    }
-                } else {
-                    Text(Self.unavailableReason(draft.state))
+                    ForEach(record.events) { event in
+                        HStack(alignment: .top) {
+                            Text(event.at.formatted(date: .omitted, time: .standard))
+                            Text(eventTitle(event.kind))
+                        }
                         .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
+                .padding(.top, 8)
+            }
+            .font(.system(size: 12))
+            HStack {
+                Spacer()
+                Button("Delete…", role: .destructive) { pendingDeletion = record.id }
+                    .buttonStyle(.borderless).font(.system(size: 11))
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(AppTheme.controlFill.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Response from \(draft.createdAt.formatted(date: .abbreviated, time: .shortened)). \(Self.isPlayable(draft.state) ? "Playable." : Self.unavailableReason(draft.state))")
+        .padding(14)
+        .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    /// Only active work and actionable failures get a badge. All other
-    /// terminal rows stay quiet instead of showing raw state names.
-    private static func statusBadge(_ state: VoiceState) -> String? {
+    private func renditionRow(_ rendition: VoiceRendition, attempts: [VoicePlaybackAttempt]) -> some View {
+        let active = attempts.contains { $0.renditionID == rendition.id && !$0.state.isTerminal }
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Revision \(rendition.revision)").font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+            Text(rendition.text).font(.system(size: 13)).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button(active ? "In progress" : "Play") { voice.playRendition(rendition.id) }
+                    .buttonStyle(EmberButtonStyle())
+                    .disabled(active || !voice.isEnabled || !voice.isModelReady)
+                    .accessibilityLabel("Play revision \(rendition.revision)")
+            }
+        }
+    }
+
+    private func stateTitle(_ state: VoiceState) -> String {
         switch state {
-        case .queued, .synthesizing: "Generating"
+        case .open: "Waiting"
+        case .prepared, .awaitingCompletion: "Prepared"
+        case .queued: "Queued"
+        case .synthesizing: "Generating"
         case .playing: "Playing"
+        case .completed: "Finished"
+        case .skippedMissingDraft: "No response"
+        case .interrupted: "Interrupted"
+        case .cancelled: "Stopped"
+        case .expired: "Expired from queue"
+        case .superseded: "Replaced"
         case .failed: "Failed"
-        default: nil
         }
     }
 
-    /// Mirrors VoiceStore.authorizeByUser eligibility: only states with
-    /// retained text that the store can re-authorize offer Play.
-    private static func isPlayable(_ state: VoiceState) -> Bool {
-        [.prepared, .awaitingCompletion, .completed, .failed, .cancelled, .interrupted, .superseded].contains(state)
-    }
-
-    private static func playTitle(_ state: VoiceState) -> String {
-        switch state {
-        case .failed, .cancelled: "Retry"
-        case .interrupted, .superseded: "Play again"
-        default: "Play"
-        }
-    }
-
-    private static func unavailableReason(_ state: VoiceState) -> String {
-        switch state {
-        case .open: "Waiting for the host's response."
-        case .queued, .synthesizing, .playing: "In progress."
-        case .expired: "Expired. This response is no longer available."
-        case .skippedMissingDraft: "Nothing was saved to play."
-        default: "Unavailable."
-        }
-    }
-}
-
-enum AgentVoiceHistoryFilter: String, CaseIterable, Identifiable {
-    case all, playable, active, unavailable
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .all: "All"
-        case .playable: "Ready to play"
-        case .active: "In progress"
-        case .unavailable: "Unavailable"
+    private func eventTitle(_ kind: VoiceHistoryEventKind) -> String {
+        switch kind {
+        case .promptOpened: "Interaction started"
+        case .renditionPrepared: "Spoken response prepared"
+        case .stopObserved: "Host completion observed"
+        case .autoAdmitted: "Automatic speech queued"
+        case .manualAdmitted: "Replay requested"
+        case .suppressed: "Automatic speech stopped by user"
+        case .superseded: "Newer work replaced this response"
+        case .playbackStarted: "Playback started"
+        case .playbackCompleted: "Playback finished"
+        case .playbackFailed: "Playback failed"
+        case .playbackCancelled: "Playback stopped"
+        case .interrupted: "Connection or interaction interrupted"
+        case .expired: "Speech expired from queue"
+        case .migrated: "Retained response imported from earlier history"
         }
     }
 }

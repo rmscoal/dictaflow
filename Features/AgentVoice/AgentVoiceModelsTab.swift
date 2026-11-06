@@ -13,7 +13,7 @@ struct AgentVoiceModelsTab: View {
                 name: "Liquid LFM3-Audio-2B",
                 providerAsset: "provider-liquid",
                 status: voice.isModelReady ? "Ready" : voice.isDownloading ? "Downloading…" : "Download needed",
-                size: "1.4 GB,
+                size: "1.4 GB",
                 hasError: voice.activeError?.scope == .models,
                 actionTitle: voice.isModelReady ? "Ready" : voice.isDownloading ? "Downloading…" : "Download…",
                 disabled: voice.isModelReady || voice.isDownloading

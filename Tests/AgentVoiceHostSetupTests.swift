@@ -16,6 +16,28 @@ final class AgentVoiceHostSetupTests: XCTestCase {
         XCTAssertEqual(server["mode"] as? String, "optional")
     }
 
+    func testHooksSnippetMatchesDocumentedHostFields() throws {
+        let codex = try XCTUnwrap(AgentVoiceHostSetup.hooksSnippet(for: .codex))
+        let codexJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(codex.utf8)) as? [String: Any])
+        let codexHooks = try XCTUnwrap(codexJSON["hooks"] as? [String: Any])
+        XCTAssertNotNil(codexHooks["Interrupt"], "Codex documents an Interrupt event.")
+        XCTAssertTrue(codex.contains("${turn_id}"))
+        XCTAssertTrue(codex.contains("${prompt}"))
+        let claude = try XCTUnwrap(AgentVoiceHostSetup.hooksSnippet(for: .claudeCode))
+        XCTAssertFalse(claude.contains("turn_id"), "Claude Code documents no turn_id; the snippet must not invent one.")
+        XCTAssertFalse(claude.contains("Interrupt"), "Claude Code documents no Interrupt event.")
+        XCTAssertNil(try AgentVoiceHostSetup.hooksSnippet(for: .museCode),
+                     "Muse Code documents no lifecycle hooks; manual setup stays MCP-only.")
+    }
+
+    func testCodexSnippetPreApprovesTools() throws {
+        let snippet = try AgentVoiceHostSetup.snippet(for: .codex, executable: "/bin/dictaflow-mcp",
+                                                      appID: "com.dictaflow.dev", installationID: UUID())
+        XCTAssertTrue(snippet.contains("[mcp_servers.dictaflow]"))
+        XCTAssertTrue(snippet.contains("default_tools_approval_mode = \"approve\""),
+                      "Manual setup must carry the same pre-approval one-click setup writes.")
+    }
+
     func testShellSetupDoesNotInterpretExecutableCharacters() throws {
         let path = "/Applications/DictaFlow's $example `name`.app/Contents/MacOS/dictaflow-mcp"
         let snippet = try AgentVoiceHostSetup.snippet(for: .claudeCode, executable: path,

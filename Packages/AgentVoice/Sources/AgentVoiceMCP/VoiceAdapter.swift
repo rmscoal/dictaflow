@@ -69,14 +69,23 @@ public actor VoiceAdapter {
         let attachment = try await attachIfNeeded(session)
         let nativeTurn = arguments["turn_id"]?.stringValue.map { NativeTurn(session: nativeSession, turn: $0) }
         let input = operation == .prompt ? nil : explicitInput ?? nativeTurn.flatMap { nativeInputs[$0] }
-        guard operation == .prompt || input != nil else {
+        // Without a remembered mapping, the persisted native turn in the store
+        // may still resolve the input. Resolution there requires the valid
+        // attachment above and still respects input closure after reconnect.
+        // Stop and Interrupt may also arrive with only a session identity
+        // from hosts that document no turn ID; the store then addresses the
+        // session's current interaction under the validated attachment.
+        guard operation == .prompt || input != nil || nativeTurn != nil
+                || operation == .stop || operation == .interrupt else {
             throw VoiceError.unavailable("An active input_id is required. Begin a new prompt after reconnecting; never substitute a newer turn's ID.")
         }
         var request = VoiceRequest(requestID: requestID, session: session, operation: operation,
                                    attachment: attachment, inputID: input,
                                    text: arguments["text"]?.stringValue,
                                    replacesDraftID: replacesDraft,
-                                   expectedRevision: arguments["expected_revision"]?.intValue)
+                                   expectedRevision: arguments["expected_revision"]?.intValue,
+                                   nativeTurnID: nativeTurn?.turn,
+                                   promptText: operation == .prompt ? arguments["prompt"]?.stringValue : nil)
         requests[key] = CachedRequest(tool: name, arguments: arguments, request: request)
         var reply: VoiceReply
         do { reply = try await send(request) }

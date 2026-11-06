@@ -23,7 +23,7 @@ struct DictationWorkspaceView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     EmberPageHeading(title: "Dictation")
                     HStack(alignment: .top, spacing: contentWidth > AppLayout.workspaceStackingWidth ? 12 : 8) {
-                        stage(.transcription, index: 1, value: appState.whisperConfiguration.speechModelName, detail: appState.whisperConfiguration.inputLanguage.displayName, asset: appState.whisperConfiguration.recognitionProvider == .whisper ? "provider-openai" : nil, compact: contentWidth <= AppLayout.workspaceStackingWidth)
+                        stage(.transcription, index: 1, value: appState.whisperConfiguration.speechModelName, detail: appState.whisperConfiguration.inputLanguage.displayName, asset: appState.whisperConfiguration.recognitionProvider.iconName, compact: contentWidth <= AppLayout.workspaceStackingWidth)
                         stage(.refinement, index: 2, value: appState.refinementConfiguration.isEnabled ? appState.refinementConfiguration.model.displayName : "Refinement off", detail: appState.refinementConfiguration.isEnabled ? appState.effectiveRefinementStyle.mode.title + (appState.refinementConfiguration.perAppStylesEnabled ? " · Per-app on" : "") : "Optional", asset: appState.refinementConfiguration.model.provider?.iconName, compact: contentWidth <= AppLayout.workspaceStackingWidth)
                     }
                     .fixedSize(horizontal: false, vertical: true)

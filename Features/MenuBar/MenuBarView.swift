@@ -19,7 +19,7 @@ struct MenuBarView: View {
             .padding(.horizontal, 4).padding(.bottom, 10)
             capturePanel
             VStack(spacing: 0) {
-                pipelineRow(.transcription, title: "Transcription", detail: appState.whisperConfiguration.speechModelName, asset: appState.whisperConfiguration.recognitionProvider == .whisper ? "provider-openai" : nil)
+                pipelineRow(.transcription, title: "Transcription", detail: appState.whisperConfiguration.speechModelName, asset: appState.whisperConfiguration.recognitionProvider.iconName)
                 EmberDivider()
                 pipelineRow(.refinement, title: "Refinement", detail: appState.refinementConfiguration.isEnabled ? appState.refinementConfiguration.model.displayName : "Off", asset: appState.refinementConfiguration.model.provider?.iconName)
             }

@@ -49,14 +49,17 @@ struct MCPBridgeTests {
         #expect(oldDrafts.count == 1)
         #expect(oldDrafts.first?.revision == 1)
         #expect(oldDrafts.first?.state == .interrupted)
-        do {
-            _ = try await adapter.call(name: "on_stop", arguments: ["session_id": "session", "turn_id": "old"])
-            Issue.record("The old native mapping must be retired")
-        } catch {}
+        // The durable native-turn mapping still resolves the old input, but
+        // the store closed it on disconnect, so the observation is rejected
+        // instead of reopening or touching the fresh turn.
+        let staleStop = try await adapter.call(name: "on_stop", arguments: ["session_id": "session", "turn_id": "old"])
+        #expect(!staleStop.accepted)
+        #expect(staleStop.code == "input_closed")
         let prepared = try await adapter.call(name: "prepare_spoken_response", arguments: ["session_id": "session", "input_id": .string(freshInput.uuidString), "request_id": .string(UUID().uuidString), "text": "Fresh response."])
         #expect(prepared.accepted)
         let stop = try await adapter.call(name: "on_stop", arguments: ["session_id": "session", "turn_id": "fresh"])
-        #expect(stop.state == .awaitingCompletion)
+        #expect(stop.code == "auto_admitted")
+        #expect(stop.state == .queued)
     }
 
     @Test func unknownPromptNeverAcceptedThenIdenticalRetryNeedsNewPrompt() async throws {
@@ -158,7 +161,7 @@ struct MCPBridgeTests {
         #expect(blockedStart.duration(to: .now) < .seconds(1.5))
     }
 
-    @Test func realHelperRoundTripPreparesCleanRenditionButCannotAuthorizePlayback() async throws {
+    @Test func realHelperRoundTripPreparesThenStopAdmitsAndCorrectionNeedsFreshStop() async throws {
         let root = URL(fileURLWithPath: "/tmp/df-test-\(UUID().uuidString.prefix(8))")
         let socket = root.appendingPathComponent("voice.sock")
         let store = try VoiceStore(url: root.appendingPathComponent("voice.sqlite"))
@@ -196,7 +199,7 @@ struct MCPBridgeTests {
         let retry = try await client.callTool(name: "prepare_spoken_response", arguments: arguments)
         #expect(preparation.content == retry.content)
         _ = try await client.callTool(name: "on_stop", arguments: ["session_id": "session", "turn_id": "native-turn"])
-        #expect(try await store.drafts().first?.state == .awaitingCompletion)
+        #expect(try await store.drafts().first?.state == .queued)
         let current = try #require(try await store.drafts().first)
         let revised = try await client.callTool(name: "prepare_spoken_response", arguments: [
             "session_id": "session", "input_id": .string(inputID.uuidString), "request_id": .string(UUID().uuidString),
@@ -205,9 +208,11 @@ struct MCPBridgeTests {
         ])
         #expect(revised.isError != true)
         #expect(try await store.drafts().first?.revision == 2)
+        #expect(try await store.nextJob() == nil, "The corrected revision waits for a fresh Stop.")
         let rejectedStop = try await client.callTool(name: "on_stop", arguments: ["session_id": "session", "turn_id": "unknown", "input_id": .string(UUID().uuidString)])
         #expect(rejectedStop.isError == true)
-        #expect(try await store.nextJob() == nil)
+        _ = try await client.callTool(name: "on_stop", arguments: ["session_id": "session", "turn_id": "native-turn"])
+        #expect(try await store.nextJob()?.text == "The tests pass, but deployment still needs a manual approval.")
         await client.disconnect()
     }
 }

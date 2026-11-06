@@ -1,102 +1,98 @@
-# Agent Voice foundation
+# Agent Voice
 
-Agent Voice has a dedicated sidebar destination with MCP Connections, Models, and History tabs. MCP Connections is the landing page. Dictation keeps its existing press, release, speak, press-again-to-stop flow. The original agent submits a conversational rendition through MCP before its clean written answer. TurnEcho inspired this workflow; no TurnEcho code, Python runtime, tags, or transcript scraping is used.
+Agent Voice provides automatic, interruptible local speech for connected agent sessions. The originating agent writes a conversational rendition through MCP before its clean written answer. Liquid synthesizes that rendition locally. Dictation and optional text refinement remain local and take priority over agent speech. The external coding host retains its own inference arrangement.
 
-## Qualification
+## User experience
 
-The two decisions remain independent:
+Enable Agent Voice and download the verified Liquid model. Under MCP Connections, choose **Speak automatically** or **Show Play control**. Automatic mode admits the current eligible rendition when the host reports Stop. Manual mode retains the response and shows a compact Play control.
 
-| Capability | Current result |
-| --- | --- |
-| Clean MCP submission and lifecycle observations | Verified with real Codex 0.166.0 native prompt/Stop/Interrupt hooks and its real model |
-| Host-authorized automatic playback | **Unqualified and disabled** |
-| Liquid local TTS and ASR | Pinned model passed a synthetic English round trip on M2 Pro, 16 GB |
-| Foreground priority and queue admission | Fixtures cover recording, playback, and late synthesis; installed-app recording-button interruption verified; physical hotkey/focus/insertion checks remain manual |
+The floating control identifies the speaking session and provides Stop and Dictate. It does not take keyboard focus from the target app. The existing dictation shortcut also interrupts speech. Interruption is a deliberate button or shortcut action; DictaFlow does not listen continuously for speech over the agent.
 
-Codex CLI 0.166.0 was exercised through its supported app-server API, using the installed Dev helper directly. Native prompt context injection, model preparation before a clean written answer, Stop observation, native interruption, and a competing Stop hook requiring a revision were verified. Claude Code 2.1.301 is installed but has not been qualified. Automatic completion authority remains a separate question from a working hook workflow.
+Stop persists suppression for the interrupted interaction. Delayed Stop observations and corrections cannot automatically make it speak again. Explicit Play remains possible, and a new user turn is independently eligible. Dictation holds audio priority through recording, transcription, refinement, and insertion. Responses arriving during that work wait in the queue. Stopping speech does not cancel the coding agent.
 
-The [Codex hook documentation](https://learn.chatgpt.com/docs/hooks) describes Stop and previous continuation state, but provides no documented aggregate decision for the current attempt, authenticated tool-call origin, or stable effective-hook-configuration snapshot for that attempt. Consequently this implementation contains **no automatic authorization API**, exclusive-stop mode, or timer workaround. A model call to `on_stop` can only enter `awaitingCompletion`.
+History shows interactions, retained prompt text when supplied, each spoken revision, playback attempts, and relevant events. Search matches session identities, prompts, and renditions. Play regenerates speech from the selected text; generated audio is not retained for exact replay. Deleting an interaction removes its retained speech history and cancels its active attempts. Ordinary dictation history remains separate.
 
-An automatic-playback adapter must first prove trustworthy lifecycle origin and final acceptance for the exact completion attempt, including another hook asking for continuation. Configuration rescans and attachment epochs are not proof. Failure of that experiment does not reject Liquid recognition, synthesis, or clean MCP submission.
+## Lifecycle contract
 
-## Code and ownership
+1. `on_user_prompt_submit` creates an interaction and returns its internal input ID plus spoken-rendition instructions.
+2. The model calls `prepare_spoken_response` with conversational text. This never starts speech by itself.
+3. The model produces its written answer.
+4. `on_stop` makes the current rendition eligible. DictaFlow applies the app's playback preference, suppression, freshness, and queue limits.
+5. An automatic attempt is created at most once for that rendition. Duplicate Stop delivery does not replay it.
+6. A corrected preparation creates a new immutable revision and supersedes active speech for older revisions. The new revision waits for a fresh Stop. Stop-before-preparation does not authorize a later rendition.
 
-- `Packages/AgentVoice`: versioned contracts, GRDB store, Unix bridge, Liquid assets/runtime, MCP executable, diagnostics, and tests.
-- `Services/AgentVoice/AgentVoiceCoordinator.swift`: app-owned queue runner, player, foreground leases, status, and enable/disable control.
-- `DictaFlowAppState`: existing recording behavior with additive leases across recording, ASR, refinement, and insertion.
-- `WhisperConfiguration` keeps its name/key and saved Whisper preferences for compatibility, adding a recognition provider.
-- `WhisperTranscriptionResult` keeps the history format. Liquid results explicitly have provider `liquid` and no Whisper model.
-- The Models tab Liquid badge (`provider-liquid`) is the Liquid mark from [Lobe Icons](https://github.com/lobehub/lobe-icons), covered by the shared MIT attribution in `Resources/ThirdParty/provider-icons-LICENSE`.
+The [Codex hook contract](https://learn.chatgpt.com/docs/hooks) allows another Stop hook to request continuation. Therefore this feature provides interruptible, best-effort playback of a completion candidate, not proof that every host check has accepted a final answer. A revision may have been partly heard before a correction arrives. IDs and local timestamps do not prove source ordering. Native event/turn identities are used when available; a host without a turn identity can address its current session input, with correspondingly weaker late-event correlation.
 
-The app owns models and a separate `AgentVoice/voice.sqlite` store under its Application Support identity. Dev/release have separate stores, installation IDs, model directories, and socket paths. The Unix bridge checks peer UID and private directory/socket permissions. This authenticates the OS user, **not** whether a host hook or model originated a call.
+The bridge authenticates the local OS user, not whether a tool invocation originated from a model or a host hook. Playback consent is the app setting; MCP callers cannot change it. Lifecycle messages still require a valid session attachment. No timer is presented as proof of finality.
 
-Only submitted renditions/control metadata are stored. Complete prompts, chat transcripts, and generated audio history are not retained. Unfinished work becomes interrupted on app restart and never automatically resumes.
+## Setup and host boundaries
 
-## Setup
+MCP Connections registers the bundled helper for the chosen host. Codex and Claude Code lifecycle setup uses their user-level configuration; review the exact hooks in the host when prompted and start a new session. Existing unrelated configuration must be preserved. A configured server entry alone does not prove that a host has reviewed and activated hooks.
 
-1. Build/install the Dev app and enable the local connection in Agent Voice > MCP Connections.
-2. Copy the displayed executable and arguments into the host's stdio MCP configuration. Keep the installation ID stable.
-3. Add observation hooks where supported, using the example below. No global host configuration is changed automatically.
-4. The prompt hook supplies session/input IDs and conversational writing instructions. The agent calls `prepare_spoken_response` before its ordinary written answer.
-5. Stop records an observation. Explicitly press Play on a prepared rendition in Agent Voice > History. History lists retained rendition text, not saved audio; Play generates speech again. Press Play again on an interrupted or superseded row while its text is retained. Expired or deleted renditions are unavailable, and nothing resumes automatically. Retention remains bounded by the existing 24-hour retry window.
-6. Starting dictation immediately stops active speech. Valid jobs can queue during recording; synthesis/playback wait for foreground leases to finish.
+Codex setup also pre-approves DictaFlow's own tools with `default_tools_approval_mode = "approve"` under `[mcp_servers.dictaflow]` in `~/.codex/config.toml`, so sessions are not interrupted by approval prompts for the speech tools. The key is only added when absent; an existing value is never overwritten. If setup edits the file, it re-runs `codex mcp list` as a parse check and restores the original bytes on failure, so a failed run never strands a broken config. Manual setup carries the same line. This mirrors what Codex writes for a manual Always-allow, but as one server default covering every DictaFlow tool, including the read-only status query. When pasting the manual snippet, if the `[mcp_servers.dictaflow]` table already exists, add only the missing lines; duplicating the table breaks the file.
 
-Example Codex hooks for an already-connected MCP server named `dictaflow`:
+Codex's hooks can supply native session and turn IDs. Claude Code has different event fields and requires its own configuration. Other MCP hosts need a lifecycle integration or manual playback; do not assume they implement Codex hooks. Lifecycle setup and supported versions must be checked using isolated host fixtures before claiming end-to-end support.
+
+Example Codex hooks for an MCP server named `dictaflow`:
 
 ```json
 {
   "hooks": {
     "UserPromptSubmit": [{"hooks": [{
       "type": "mcp_tool", "server": "dictaflow", "tool": "on_user_prompt_submit",
-      "input": {"session_id": "${session_id}", "turn_id": "${turn_id}"}, "timeout": 2
+      "input": {"session_id": "${session_id}", "turn_id": "${turn_id}", "prompt": "${prompt}"},
+      "timeout": 2, "statusMessage": "DictaFlow: Agent Voice"
     }]}],
     "Stop": [{"hooks": [{
       "type": "mcp_tool", "server": "dictaflow", "tool": "on_stop",
-      "input": {"session_id": "${session_id}", "turn_id": "${turn_id}"}, "timeout": 2
+      "input": {"session_id": "${session_id}", "turn_id": "${turn_id}"},
+      "timeout": 2, "statusMessage": "DictaFlow: Agent Voice"
     }]}],
     "Interrupt": [{"hooks": [{
       "type": "mcp_tool", "server": "dictaflow", "tool": "on_interrupt",
-      "input": {"session_id": "${session_id}", "turn_id": "${turn_id}"}, "timeout": 2
+      "input": {"session_id": "${session_id}", "turn_id": "${turn_id}"},
+      "timeout": 2, "statusMessage": "DictaFlow: Agent Voice"
     }]}]
   }
 }
 ```
 
-This configuration shape has been exercised in real Codex turns. The prompt hook returns documented `hookSpecificOutput.additionalContext` JSON, also as structured MCP content. Stop/Interrupt never return blocking or continuation decisions. Errors leave the written conversation working. Hosts without native hooks may call these tools explicitly through instructions without gaining automatic playback authority.
+Prompt text is optional and bounded to 4,000 characters. It is supplied explicitly; no transcript scraping occurs. Full written assistant messages and arbitrary host tool actions are not collected. Parent session relationships are not inferred from timestamps. Inserting dictated text into an app does not establish that it was submitted to an agent or sent as a message.
 
-Native turn mapping is process-local. Reconnecting requires a new prompt observation; prior unfinished speech is interrupted. Normal tool traces remain visible in the host.
+## Persistence and identity
 
-## Contract v1
+The app owns `AgentVoice/voice.sqlite` under its Application Support identity. Dev/release have separate stores, installation IDs, model directories, and socket paths. The Unix bridge uses private directory/socket permissions and checks peer UID.
 
-| Tool | Inputs and behavior |
-| --- | --- |
-| `on_user_prompt_submit` | Native `session_id`, `turn_id`; creates app input ID and writing instructions, supersedes prior unfinished speech |
-| `prepare_spoken_response` | `session_id`, app `input_id`, UUID `request_id`, `text`; optional `replaces_draft_id` and `expected_revision` |
-| `on_stop` | Native session/turn mapping or explicit input; observation only; absent draft closes as `skippedMissingDraft` |
-| `on_interrupt` | Cancels that input's speech, without cancelling the agent |
-| `get_speech_status` | Explicit session/input/request IDs; reads current state |
+- Interaction: installation ID, host, session, optional native turn ID, internal input ID, and suppression/lifecycle state.
+- Rendition: stable ID, interaction, immutable text, revision, and creation time.
+- Attempt: separate ID, rendition, automatic/manual/legacy kind, playback state, and failure when present.
+- Event: observed action and local time, with rendition/attempt references where applicable.
 
-Logical identity is app identity + installation ID + host kind + native session ID. Connection identity is separate: attachment ID, monotonic epoch, one writer, 30-second lease renewed every five seconds. Simultaneous attachments fail. Disconnect or a new attachment after lease expiry closes prior unfinished work. Stale writers cannot mutate it.
+`VoiceReply.draftID` remains an alias for the stable `renditionID`; `attemptID` names a playback attempt. Compatibility `drafts()` projections use rendition IDs, while `nextJob()` returns an attempt ID for transition checks. Code must not compare these as if they were interchangeable.
 
-One current draft exists per input, starting at revision 1. Replacement requires the current draft ID/revision. Stop observation does not commit it; explicit corrections remain possible before admission. Queue admission freezes text. Missing/closed/expired input IDs cannot be recreated by preparation. A new prompt cancels prior unfinished speech in that session.
+Version 1 envelopes add optional `nativeTurnID` and `promptText`. Native turn mappings are persisted, but a reconnect closes old host mutation rights. A persisted mapping never authorizes reopening an old input. Unknown explicit turn IDs must not fall back to a newer turn.
 
-The raw bridge envelope includes version, request UUID, issued time, logical session, attachment, operation, and optional input/draft data. Identical retries retrieve durable receipts; changed payload conflicts. Receipt/input retention is 24 hours from initial acceptance/creation, without extension by retries. Session epoch tombstones remain. Issued timestamps bound expired raw-request replays, and unknown input IDs remain inadmissible after purge.
+Identical request UUID/envelope retries retrieve durable receipts. Changed payloads conflict. Receipts and the host mutation window last 24 hours. History lasts up to 30 days, capped at 500 interactions, with active playback protected during pruning. Queue expiry does not erase history or prevent explicit replay of retained text.
 
-The helper retains original requests during its lifetime for unknown-outcome timeout retries. Transport failure retires every attachment and native-turn mapping immediately. A new prompt whose complete frame was never sent may reconnect and retry once; a stale-attachment rejection may likewise reattach and deliver that new prompt once. An unknown outcome is never blindly resubmitted with changed identity. Identical receipt retries retain the original envelope, including its timestamp and retired attachment. If that envelope has no receipt and its attachment is stale, the helper returns `new_prompt_required` without reattaching, resending, or retiring the current valid attachment; the fresh turn stays usable. A stale reply at one instant does not prove the original will never commit, and a changed-attachment resend would conflict with that receipt or supersede fresher work. After a helper restart, begin a new prompt cycle. Raw identical stale-attachment receipt retrieval is read-only and does not renew ownership. Rejected Stop/Interrupt observations return an observable tool error without asking the host to continue or block.
-
-Explicit user Play creates a fresh playback-attempt ID from retained text and closes host preparation, replacement, and Stop; fail-safe interrupt and status reads remain. It does not manufacture completion evidence or reopen host input. A user retry after an authorized completion/failure regenerates speech; reconnecting never triggers it. Exact audio replay/session history is deferred.
+Migration imports retained legacy text and known playback outcomes, records migration as such, and does not invent missing historical events or resurrect expired renditions. Earlier overwritten revisions cannot be recovered. Restart and disconnect interrupt unfinished work without automatic replay. New prompts retire prior host mutation rights in that session, including turns whose playback already completed.
 
 ## Audio and resource policy
 
-Recording state becomes idle before ASR ends, so it is not the sole audio guard. Foreground leases cover permission/startup, capture, ASR, refinement, and insertion. History inference and Whisper warmup also take priority. Acquisition synchronously stops the player, cancels speech, and invalidates its generation. Late audio cannot pass playback checks.
+Foreground leases cover permission/startup, capture, ASR, refinement, and insertion. The first lease silences and suppresses current pending speech; nested leases preserve queued responses received during foreground work. Late synthesis results must pass generation and attempt-state checks before playback.
 
-Foreground inference waits for the owned Liquid process to exit. Termination escalates to SIGKILL after a provisional 750 ms, then observes exit for another 500 ms. It targets only the owned audio sidecar. Process exit does not prove immediate reclamation of all OS/Metal allocations. If exit remains unobserved, inference fails with status and retains the capture.
+Foreground inference waits for the owned Liquid process to exit. Termination escalates after a bounded grace period. The process belongs to DictaFlow; unrelated inference processes are not stopped. Before TTS, idle Whisper/refinement resources are released. Liquid stops after synthesis before playback.
 
-Before TTS the app unloads idle Whisper and stops idle refinement. Liquid stops after synthesis before playback. This favors memory predictability and recording priority over keeping every model warm. Queue scheduling preserves session order and alternates sessions when possible.
+Current limits: 8,000 rendition characters; five pending jobs per session and 50 globally; a five-minute automatic eligibility window for each prepared revision; five-minute queued/synthesizing attempt lifetime; 60-second synthesis budget; 12 MiB WAV output; playback shorter than 120 seconds. Liquid ASR input is limited to two minutes or 8 MiB. Oversized input/output fails explicitly. Long-form chunking and streaming are not implemented.
 
-Provisional bounds: 8,000 characters; five pending/session, 50 globally; five-minute prepared-rendition lifetime from first preparation, without extension by replacements; five-minute queue expiry from authorized admission, checked before synthesis/playback; 60-second synthesis budget; 12 MiB output; decoded audio under 120 seconds. Liquid ASR input is capped at 2 minutes or 8 MiB, checked from recording metadata before the full decode and again before the base64 POST. The cap is estimated from the pinned runtime (no retained raw token probe; an estimate, not a reproducible measurement): about 12.5 prompt tokens per second plus 20 framing tokens, --ctx-size 4096 with max_tokens 2048 reserved, leaves about 162 s; 120 s keeps a 528-token margin and a normal 150 wpm transcript inside max_tokens, and 8 MiB covers 120 s of 16 kHz mono float32. Longer clips fail explicitly with the recording kept for a Whisper or shorter retry; they are never truncated or auto-switched. A long-running agent turn does not consume its rendition lifetime before preparation. Oversized output fails explicitly without trimming text. Generation validates before playback. Local connect/request deadlines are 100/700 ms; a timeout may have an unknown outcome, so retry the identical request. Agents are instructed to finish their written answer without repair loops. Expired storage is purged on launch and subsequent access.
+The production TTS payload currently uses English and a female voice. Other languages, mixed-language quality, and voice customization require separate validation. No new cloud inference, telemetry, or remote transcription is introduced.
 
-WebSockets, realtime transcription, streaming playback, automatic prompt submission, Liquid conversational reasoning, and separate rewriting models are outside this integration.
+## Verification
+
+Run `swift test --package-path Packages/AgentVoice` for contract, storage, migration, identity, lifecycle, and transport tests. Hosted `AgentVoiceTests` cover automatic playback, duplicate Stop during playback, revisions waiting for fresh Stop, persistent user suppression, manual mode, deletion, foreground priority, and late synthesis rejection. See `Tests/README.md` for app test commands.
+
+Installed-app testing must cover the real shortcut, nonactivating control, focused-app insertion, host hook review/activation, concurrent sessions, and audible quality. Automated fixture results do not establish microphone permissions, host trust, or audio audibility.
+
+The evidence below predates automatic playback and is retained as historical runtime/host qualification, not a claim that the new flow has passed those same live checks.
 
 ## Runtime pins and measured evidence
 
@@ -159,7 +155,7 @@ Measured 2026-11-02 on M2 Pro, 16 GB. Seeded baseline (6 runs): startup median 0
 
 Efficiency pass later on 2026-11-02 (same machine, AC power, warm caches): ten more one-variable candidates were measured in seeded randomized pairs with byte-identity checks. `poll0` (`--poll 0 --poll-batch 0`) kept wall time neutral while cutting server CPU seconds per whole cycle from ~2.76 s to ~0.68 s (median of 4+4 runs, separate `getrusage` probe, same 1.70 s wall and identical bytes); single-request sidecars only burned spin-wait with the default poll level. Readiness polling at 20 ms instead of 100 ms saved ~20 ms of startup detection, confirmed in both directions (forward −15/−27 ms, reverse `healthpoll100` +36 ms startup). Both changes were kept: production now passes `--poll 0 --poll-batch 0` and polls readiness every 20 ms. `threads8` gained ~26 ms of inference in 12/12 pairs but cost +23% CPU seconds, so it was rejected for its higher CPU cost (no watts, joules, or thermal headroom were measured); `threads4`, `ubatch256`, `batch512`, `ctx2048`, and `poll0`-for-latency were neutral, and `nowarmup` was 6/6 worse. ASR, short-text synthesis, and cancellation-to-exit all pass under the new defaults with identical bytes. CPU seconds and RSS are reported as measured; they are not watts or joules (`powermetrics` needs root, the Power Profiler template is iOS-only, and device/CUA access was off). A Metal System Trace captured the server in both modes with GPU event counts within 4%, consistent with identical inference work. The 5 s MCP heartbeat (lease UPDATE plus drafts re-read and queue pump per beat) remains a small idle-cost avenue for later work with correctness tests; it was profiled by inspection only.
 
-Remaining qualification: authenticated final-completion authority and effective per-attempt configuration guarantees; physical global-hotkey/focus/insertion checks; broad languages, long outputs, thermal/memory pressure and slow cancellation; release signing/notarization. Native hook delivery, competing-Stop correction, and recording-priority interruption (app recording button, capture cancelled before transcription or insertion) have been tested. The dedicated workspace separates connection guidance, the shared Liquid model, and retained renditions with actionable states. Voice customization, model cleanup, and permanent conversation/audio history remain future work.
+Historical remaining qualification (before the automatic-playback redesign): authenticated final-completion authority and effective per-attempt configuration guarantees; physical global-hotkey/focus/insertion checks; broad languages, long outputs, thermal/memory pressure and slow cancellation; release signing/notarization. Native hook delivery, competing-Stop correction, and recording-priority interruption (app recording button, capture cancelled before transcription or insertion) have been tested. The dedicated workspace separates connection guidance, the shared Liquid model, and retained renditions with actionable states. Voice customization, model cleanup, and permanent conversation/audio history remain future work.
 
 Installed Dev verification: strict deep signature validation passed; the app launched from `/Applications`, showed both recognition providers and verified Liquid assets, with Whisper still selected. The installed signed helper initialized/listed its five tools, and the installed signed sidecar passed the synthetic TTS/ASR/cancellation check. Agent Voice was enabled temporarily for testing. Starting a brief recording through the app button cancelled active playback; that capture was cancelled before transcription or insertion. After disabling and re-enabling the bridge with the same host/helper still running, the first new prompt received a fresh input ID, prepared its rendition, and completed its native Stop observation. The prior input was shown as interrupted. Physical global-hotkey routing and focused-app insertion were not exercised. The prior Dev app is preserved under `.build/installed-app-backups`.
 

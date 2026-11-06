@@ -24,13 +24,14 @@ do {
             "request_id": ["type": "string", "description": "UUID. Reuse unchanged after an unknown-outcome timeout."],
             "input_id": ["type": "string", "description": "UUID returned by on_user_prompt_submit."],
             "text": ["type": "string", "maxLength": 8000],
+            "prompt": ["type": "string", "maxLength": 4000, "description": "Optional prompt text for history, when the host supplies it."],
             "replaces_draft_id": ["type": "string"],
             "expected_revision": ["type": "integer", "minimum": 1]
         ])
         let tools = [
             ("on_user_prompt_submit", "Observe a new prompt and return input identity and spoken-rendition instructions. This is not proof the host accepted the prompt."),
-            ("prepare_spoken_response", "Prepare a natural spoken rendition before your clean final answer. Does not play audio. On failure finish the written answer without repair loops."),
-            ("on_stop", "Observe Stop. This tool cannot authenticate host completion or authorize automatic playback."),
+            ("prepare_spoken_response", "Prepare a natural spoken rendition before your clean final answer. Never plays audio by itself. On failure finish the written answer without repair loops."),
+            ("on_stop", "Observe Stop for the current rendition. DictaFlow applies its user-set admission policy; a corrected revision needs a fresh Stop."),
             ("on_interrupt", "Conservatively cancel speech for an interrupted input. Does not cancel the agent."),
             ("get_speech_status", "Read an input's speech state.")
         ]
@@ -39,13 +40,15 @@ do {
             switch name {
             case "prepare_spoken_response": required = ["session_id", "input_id", "request_id", "text"]
             case "get_speech_status": required = ["session_id", "input_id", "request_id"]
-            case "on_user_prompt_submit": required = ["session_id", "turn_id"]
+            // turn_id is optional: hosts that cannot supply a native turn ID
+            // still open an input; hosts that supply one get durable mapping.
+            case "on_user_prompt_submit": required = ["session_id"]
             default: required = ["session_id"]
             }
-            var schema: [String: Value] = ["type": "object", "properties": properties, "required": required]
-            if name == "on_stop" || name == "on_interrupt" {
-                schema["anyOf"] = [["required": ["turn_id"]], ["required": ["input_id"]]]
-            }
+            // on_stop and on_interrupt require only session_id: hosts without
+            // a documented turn ID address the session's current input, and
+            // hosts with one may add turn_id or input_id for exact identity.
+            let schema: [String: Value] = ["type": "object", "properties": properties, "required": required]
             return Tool(name: name, description: description, inputSchema: .object(schema))
         })
     }

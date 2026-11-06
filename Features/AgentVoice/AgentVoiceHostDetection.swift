@@ -3,7 +3,8 @@ import Foundation
 /// Local-only availability probing for Agent Voice setup guidance.
 /// Reports whether a host's CLI exists in the searched locations. This never
 /// implies a live MCP connection, configured server entry, or qualified
-/// host hooks. DictaFlow never edits host configuration automatically.
+/// host hooks. One-click setup writes only that host's DictaFlow MCP entry;
+/// manual copy remains under Advanced config.
 struct AgentVoiceHostAvailability {
     enum Host: String, CaseIterable, Identifiable {
         case codex

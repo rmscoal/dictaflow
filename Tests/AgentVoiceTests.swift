@@ -167,7 +167,8 @@ final class AgentVoiceTests: XCTestCase {
         XCTAssertEqual(player.playCount, 0)
         voice.speak(failed)
         try await waitUntil { player.playCount == 1 }
-        XCTAssertNotEqual(voice.drafts.first?.id, failed.id)
+        XCTAssertEqual(voice.drafts.first?.id, failed.id)
+        XCTAssertNotEqual(voice.drafts.first?.attemptID, failed.attemptID)
         XCTAssertEqual(voice.drafts.first?.text, failed.text)
         let calls = await runtime.synthesisCount
         XCTAssertEqual(calls, 2)
@@ -333,7 +334,7 @@ final class AgentVoiceTests: XCTestCase {
         let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
         let draft = try await prepareDraft(voice: voice, client: client, sessionID: "stale-turn")
         voice.speak(draft)
-        try await waitUntil { voice.drafts.first?.id != draft.id }
+        try await waitUntil { voice.drafts.first?.attemptID != nil }
         let admitted = try XCTUnwrap(voice.drafts.first)
         voice.speak(admitted)
         try await waitUntil { voice.activeError != nil }
@@ -396,8 +397,8 @@ final class AgentVoiceTests: XCTestCase {
         await voice.waitForShutdown()
     }
 
-    /// An expired displayed row fails Play with refreshed ineligibility and no audio.
-    func testExpiredPlaySurfacesUnavailableAndRefreshesEligibility() async throws {
+    /// Queue expiry does not remove retained text or forbid an explicit replay.
+    func testQueueExpiryKeepsHistoryManuallyPlayable() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -419,14 +420,12 @@ final class AgentVoiceTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(voice.drafts.first?.state, .prepared, "Displayed row stays stale until Play refreshes it.")
         voice.speak(draft)
-        try await waitUntil { voice.activeError != nil }
-        XCTAssertEqual(voice.activeError?.scope, .playback)
-        XCTAssertEqual(voice.activeError?.message, "This response is no longer available.")
-        try await waitUntil { voice.drafts.first?.state == .expired }
+        try await waitUntil { player.playCount == 1 }
+        XCTAssertNil(voice.activeError)
         XCTAssertEqual(voice.drafts.first?.text, draft.text)
-        let expiredSyntheses = await runtime.synthesisCount
-        XCTAssertEqual(expiredSyntheses, 0)
-        XCTAssertEqual(player.playCount, 0)
+        let syntheses = await runtime.synthesisCount
+        XCTAssertEqual(syntheses, 1)
+        XCTAssertEqual(voice.history.first?.renditions.count, 1)
         voice.shutdown()
         await voice.waitForShutdown()
     }
@@ -455,11 +454,155 @@ final class AgentVoiceTests: XCTestCase {
         voice.speak(failed)
         try await waitUntil { player.playCount == 1 }
         try await waitUntil { voice.activeError == nil }
-        XCTAssertNotEqual(voice.drafts.first?.id, failed.id)
+        XCTAssertEqual(voice.drafts.first?.id, failed.id)
+        XCTAssertNotEqual(voice.drafts.first?.attemptID, failed.attemptID)
         XCTAssertEqual(voice.drafts.first?.text, failed.text)
         voice.shutdown()
         await voice.waitForShutdown()
     }
+    func testAutomaticSpeechCorrectionAndPersistentUserStop() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let player = VoicePlayerFixture()
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
+                                          runtime: VoiceRuntimeFixture(), appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
+        defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        voice.setEnabled(true)
+        let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
+        let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "automatic")
+        let attachment = try await client.send(.init(session: session, operation: .attach)).attachment
+        let input = try await client.send(.init(session: session, operation: .prompt, attachment: attachment,
+                                               nativeTurnID: "turn-1")).inputID
+        let first = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
+                                               inputID: input, text: "First response."))
+        XCTAssertEqual(player.playCount, 0)
+        _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
+        try await waitUntil { voice.isSpeaking && player.playCount == 1 }
+        _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
+        XCTAssertEqual(voice.history.first?.attempts.count, 1)
+        XCTAssertTrue(voice.isSpeaking, "Duplicate Stop must not cancel a valid active attempt.")
+        let second = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
+                                                inputID: input, text: "Corrected response.", replacesDraftID: first.renditionID,
+                                                expectedRevision: 1))
+        try await waitUntil { !voice.isSpeaking && !voice.isGenerating }
+        XCTAssertEqual(player.playCount, 1, "A correction needs its own Stop.")
+        XCTAssertEqual(voice.history.first?.renditions.count, 2)
+        _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
+        try await waitUntil { voice.isSpeaking && player.playCount == 2 }
+        voice.stopSpeech()
+        XCTAssertFalse(voice.isSpeaking)
+        await voice.waitForShutdown()
+        XCTAssertEqual(voice.history.first?.interaction.isSuppressed, true)
+        _ = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
+                                       inputID: input, text: "Late correction.", replacesDraftID: second.renditionID,
+                                       expectedRevision: 2))
+        let lateStop = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
+        XCTAssertEqual(lateStop.code, "stop_suppressed")
+        XCTAssertEqual(player.playCount, 2)
+        XCTAssertEqual(voice.history.first?.renditions.count, 3)
+        XCTAssertEqual(voice.history.first?.attempts.count, 2)
+        let nextInput = try await client.send(.init(session: session, operation: .prompt, attachment: attachment,
+                                                   nativeTurnID: "turn-2")).inputID
+        _ = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
+                                       inputID: nextInput, text: "A new interaction."))
+        _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: nextInput))
+        try await waitUntil { player.playCount == 3 }
+        voice.shutdown(); await voice.waitForShutdown()
+    }
+
+    func testManualModeRetainsResponseAndDeletionStopsPlayback() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let player = VoicePlayerFixture()
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
+                                          runtime: VoiceRuntimeFixture(), appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
+        defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        voice.setAdmissionPolicy(.manualOnly)
+        try await waitUntil { voice.admissionPolicy == .manualOnly }
+        voice.setEnabled(true)
+        let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
+        let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "quiet")
+        let attachment = try await client.send(.init(session: session, operation: .attach)).attachment
+        let input = try await client.send(.init(session: session, operation: .prompt, attachment: attachment)).inputID
+        let response = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
+                                                  inputID: input, text: "Read when ready."))
+        _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
+        XCTAssertEqual(player.playCount, 0)
+        XCTAssertEqual(voice.history.first?.renditions.count, 1)
+        voice.playRendition(try XCTUnwrap(response.renditionID))
+        try await waitUntil { voice.isSpeaking }
+        voice.deleteInteraction(try XCTUnwrap(input))
+        XCTAssertFalse(voice.isSpeaking)
+        try await waitUntil { voice.history.isEmpty }
+        _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
+        XCTAssertEqual(player.playCount, 1)
+        XCTAssertTrue(voice.history.isEmpty)
+        voice.shutdown(); await voice.waitForShutdown()
+    }
+
+    func testOverlayShowsDuringAutomaticSpeechAndHidesOnInterruption() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let player = VoicePlayerFixture()
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
+                                          runtime: VoiceRuntimeFixture(), appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
+        let overlay = AgentVoiceOverlayCoordinator(voice: voice) {}
+        defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        voice.setEnabled(true)
+        XCTAssertFalse(overlay.isControlVisible)
+        let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
+        let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "overlay-auto")
+        let attachment = try await client.send(.init(session: session, operation: .attach)).attachment
+        let input = try await client.send(.init(session: session, operation: .prompt, attachment: attachment)).inputID
+        _ = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
+                                        inputID: input, text: "Overlay speaks this."))
+        _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
+        try await waitUntil { voice.isGenerating || voice.isSpeaking }
+        XCTAssertTrue(overlay.isControlVisible, "The control must appear while speech generates.")
+        try await waitUntil { voice.isSpeaking }
+        XCTAssertTrue(overlay.isControlVisible, "The control must stay visible while speaking.")
+        voice.stopSpeech()
+        try await waitUntil { !voice.isSpeaking && !voice.isGenerating }
+        try await waitUntil { !overlay.isControlVisible }
+        voice.shutdown(); await voice.waitForShutdown()
+    }
+
+    func testOverlayOffersManualReadyControlAfterStop() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let player = VoicePlayerFixture()
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
+                                          runtime: VoiceRuntimeFixture(), appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
+        let overlay = AgentVoiceOverlayCoordinator(voice: voice) {}
+        defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        voice.setAdmissionPolicy(.manualOnly)
+        try await waitUntil { voice.admissionPolicy == .manualOnly }
+        voice.setEnabled(true)
+        let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
+        let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "overlay-manual")
+        let attachment = try await client.send(.init(session: session, operation: .attach)).attachment
+        let input = try await client.send(.init(session: session, operation: .prompt, attachment: attachment)).inputID
+        let response = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
+                                                  inputID: input, text: "Read when ready."))
+        let stop = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
+        XCTAssertEqual(stop.code, "stop_observed_manual_only")
+        XCTAssertEqual(player.playCount, 0)
+        // The Stop must endorse the revision so the overlay can offer replay.
+        try await waitUntil { voice.history.first?.interaction.stopEligibleRevision != nil }
+        XCTAssertTrue(overlay.isControlVisible, "Manual mode must surface the Response ready control.")
+        voice.playRendition(try XCTUnwrap(response.renditionID))
+        try await waitUntil { voice.isSpeaking }
+        XCTAssertTrue(overlay.isControlVisible)
+        voice.stopSpeech()
+        try await waitUntil { !voice.isSpeaking && !voice.isGenerating }
+        try await waitUntil { !overlay.isControlVisible }
+        voice.shutdown(); await voice.waitForShutdown()
+    }
+
 }
 
 private actor FailingOnceVoiceRuntimeFixture: LiquidRuntimeProtocol {

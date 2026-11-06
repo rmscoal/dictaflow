@@ -42,6 +42,10 @@ final class AgentVoiceCoordinator: ObservableObject {
     @Published private(set) var isModelReady = false
     @Published private(set) var isDownloading = false
     @Published private(set) var drafts: [VoiceDraft] = []
+    @Published private(set) var history: [VoiceHistoryRecord] = []
+    @Published private(set) var admissionPolicy: VoiceAdmissionPolicy = .automatic
+    @Published private(set) var activeSource: String?
+    @Published private(set) var isForegroundBusy = false
     @Published private(set) var isSpeaking = false
     @Published private(set) var isGenerating = false
     @Published private(set) var activeError: AgentVoiceError?
@@ -59,6 +63,7 @@ final class AgentVoiceCoordinator: ObservableObject {
     private var worker: Task<Void, Never>?
     private var resourceRelease: Task<Void, Never>?
     private var activeJob: UUID?
+    private var activeInput: UUID?
     private var foregroundLeases: Set<UUID> = []
     private var generation = UUID()
     private var stopped = false
@@ -122,7 +127,7 @@ final class AgentVoiceCoordinator: ObservableObject {
             do {
                 try await assets.download()
                 self?.isModelReady = true
-                self?.status = "Liquid audio is ready. Automatic host completion is not qualified."
+                self?.status = "Liquid audio is ready."
             } catch {
                 let message = "Liquid download failed: \(error.localizedDescription)"
                 self?.status = message
@@ -134,13 +139,16 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     /// Synchronous local silence precedes any microphone await. Tokens span the full pipeline.
     func acquireForeground() -> UUID {
+        let firstLease = foregroundLeases.isEmpty
         let lease = UUID(); foregroundLeases.insert(lease)
-        interruptActiveSpeech(reason: "Agent speech interrupted for dictation.")
+        isForegroundBusy = true
+        interruptActiveSpeech(suppress: firstLease, reason: "Agent speech interrupted for dictation.")
         return lease
     }
 
     func releaseForeground(_ lease: UUID) {
         foregroundLeases.remove(lease)
+        isForegroundBusy = !foregroundLeases.isEmpty
         pump()
     }
 
@@ -172,7 +180,47 @@ final class AgentVoiceCoordinator: ObservableObject {
         }
     }
 
-    func stopSpeech() { interruptActiveSpeech() }
+    func stopSpeech() { interruptActiveSpeech(suppress: true) }
+
+    func setAdmissionPolicy(_ policy: VoiceAdmissionPolicy) {
+        guard let store else { return }
+        if policy == .manualOnly { interruptActiveSpeech() }
+        Task { [weak self] in
+            do {
+                try await store.setAdmissionPolicy(policy)
+                await self?.refresh()
+                self?.pump()
+            } catch { self?.reportPlaybackError(error) }
+        }
+    }
+
+    func playRendition(_ id: UUID) {
+        guard isEnabled, let store else { return }
+        Task { [weak self] in
+            do {
+                _ = try await store.requestManualPlayback(renditionID: id)
+                if self?.activeError?.scope == .playback { self?.activeError = nil }
+                await self?.refresh()
+                self?.pump()
+            } catch { self?.reportPlaybackError(error); await self?.refresh() }
+        }
+    }
+
+    func deleteInteraction(_ id: UUID) {
+        guard let store else { return }
+        if activeInput == id { interruptActiveSpeech() }
+        Task { [weak self] in
+            do {
+                _ = try await store.deleteInteraction(inputID: id)
+                await self?.refresh()
+            } catch { self?.reportPlaybackError(error) }
+        }
+    }
+
+    private func reportPlaybackError(_ error: Error) {
+        status = error.localizedDescription
+        activeError = AgentVoiceError(scope: .playback, message: status)
+    }
 
     func recognize(_ audioURL: URL, configuration: WhisperConfiguration) async throws -> WhisperTranscriptionResult {
         try Self.preflightASRDuration(audioURL)
@@ -228,6 +276,11 @@ final class AgentVoiceCoordinator: ObservableObject {
             do {
                 let reply = try await store.handle(request, connectionID: connection)
                 await self?.didReceiveRequest()
+                if reply.code == "stop_observed_queue_full" {
+                    await self?.reportPlaybackError(VoiceError.unavailable("The speech queue is full. This response is saved in History for Play."))
+                } else if reply.code == "stop_observed_stale_rendition" {
+                    await self?.reportPlaybackError(VoiceError.unavailable("This response is too old for automatic speech. Use Play in History."))
+                }
                 return reply
             } catch { return VoiceReply(accepted: false, code: "storage_failed", message: "DictaFlow could not persist the request. Finish your written answer normally.") }
         }, onDisconnect: { [weak self] connection in
@@ -236,7 +289,7 @@ final class AgentVoiceCoordinator: ObservableObject {
         })
         do {
             try bridge.start(); self.bridge = bridge
-            status = "Connected locally. Automatic playback awaits host qualification; prepared speech can be played here."
+            status = "Agent Voice is ready for connected hosts."
             if activeError?.scope == .setup { activeError = nil }
         } catch {
             status = error.localizedDescription
@@ -247,12 +300,18 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     private func didReceiveRequest() async {
         await refresh()
-        if let activeJob, !drafts.contains(where: { $0.id == activeJob && !$0.state.isTerminal }) { interruptActiveSpeech() }
+        if let activeJob, !history.contains(where: { record in
+            record.attempts.contains { $0.id == activeJob && !$0.state.isTerminal }
+        }) { interruptActiveSpeech() }
         pump()
     }
 
     private func refresh() async {
-        do { drafts = try await store?.drafts().sorted { $0.createdAt > $1.createdAt } ?? [] }
+        do {
+            drafts = try await store?.drafts().sorted { $0.createdAt > $1.createdAt } ?? []
+            history = try await store?.historyRecords(limit: 500) ?? []
+            admissionPolicy = try await store?.admissionPolicy() ?? .automatic
+        }
         catch {
             status = "Agent Voice storage failed: \(error.localizedDescription)"
             activeError = AgentVoiceError(scope: .setup, message: status)
@@ -261,17 +320,27 @@ final class AgentVoiceCoordinator: ObservableObject {
         // hide an actionable error set by a real failure.
     }
 
-    private func interruptActiveSpeech(stopAllInference: Bool = false, reason: String = "Agent speech stopped.") {
+    private func interruptActiveSpeech(stopAllInference: Bool = false, suppress: Bool = false,
+                                       reason: String = "Agent speech stopped.") {
+        // Captured synchronously; the store resolves every other target
+        // itself at execution time, so attempts admitted after this frame's
+        // last refresh are still suppressed.
+        let suppressedInput = suppress ? activeInput : nil
         generation = UUID()
         player.stop(); isSpeaking = false; isGenerating = false
         worker?.cancel()
         let oldWorker = worker; worker = nil
         let job = activeJob; activeJob = nil
+        activeInput = nil; activeSource = nil
         if job != nil { status = reason }
         let shouldStopRuntime = oldWorker != nil || job != nil || stopAllInference
         let priorRelease = resourceRelease
         resourceRelease = Task { [weak self, runtime, store] in
             await priorRelease?.value
+            if suppress {
+                do { _ = try await store?.suppressActiveSpeech(for: suppressedInput) }
+                catch { self?.reportPlaybackError(error) }
+            }
             if let job {
                 _ = try? await store?.transition(job, from: .synthesizing, to: .cancelled)
                 _ = try? await store?.transition(job, from: .playing, to: .cancelled)
@@ -290,7 +359,10 @@ final class AgentVoiceCoordinator: ObservableObject {
             guard let self else { return }
             await release?.value
             defer {
-                if generation == token { worker = nil; activeJob = nil; isSpeaking = false; isGenerating = false }
+                if generation == token {
+                    worker = nil; activeJob = nil; activeInput = nil; activeSource = nil
+                    isSpeaking = false; isGenerating = false
+                }
             }
             while !Task.isCancelled, generation == token, foregroundLeases.isEmpty, isEnabled {
                 do {
@@ -299,7 +371,10 @@ final class AgentVoiceCoordinator: ObservableObject {
                         _ = try? await store.transition(job.id, from: .synthesizing, to: .cancelled)
                         return
                     }
-                    activeJob = job.id; isGenerating = true; status = "Generating agent speech…"
+                    activeJob = job.id; activeInput = job.inputID
+                    activeSource = "\(job.session.host) · \(job.session.sessionID.prefix(8))"
+                    isGenerating = true; status = "Generating agent speech…"
+                    await refresh()
                     let processingStarted = ContinuousClock.now
                     await prepareSpeechResources?()
                     logger.info("Speech resource_preparation_seconds=\(Self.seconds(since: processingStarted), privacy: .public)")
@@ -313,6 +388,7 @@ final class AgentVoiceCoordinator: ObservableObject {
                     let playerStarted = ContinuousClock.now
                     let duration = try player.play(speech.wav)
                     isGenerating = false; isSpeaking = true; status = "Speaking agent response."
+                    await refresh()
                     logger.info("Speech processing_to_player_start_seconds=\(Self.seconds(since: processingStarted), privacy: .public) player_start_seconds=\(Self.seconds(since: playerStarted), privacy: .public)")
                     try await Task.sleep(for: .seconds(duration))
                     player.stop(); isSpeaking = false

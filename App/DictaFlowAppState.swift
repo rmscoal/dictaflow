@@ -26,6 +26,7 @@ protocol RecordingOverlayRouting: AnyObject {
 @MainActor
 final class DictaFlowAppState: ObservableObject {
     @Published private(set) var agentVoice: AgentVoiceCoordinator?
+    private var agentVoiceOverlay: AgentVoiceOverlayCoordinator?
     private var recordingAudioLease: UUID?
     @Published private(set) var isMainWindowVisible = false
     @Published private(set) var isSettingsWindowVisible = false
@@ -185,6 +186,11 @@ final class DictaFlowAppState: ObservableObject {
         // or recover/cancel speech from a separately running installed Dev app.
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         agentVoice = AgentVoiceCoordinator()
+        if let agentVoice {
+            agentVoiceOverlay = AgentVoiceOverlayCoordinator(voice: agentVoice) { [weak self] in
+                self?.toggleDictation()
+            }
+        }
         agentVoice?.prepareSpeechResources = { [weak self] in
             guard let self else { return }
             await self.whisperService.unloadModel()
@@ -319,6 +325,17 @@ final class DictaFlowAppState: ObservableObject {
         whisperConfiguration.recognitionProvider = provider
         settingsStore.saveWhisperConfiguration(whisperConfiguration)
         updateStatusMessage()
+    }
+
+    /// Selects the Liquid speech model. The recognition engine follows the
+    /// selected provider, so callers never set the engine directly.
+    func updateSpeechToLiquid() {
+        guard !whisperSettingsLocked else { return }
+        guard whisperConfiguration.recognitionProvider != .liquid else { return }
+        whisperConfiguration.recognitionProvider = .liquid
+        persistWhisperConfiguration()
+        updateStatusMessage()
+        resetWhisperIdleTimer()
     }
 
     var appDisplayNameText: String {
@@ -2772,7 +2789,11 @@ final class DictaFlowAppState: ObservableObject {
         stopSoundCues()
 
         let usesLiquid = whisperConfiguration.recognitionProvider == .liquid
+        // Silence agent speech even when recording cannot start (for example,
+        // while its recognition model is missing).
+        recordingAudioLease = agentVoice?.acquireForeground()
         guard usesLiquid ? agentVoice?.isModelReady == true : isWhisperModelPrepared(whisperConfiguration.model) else {
+            releaseRecordingAudioLease()
             isOnboardingPracticeSession = false
             setPreservedStatusMessage("\(whisperConfiguration.speechModelName) is not prepared. Download it before recording.", issueTitle: "Speech model is missing")
             if usesLiquid { showSettingsCategory(.general) } else { showSpeechModels(focusing: whisperConfiguration.model) }
@@ -2789,7 +2810,6 @@ final class DictaFlowAppState: ObservableObject {
         // Reserve startup before any await so another shortcut cannot start
         // a second recorder and reset the first session's state on failure.
         recordingState = microphonePermissionState == .granted ? .starting : .requestingPermission
-        recordingAudioLease = agentVoice?.acquireForeground()
         setRecordingOverlaySessionActive(true)
         updateStatusMessage()
         logger.info("Recording start acknowledged in \((ProcessInfo.processInfo.systemUptime - requestedAt) * 1_000, privacy: .public) ms")
