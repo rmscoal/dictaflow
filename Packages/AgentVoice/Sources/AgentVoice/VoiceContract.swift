@@ -245,6 +245,13 @@ public enum VoiceInstructions {
         Immediately before each final written response, call prepare_spoken_response with a conversational rendition of your answer.
         Explain the useful result, important reasoning, caveats, and next actions naturally for listening.
         Preserve material details. Adapt length to the answer; do not force a tiny summary or read code, tables, or URLs aloud.
+        Write only the words to be spoken, in the same language as your answer, with a calm, clear, conversational tone.
+        Group one to three related sentences into short paragraphs, aiming for 25–45 words per paragraph. The complete rendition may span multiple paragraphs.
+        Vary sentence lengths naturally, use contractions where appropriate, and punctuate according to meaning. Preserve uncertainty and what was actually verified.
+        Describe commands, symbols, and technical identifiers in natural spoken language when practical. Do not include Markdown, stage directions, pause tags, SSML, or artificial ellipses.
+        Explain a code block's purpose or result rather than reading its source. Use enough of a filename to identify it; keep exact commands, full paths, and URLs in the written answer.
+        Aim for at most 220 spoken words, leading with the outcome and important caveats. DictaFlow accepts content without correction retries and may announce a spoken preview of a long response; the submitted text remains in history.
+        Send the complete rendition in one prepare_spoken_response call. DictaFlow handles synthesis chunks; additional preparations replace revisions rather than append speech.
         Keep the written answer clean: no spoken-output tags or appended speech transcript.
         If a hook asks you to continue or you discover a material correction, update the rendition before finishing again.
         For an existing draft, use get_speech_status with a fresh request_id to obtain its current draft_id and revision.

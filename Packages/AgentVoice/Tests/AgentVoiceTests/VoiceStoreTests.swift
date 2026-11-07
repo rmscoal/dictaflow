@@ -3,6 +3,31 @@ import Foundation
 import Testing
 
 struct VoiceStoreTests {
+    @Test func contentIsAcceptedOnceAndOriginalSurvivesAutomaticAndManualPlayback() async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        let text = "# Result\n\nRead [the guide](https://example.com/" + String(repeating: "a", count: 400)
+            + ").\n\n```sh\ngit diff --check\n```\n\n" + Array(repeating: "The full result remains in writing.", count: 60).joined(separator: " ")
+        let request = VoiceRequest(session: session, operation: .prepare, attachment: attachment,
+                                   inputID: input, text: text)
+        let prepared = try await store.handle(request, connectionID: connection)
+        #expect(prepared.accepted && prepared.revision == 1)
+        #expect(try await store.handle(request, connectionID: connection) == prepared)
+        #expect(try await store.renditions(inputID: input).count == 1)
+        #expect(try await store.nextJob() == nil, "Cleanup does not admit playback.")
+        _ = try await store.handle(.init(session: session, operation: .stop, attachment: attachment, inputID: input), connectionID: connection)
+        let automatic = try #require(try await store.nextJob())
+        #expect(automatic.text == text)
+        #expect(try await store.transition(automatic.id, from: .synthesizing, to: .playing))
+        #expect(try await store.transition(automatic.id, from: .playing, to: .completed))
+        let manual = try await store.requestManualPlayback(renditionID: prepared.draftID!)
+        let replay = try #require(try await store.nextJob())
+        #expect(replay.id == manual.id && replay.id != automatic.id && replay.text == text)
+        #expect(try await store.renditions(inputID: input).first?.text == text)
+    }
+
     func fixture(limits: VoiceLimits = .init()) throws -> (VoiceStore, URL, VoiceSession, UUID) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         return (try VoiceStore(url: root.appendingPathComponent("voice.sqlite"), limits: limits), root,

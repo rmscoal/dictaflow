@@ -64,6 +64,7 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
     private var busy = false
     private let http: URLSession
     private var apiKey = UUID().uuidString
+    private var synthesisRequests = (seconds: 0.0, headers: 0.0, body: 0.0, bytes: 0)
 
     public init(executable: URL, assets: LiquidAssets,
                 configuration: LiquidRuntimeConfiguration = .productionDefault) {
@@ -76,31 +77,47 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
 
     public func synthesize(_ text: String) async throws -> LiquidSpeech {
         guard !busy else { throw VoiceError.unavailable("Liquid audio is busy.") }
-        guard !text.isEmpty, text.count <= 8_000 else { throw VoiceError.unavailable("The spoken rendition is empty or too long.") }
         busy = true; defer { busy = false }
         lastSynthesisTimings = nil
+        synthesisRequests = (0, 0, 0, 0)
         let token = generation
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
         do {
+            let plan = try LiquidSpeechPlan.make(text)
             let startupStarted = ContinuousClock.now
             let endpoint = try await start(token: token)
             let startupSeconds = Self.seconds(since: startupStarted)
-            let payload = Self.ttsPayload(text: text, seed: configuration.ttsSeed)
-            let requestStarted = ContinuousClock.now
-            let response = try await post(endpoint.appendingPathComponent("tts"), payload: payload, maxBytes: 12 * 1024 * 1024)
-            let requestSeconds = Self.seconds(since: requestStarted)
+            let rendered = try await LiquidSpeechRenderer.render(plan, deadline: deadline) { chunk in
+                try await self.synthesizeChunk(chunk, endpoint: endpoint, token: token, deadline: deadline)
+            }
             try check(token)
-            let validationStarted = ContinuousClock.now
-            let duration = try Self.validateWAV(response.data)
-            let validationSeconds = Self.seconds(since: validationStarted)
-            lastSynthesisTimings = LiquidSynthesisTimings(startupSeconds: startupSeconds, requestSeconds: requestSeconds,
-                                                         responseHeaderSeconds: response.headerSeconds, responseBodySeconds: response.bodySeconds,
-                                                         validationSeconds: validationSeconds)
-            logger.info("TTS startup_seconds=\(startupSeconds, privacy: .public) request_seconds=\(requestSeconds, privacy: .public) header_seconds=\(response.headerSeconds, privacy: .public) body_seconds=\(response.bodySeconds, privacy: .public) validation_seconds=\(validationSeconds, privacy: .public) audio_seconds=\(duration, privacy: .public)")
-            return LiquidSpeech(wav: response.data, duration: duration)
+            lastSynthesisTimings = LiquidSynthesisTimings(startupSeconds: startupSeconds, requestSeconds: synthesisRequests.seconds,
+                                                         responseHeaderSeconds: synthesisRequests.headers, responseBodySeconds: synthesisRequests.body,
+                                                         validationSeconds: rendered.validationSeconds)
+            logger.info("TTS chunks=\(plan.chunks.count, privacy: .public) startup_seconds=\(startupSeconds, privacy: .public) request_seconds=\(self.synthesisRequests.seconds, privacy: .public) header_seconds=\(self.synthesisRequests.headers, privacy: .public) body_seconds=\(self.synthesisRequests.body, privacy: .public) validation_seconds=\(rendered.validationSeconds, privacy: .public) audio_seconds=\(rendered.speech.duration, privacy: .public)")
+            return rendered.speech
         } catch {
             await stop()
+            if let network = error as? URLError, network.code == .timedOut {
+                throw VoiceError.unavailable("Agent speech took too long to generate. Use a shorter spoken response.")
+            }
             throw error
         }
+    }
+
+    private func synthesizeChunk(_ chunk: LiquidSpeechChunk, endpoint: URL, token: UUID,
+                                 deadline: ContinuousClock.Instant) async throws -> Data {
+        try check(token)
+        let payload = Self.ttsPayload(text: chunk.text, seed: configuration.ttsSeed, language: chunk.language)
+        let started = ContinuousClock.now
+        let response = try await post(endpoint.appendingPathComponent("tts"), payload: payload,
+                                      maxBytes: LiquidSpeechAudio.maxBytes - synthesisRequests.bytes, deadline: deadline)
+        try check(token)
+        synthesisRequests.seconds += Self.seconds(since: started)
+        synthesisRequests.headers += response.headerSeconds
+        synthesisRequests.body += response.bodySeconds
+        synthesisRequests.bytes += response.data.count
+        return response.data
     }
 
     public func transcribe(wav: Data, english: Bool) async throws -> String {
@@ -167,8 +184,8 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
     /// Production payload keys are unchanged when no seed is configured.
     /// A configured seed is passed through to `/tts`, which reproduces
     /// byte-identical audio for the same text and seed.
-    public static func ttsPayload(text: String, seed: UInt32?) -> [String: Any] {
-        var payload: [String: Any] = ["input": text, "lang": "en", "voice": "female", "stream": false,
+    public static func ttsPayload(text: String, seed: UInt32?, language: String = "en") -> [String: Any] {
+        var payload: [String: Any] = ["input": text, "lang": language, "voice": "female", "stream": false,
                                        "response_format": "wav", "n_predict": 2048, "repeat_penalty": 1.1]
         if let seed { payload["seed"] = seed }
         return payload
@@ -221,22 +238,36 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
         throw VoiceError.unavailable("Liquid audio took too long to start.")
     }
 
-    private func post(_ url: URL, payload: [String: Any], maxBytes: Int) async throws -> (data: Data, headerSeconds: Double, bodySeconds: Double) {
+    private func post(_ url: URL, payload: [String: Any], maxBytes: Int,
+                      deadline: ContinuousClock.Instant? = nil) async throws -> (data: Data, headerSeconds: Double, bodySeconds: Double) {
+        guard maxBytes > 0 else { throw VoiceError.unavailable("Generated speech exceeds the 12 MiB response limit.") }
+        let session: URLSession
+        if let deadline {
+            let remaining = ContinuousClock.now.duration(to: deadline).components
+            let seconds = Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18
+            guard seconds > 0 else { throw VoiceError.unavailable("Agent speech exceeded its 60-second synthesis budget. Use a shorter spoken response.") }
+            // Bound headers AND stalled bodies by the remaining whole-response budget.
+            let settings = URLSessionConfiguration.ephemeral
+            settings.timeoutIntervalForRequest = seconds
+            settings.timeoutIntervalForResource = seconds
+            session = URLSession(configuration: settings)
+        } else { session = http }
+        defer { if deadline != nil { session.invalidateAndCancel() } }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer " + apiKey, forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         // Count while receiving so an unbounded response is never retained or played.
         let started = ContinuousClock.now
-        let (bytes, response) = try await http.bytes(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
         let headerSeconds = Self.seconds(since: started)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw VoiceError.unavailable("Liquid audio rejected the request.") }
         if response.expectedContentLength > maxBytes { throw VoiceError.unavailable("Generated audio exceeds the output limit.") }
         var data = Data(); data.reserveCapacity(min(maxBytes, 1024 * 1024))
         let bodyStarted = ContinuousClock.now
-        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+        let bodyDeadline = deadline ?? ContinuousClock.now.advanced(by: .seconds(60))
         for try await byte in bytes {
-            guard data.count < maxBytes, ContinuousClock.now < deadline else { throw VoiceError.unavailable("Liquid output exceeded the size or synthesis-time limit.") }
+            guard data.count < maxBytes, ContinuousClock.now < bodyDeadline else { throw VoiceError.unavailable("Liquid output exceeded the size or synthesis-time limit.") }
             data.append(byte)
         }
         return (data, headerSeconds, Self.seconds(since: bodyStarted))
