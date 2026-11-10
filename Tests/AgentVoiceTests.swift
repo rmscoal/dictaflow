@@ -531,7 +531,7 @@ final class AgentVoiceTests: XCTestCase {
         _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
         XCTAssertEqual(player.playCount, 0)
         XCTAssertEqual(voice.history.first?.renditions.count, 1)
-        voice.playRendition(try XCTUnwrap(response.renditionID))
+        await voice.playRendition(try XCTUnwrap(response.renditionID))
         try await waitUntil { voice.isSpeaking }
         voice.deleteInteraction(try XCTUnwrap(input))
         XCTAssertFalse(voice.isSpeaking)
@@ -539,6 +539,36 @@ final class AgentVoiceTests: XCTestCase {
         _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
         XCTAssertEqual(player.playCount, 1)
         XCTAssertTrue(voice.history.isEmpty)
+        voice.shutdown(); await voice.waitForShutdown()
+    }
+
+    func testAdmissionWhileWorkerIsRetiringStartsPlaybackWithoutAnotherRequest() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let player = VoicePlayerFixture()
+        let gate = IdleRefreshGate()
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
+                                          runtime: VoiceRuntimeFixture(), appIdentity: "df-test-\(UUID().uuidString.prefix(8))",
+                                          beforeIdleRefresh: { await gate.pauseOnce() })
+        defer {
+            gate.resume()
+            voice.shutdown(); defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        voice.setEnabled(true)
+        let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
+        let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "worker-wakeup")
+        let attachment = try await client.send(.init(session: session, operation: .attach)).attachment
+        try await waitUntil { gate.isPaused }
+        let input = try await client.send(.init(session: session, operation: .prompt, attachment: attachment)).inputID
+        let response = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
+                                                    inputID: input, text: "Speak this without another request."))
+        await voice.playRendition(try XCTUnwrap(response.renditionID))
+        XCTAssertEqual(voice.history.first?.attempts.first?.state, .queued)
+        XCTAssertEqual(player.playCount, 0)
+        gate.resume()
+        try await waitUntil { player.playCount == 1 }
         voice.shutdown(); await voice.waitForShutdown()
     }
 
@@ -594,7 +624,7 @@ final class AgentVoiceTests: XCTestCase {
         // The Stop must endorse the revision so the overlay can offer replay.
         try await waitUntil { voice.history.first?.interaction.stopEligibleRevision != nil }
         XCTAssertTrue(overlay.isControlVisible, "Manual mode must surface the Response ready control.")
-        voice.playRendition(try XCTUnwrap(response.renditionID))
+        await voice.playRendition(try XCTUnwrap(response.renditionID))
         try await waitUntil { voice.isSpeaking }
         XCTAssertTrue(overlay.isControlVisible)
         voice.stopSpeech()
@@ -605,6 +635,25 @@ final class AgentVoiceTests: XCTestCase {
 
 }
 
+@MainActor
+private final class IdleRefreshGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var didPause = false
+    var isPaused: Bool { continuation != nil }
+
+    func pauseOnce() async {
+        guard !didPause else { return }
+        didPause = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func resume() {
+        didPause = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 private actor FailingOnceVoiceRuntimeFixture: LiquidRuntimeProtocol {
     var synthesisCount = 0
     func synthesize(_ text: String) async throws -> LiquidSpeech {
@@ -612,7 +661,7 @@ private actor FailingOnceVoiceRuntimeFixture: LiquidRuntimeProtocol {
         if synthesisCount == 1 { throw VoiceError.unavailable("Injected synthesis failure") }
         return LiquidSpeech(wav: Data(), duration: 60)
     }
-    func transcribe(wav: Data, english: Bool) async throws -> String { "Fixture transcription" }
+    func transcribe(wav: Data, translateToEnglish: Bool) async throws -> String { "Fixture transcription" }
     func stop() async {}
     func hasExited() async -> Bool { true }
 }
@@ -625,7 +674,7 @@ private actor VoiceRuntimeFixture: LiquidRuntimeProtocol {
         synthesisCount += 1
         return LiquidSpeech(wav: Data(), duration: 60)
     }
-    func transcribe(wav: Data, english: Bool) async throws -> String {
+    func transcribe(wav: Data, translateToEnglish: Bool) async throws -> String {
         transcribeCount += 1
         return "Fixture transcription"
     }
@@ -638,7 +687,7 @@ private actor GatedVoiceRuntimeFixture: LiquidRuntimeProtocol {
     private var exited = true
     func setExited(_ value: Bool) { exited = value }
     func synthesize(_ text: String) async throws -> LiquidSpeech { LiquidSpeech(wav: Data(), duration: 60) }
-    func transcribe(wav: Data, english: Bool) async throws -> String { "Fixture transcription" }
+    func transcribe(wav: Data, translateToEnglish: Bool) async throws -> String { "Fixture transcription" }
     func stop() async {}
     func hasExited() async -> Bool { exited }
 }
@@ -653,7 +702,7 @@ private actor SuspendedVoiceRuntimeFixture: LiquidRuntimeProtocol {
         result?.resume(returning: LiquidSpeech(wav: Data(), duration: 60))
         result = nil
     }
-    func transcribe(wav: Data, english: Bool) async throws -> String { "Fixture transcription" }
+    func transcribe(wav: Data, translateToEnglish: Bool) async throws -> String { "Fixture transcription" }
     func stop() async {}
     func hasExited() async -> Bool { true }
 }

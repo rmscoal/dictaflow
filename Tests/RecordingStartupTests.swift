@@ -1,3 +1,4 @@
+import AgentVoice
 import AppKit
 import Combine
 import Foundation
@@ -47,6 +48,85 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(state.recordingState, .idle)
         XCTAssertNil(state.lastCapture)
         XCTAssertEqual(state.interfaceIssue?.title, "Speech model is missing")
+    }
+
+    func testMissingLiquidModelOpensAgentVoiceModelsWithoutStartingCapture() async throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        state.updateSpeechToLiquid()
+        state.showSettingsCategory(.appearance)
+        let routed = expectation(description: "Missing Liquid model recovery")
+        let observation = state.$mainWindowPage.first { $0 == .agentVoice }.sink { _ in routed.fulfill() }
+        state.toggleDictation()
+        await fulfillment(of: [routed], timeout: 2)
+        observation.cancel()
+        XCTAssertEqual(state.agentVoiceTab, .models)
+        XCTAssertEqual(state.recordingState, .idle)
+        XCTAssertNil(state.lastCapture)
+        XCTAssertEqual(state.interfaceIssue?.title, "Speech model is missing")
+    }
+
+    func testRetainedCapturesCanBeDiscardedOrRetriedAfterAnotherRecording() async throws {
+        let whisper = PipelineWhisperService(text: "Recovered speech.")
+        await whisper.setCaptureLimitFailure(true)
+        let fixture = try RecordingStartupFixture(whisper: whisper, usePipelineModels: true, refinementEnabled: false, allowsInsertion: true)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DictaFlowRecordings/\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            fixture.cleanup()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        fixture.volume.shouldWait = false
+        let state = fixture.state
+        for index in 1...2 {
+            fixture.recorder.fileURL = directory.appendingPathComponent("capture-\(index).m4a")
+            let recording = expectation(description: "Recording \(index) starts")
+            let recorded = state.$recordingState.first(where: \.isRecording).sink { _ in recording.fulfill() }
+            state.toggleDictation()
+            await fulfillment(of: [recording], timeout: 2)
+            recorded.cancel()
+
+            let retained = expectation(description: "Recording \(index) is retained")
+            let recovery = state.$retainedCaptures.first { $0.count == index }.sink { _ in retained.fulfill() }
+            state.toggleDictation()
+            await fulfillment(of: [retained], timeout: 2)
+            recovery.cancel()
+        }
+        let captures = state.retainedCaptures
+        XCTAssertEqual(captures.count, 2)
+        let first = try XCTUnwrap(captures.first)
+        let second = try XCTUnwrap(captures.last)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.fileURL.path))
+        state.discardRetainedCapture(first)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.fileURL.path))
+        XCTAssertEqual(state.retainedCaptures, [second])
+
+        await whisper.setCaptureLimitFailure(false)
+        await whisper.setText(" \n")
+        let empty = expectation(description: "An empty retry keeps the recording")
+        let noSpeech = state.$interfaceIssue.first { $0?.message.contains("Whisper did not detect speech") == true }
+            .sink { _ in empty.fulfill() }
+        state.retryRetainedCapture(second)
+        await fulfillment(of: [empty], timeout: 2)
+        noSpeech.cancel()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.fileURL.path))
+        XCTAssertEqual(state.retainedCaptures, [second])
+
+        await whisper.setText("Recovered speech.")
+        let retried = expectation(description: "Successful retry removes temporary audio")
+        let cleanup = state.$retainedCaptures.first(where: \.isEmpty).sink { _ in retried.fulfill() }
+        state.retryRetainedCapture(second)
+        await fulfillment(of: [retried], timeout: 2)
+        cleanup.cancel()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.fileURL.path))
+        XCTAssertEqual(state.lastTranscription?.insertionText, "Recovered speech.")
+        XCTAssertEqual(state.retainedCaptureRetryText, "Recovered speech.")
+        state.copyRetainedCaptureRetryResult()
+        XCTAssertEqual(fixture.insertion.copiedTexts, ["Recovered speech."])
+        XCTAssertTrue(fixture.insertion.insertedTexts.isEmpty)
+        XCTAssertNil(state.lastTextInsertion)
     }
 
     func testRetiredLlamaSelectionCannotBeEnabledAndRemainsRemovable() async throws {
@@ -1395,9 +1475,12 @@ private final class StartupNotificationService: LocalNotificationServiceProtocol
 
 private actor PipelineWhisperService: WhisperServiceProtocol {
     var transcribeCalls = 0
+    private var failsWithCaptureLimit = false
+    func setCaptureLimitFailure(_ enabled: Bool) { failsWithCaptureLimit = enabled }
     let onWarmup: @Sendable () -> Void
     let failsTranscription: Bool
-    let text: String
+    private var text: String
+    func setText(_ text: String) { self.text = text }
     let languageCode: String?
     init(onWarmup: @escaping @Sendable () -> Void = {}, failsTranscription: Bool = false, text: String = " \n", languageCode: String? = nil) {
         self.onWarmup = onWarmup
@@ -1412,6 +1495,7 @@ private actor PipelineWhisperService: WhisperServiceProtocol {
     }
     func transcribe(audioFileURL: URL, modelURL: URL, configuration: WhisperConfiguration) async throws -> WhisperTranscriptionResult {
         transcribeCalls += 1
+        if failsWithCaptureLimit { throw VoiceError.inputTooLong("Synthetic capture exceeds the audio limit.") }
         if failsTranscription { throw NSError(domain: "com.apple.coreaudio.avfaudio", code: 1954115647) }
         return WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: languageCode,
             model: configuration.model, taskMode: configuration.taskMode, completedAt: Date())

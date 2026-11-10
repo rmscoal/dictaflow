@@ -114,6 +114,72 @@ struct VoiceAdapterTests {
         #expect(sent[4].attachment == originalAttachment)
     }
 
+    @Test func malformedTurnDoesNotFallBackToTheCurrentInteraction() async {
+        let client = BridgeFixture(actions: [])
+        let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "fixture")
+        await #expect(throws: VoiceError.self) {
+            try await adapter.call(name: "on_interrupt", arguments: ["session_id": "session", "turn_id": .int(42)])
+        }
+        #expect(await client.sent.isEmpty)
+    }
+
+    @Test func concurrentCallsShareAnAttachment() async throws {
+        let client = BridgeFixture(actions: [
+            .delayedAttachment,
+            .reply(.init(accepted: true, code: "observed")),
+            .reply(.init(accepted: true, code: "observed"))
+        ])
+        let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "fixture")
+        async let first = adapter.call(name: "on_stop", arguments: ["session_id": "session"])
+        async let second = adapter.call(name: "on_stop", arguments: ["session_id": "session"])
+        let replies = try await [first, second]
+        let allAccepted = replies.allSatisfy { $0.accepted }
+        #expect(allAccepted)
+        #expect(await client.sent.map(\.operation) == [.attach, .stop, .stop])
+    }
+
+    @Test func staleSessionDoesNotDiscardAnotherSessionsInFlightAttachment() async throws {
+        let old = VoiceAttachment(id: UUID(), epoch: 1)
+        let fresh = VoiceAttachment(id: UUID(), epoch: 1)
+        let client = BridgeFixture(actions: [
+            .reply(.init(accepted: true, code: "attached", attachment: old)),
+            .reply(.init(accepted: true, code: "observed")),
+            .pausedReply(.init(accepted: true, code: "attached", attachment: fresh)),
+            .reply(.init(accepted: false, code: "stale_attachment")),
+            .reply(.init(accepted: true, code: "observed")),
+        ])
+        let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "fixture")
+        _ = try await adapter.call(name: "on_stop", arguments: ["session_id": "old"])
+        async let result = adapter.call(name: "on_stop", arguments: ["session_id": "fresh"])
+        let paused = try await client.waitForPausedReply()
+        #expect(paused)
+        let stale = try await adapter.call(name: "on_stop", arguments: ["session_id": "old"])
+        await client.resumeReply()
+        #expect(stale.code == "new_prompt_required")
+        #expect(try await result.accepted)
+        #expect(await client.sent.last?.attachment == fresh)
+    }
+
+    @Test func cancellationWhileAttachingDoesNotSendPrompt() async throws {
+        let attachment = VoiceAttachment(id: UUID(), epoch: 1)
+        let client = BridgeFixture(actions: [
+            .pausedReply(.init(accepted: true, code: "attached", attachment: attachment)),
+            .reply(.init(accepted: true, code: "observed")),
+        ])
+        let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "fixture")
+        let cancelled = Task {
+            try await adapter.call(name: "on_user_prompt_submit", arguments: ["session_id": "session"])
+        }
+        #expect(try await client.waitForPausedReply())
+        cancelled.cancel()
+        await client.resumeReply()
+        await #expect(throws: CancellationError.self) { try await cancelled.value }
+
+        let stop = try await adapter.call(name: "on_stop", arguments: ["session_id": "session"])
+        #expect(stop.accepted)
+        #expect(await client.sent.map(\.operation) == [.attach, .stop])
+    }
+
     @Test func sessionOnlyStopIsForwardedForHostsWithoutTurnID() async throws {
         let client = BridgeFixture(actions: [
             .reply(.init(accepted: true, code: "attached", attachment: .init(id: UUID(), epoch: 1))),
@@ -154,7 +220,8 @@ struct VoiceAdapterTests {
             .failure,
             .reply(.init(accepted: true, code: "attached", attachment: .init(id: UUID(), epoch: 2))),
             .reply(.init(accepted: true, code: "input_opened", inputID: newInput)),
-            .reply(.init(accepted: true, code: "prepared", inputID: oldInput))
+            .reply(.init(accepted: true, code: "prepared", inputID: oldInput)),
+            .reply(.init(accepted: false, code: "input_closed"))
         ])
         let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "fixture")
         _ = try await adapter.call(name: "on_user_prompt_submit", arguments: ["session_id": "session", "turn_id": "old-turn"])
@@ -166,21 +233,42 @@ struct VoiceAdapterTests {
         _ = try await adapter.call(name: "prepare_spoken_response", arguments: arguments)
         let sent = await client.sent
         #expect(sent[2] == sent[5], "Receipt retry must use the original attachment, payload and timestamp.")
-        do { _ = try await adapter.call(name: "on_stop", arguments: ["session_id": "session", "turn_id": "old-turn"]); Issue.record("Old native mapping must be retired") }
-        catch {}
+        let stop = try await adapter.call(name: "on_stop", arguments: ["session_id": "session", "turn_id": "old-turn"])
+        #expect(stop.code == "input_closed")
+        let forwarded = try #require(await client.sent.last)
+        #expect(forwarded.operation == .stop && forwarded.inputID == nil && forwarded.nativeTurnID == "old-turn")
     }
 }
 
 private actor BridgeFixture: VoiceBridgeClientProtocol {
-    enum Action: Sendable { case reply(VoiceReply), failure, notSentFailure, unknownFailure }
+    enum Action: Sendable { case reply(VoiceReply), failure, notSentFailure, unknownFailure, delayedAttachment, pausedReply(VoiceReply) }
     var sent: [VoiceRequest] = []
     private var actions: [Action]
+    private var pausedReply: CheckedContinuation<Void, Never>?
     init(actions: [Action]) { self.actions = actions }
+
+    func waitForPausedReply() async throws -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while pausedReply == nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        return pausedReply != nil
+    }
+
+    func resumeReply() {
+        pausedReply?.resume()
+        pausedReply = nil
+    }
+
     func send(_ request: VoiceRequest) async throws -> VoiceReply {
         sent.append(request)
         guard !actions.isEmpty else { throw VoiceError.unavailable("Unexpected fixture request.") }
         switch actions.removeFirst() {
         case .reply(let reply): return reply
+        case .pausedReply(let reply):
+            await withCheckedContinuation { pausedReply = $0 }
+            return reply
+        case .delayedAttachment:
+            try await Task.sleep(for: .milliseconds(100))
+            return .init(accepted: true, code: "attached", attachment: .init(id: UUID(), epoch: 1))
         case .failure: throw VoiceError.unavailable("Injected connection loss.")
         case .notSentFailure: throw VoiceBridgeTransportError(requestMayHaveBeenAccepted: false, message: "Injected dead idle socket.")
         case .unknownFailure: throw VoiceBridgeTransportError(requestMayHaveBeenAccepted: true, message: "Injected unknown-outcome timeout.")

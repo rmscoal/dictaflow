@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 public struct LiquidAsset: Sendable {
@@ -17,57 +18,68 @@ public actor LiquidAssets {
         LiquidAsset(name: "mmproj-LFM3-Audio-2B-Q8_0.gguf", bytes: 303_811_840, sha256: "2b6648b1fd48af16aa0877b0592b144d15070783673e038a379fdbc51d40e365")
     ]
     public nonisolated let directory: URL
-    private var verified = false
     private var downloadTask: Task<Void, Error>?
 
     public init(directory: URL) { self.directory = directory }
 
     public func isReady() throws -> Bool {
-        if verified {
-            for asset in Self.files {
-                let attributes = try? FileManager.default.attributesOfItem(atPath: directory.appendingPathComponent(asset.name).path)
-                if (attributes?[.size] as? NSNumber)?.int64Value != asset.bytes { verified = false; break }
-            }
-            if verified { return true }
-        }
         for asset in Self.files {
             guard try Self.verify(directory.appendingPathComponent(asset.name), asset: asset) else { return false }
         }
-        verified = true
         return true
     }
 
     public func download() async throws {
-        if try isReady() { return }
         if let downloadTask { return try await downloadTask.value }
         let directory = directory
         let task = Task {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             for asset in Self.files {
                 let destination = directory.appendingPathComponent(asset.name)
-                if try Self.verify(destination, asset: asset) { continue }
+                if (try? Self.verify(destination, asset: asset)) == true { continue }
                 var request = URLRequest(url: asset.url); request.timeoutInterval = 60 * 30
                 let (temporary, response) = try await URLSession.shared.download(for: request)
                 defer { try? FileManager.default.removeItem(at: temporary) }
                 guard (response as? HTTPURLResponse)?.statusCode == 200,
                       try Self.verify(temporary, asset: asset) else { throw VoiceError.unavailable("Liquid model verification failed. Try downloading it again.") }
-                let staging = directory.appendingPathComponent(UUID().uuidString + ".download")
-                try FileManager.default.moveItem(at: temporary, to: staging)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staging.path)
-                if FileManager.default.fileExists(atPath: destination.path) { _ = try FileManager.default.replaceItemAt(destination, withItemAt: staging) }
-                else { try FileManager.default.moveItem(at: staging, to: destination) }
+                try Self.installVerifiedDownload(temporary, at: destination)
             }
         }
         downloadTask = task
         defer { downloadTask = nil }
         try await task.value
-        verified = true
+    }
+
+    static func installVerifiedDownload(_ temporary: URL, at destination: URL) throws {
+        let staging = destination.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".download")
+        let files = FileManager.default
+        defer {
+            if files.fileExists(atPath: staging.path) {
+                do { try files.removeItem(at: staging) }
+                catch {
+                    try? files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staging.path)
+                    try? files.removeItem(at: staging)
+                }
+            }
+        }
+        try files.moveItem(at: temporary, to: staging)
+        try files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staging.path)
+        // Both paths are on the same volume. Renaming the staged file does
+        // not require opening the old one or copying its metadata.
+        guard Darwin.rename(staging.path, destination.path) == 0 else {
+            let code = POSIXErrorCode(rawValue: errno) ?? .EIO
+            if code == .EISDIR || code == .ENOTDIR {
+                throw VoiceError.unavailable("Move the item named \(destination.lastPathComponent) out of the Liquid models folder, then retry the download.")
+            }
+            throw POSIXError(code)
+        }
     }
 
     private static func verify(_ url: URL, asset: LiquidAsset) throws -> Bool {
         guard FileManager.default.fileExists(atPath: url.path) else { return false }
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        guard (attributes[.size] as? NSNumber)?.int64Value == asset.bytes else { return false }
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              (attributes[.size] as? NSNumber)?.int64Value == asset.bytes else { return false }
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var hash = SHA256()

@@ -76,6 +76,10 @@ public actor VoiceStore {
                 INSERT OR IGNORE INTO settings VALUES ('admissionPolicy', 'automatic');
                 """)
         }
+        migrator.registerMigration("agentVoice-v4-queue-indexes") { db in
+            try db.execute(sql: "CREATE INDEX attempts_active ON attempts(state, created) WHERE state IN ('queued', 'synthesizing', 'playing')")
+            try db.execute(sql: "CREATE INDEX receipts_created ON receipts(created)")
+        }
         try migrator.migrate(database)
         try backfillLegacyDrafts()
         // Recovery never restarts speech: active attempts are interrupted,
@@ -111,7 +115,7 @@ public actor VoiceStore {
                 guard row["fingerprint"] as String == fingerprint else { return reject("request_conflict") }
                 return try decoder.decode(VoiceReply.self, from: row["reply"])
             }
-            try expire(db, now: now)
+            if request.operation != .heartbeat { try expire(db, now: now) }
             guard request.version == 1 else { return reject("unsupported_version") }
             guard request.issuedAt <= now.addingTimeInterval(60),
                   now.timeIntervalSince(request.issuedAt) < limits.retryRetention else { return reject("request_expired") }
@@ -348,6 +352,12 @@ public actor VoiceStore {
         try database.write { db in try pruneHistory(db, now: now) }
     }
 
+    /// Runs periodic expiry independently of bridge traffic. Reports whether
+    /// queue or history changes need to be published to the UI.
+    public func performMaintenance(now: Date = Date()) throws -> Bool {
+        try database.write { db in try expire(db, now: now) }
+    }
+
     // MARK: - Compatibility queue API for the coordinator
 
     /// One row per interaction that has a rendition, keyed by the stable
@@ -402,7 +412,7 @@ public actor VoiceStore {
     public func nextJob(now: Date = Date()) throws -> VoiceDraft? {
         try database.write { db in
             try expire(db, now: now)
-            let queued = try allAttempts(db).filter { $0.state == .queued }
+            let queued = try activeAttempts(db).filter { $0.state == .queued }
                 .sorted { $0.createdAt < $1.createdAt }
             guard let attempt = queued.first(where: { $0.session != lastScheduledSession }) ?? queued.first else { return nil }
             lastScheduledSession = attempt.session
@@ -474,15 +484,22 @@ public actor VoiceStore {
 
     nonisolated private func attach(_ request: VoiceRequest, key: String, connectionID: UUID, now: Date, db: Database) throws -> VoiceReply {
         let existing = try Row.fetchOne(db, sql: "SELECT * FROM sessions WHERE key = ?", arguments: [key])
+        let message = "DictaFlow decides playback from lifecycle and user settings."
         if let existing, existing["lease"] as Double > now.timeIntervalSince1970 {
-            return reject("session_already_attached")
+            // The helper may lose its local copy while an attach is in flight.
+            // Only the original socket can recover that attachment.
+            guard existing["connection"] as String? == connectionID.uuidString,
+                  let id = (existing["attachment"] as String?).flatMap(UUID.init(uuidString:)) else {
+                return reject("session_already_attached")
+            }
+            let attachment = VoiceAttachment(id: id, epoch: existing["epoch"])
+            return VoiceReply(accepted: true, code: "attached", attachment: attachment, message: message)
         }
         try closeInputs(key, state: .interrupted, db: db)
         let attachment = VoiceAttachment(id: UUID(), epoch: (existing?["epoch"] as Int? ?? 0) + 1)
         try db.execute(sql: "INSERT OR REPLACE INTO sessions VALUES (?, ?, ?, ?, ?)",
                        arguments: [key, attachment.epoch, attachment.id.uuidString, connectionID.uuidString, now.addingTimeInterval(limits.attachmentLease).timeIntervalSince1970])
-        return VoiceReply(accepted: true, code: "attached", attachment: attachment,
-                          message: "DictaFlow decides playback from lifecycle and user settings.")
+        return VoiceReply(accepted: true, code: "attached", attachment: attachment, message: message)
     }
 
     nonisolated private func apply(_ request: VoiceRequest, key: String, now: Date, db: Database) throws -> VoiceReply {
@@ -754,16 +771,21 @@ public actor VoiceStore {
                          arguments: [inputID.uuidString]).map { try attemptRow($0, db: db) }
     }
 
-    nonisolated private func allAttempts(_ db: Database) throws -> [VoicePlaybackAttempt] {
-        try Row.fetchAll(db, sql: "SELECT * FROM attempts").map { try attemptRow($0, db: db) }
-    }
-
     nonisolated private func activeAttempts(_ db: Database) throws -> [VoicePlaybackAttempt] {
-        try allAttempts(db).filter { [.queued, .synthesizing, .playing].contains($0.state) }
+        try Row.fetchAll(db, sql: "SELECT * FROM attempts WHERE state IN ('queued', 'synthesizing', 'playing')")
+            .map { try attemptRow($0, db: db) }
     }
 
     nonisolated private func activeAttempt(renditionID: UUID, db: Database) throws -> VoicePlaybackAttempt? {
-        try allAttempts(db).first { $0.renditionID == renditionID && [.queued, .synthesizing, .playing].contains($0.state) }
+        try Row.fetchOne(db, sql: "SELECT * FROM attempts WHERE rendition = ? AND state IN ('queued', 'synthesizing', 'playing')",
+                         arguments: [renditionID.uuidString]).map { try attemptRow($0, db: db) }
+    }
+
+    public func isActiveAttempt(_ id: UUID) throws -> Bool {
+        try database.read { db in
+            try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM attempts WHERE id = ? AND state IN ('queued', 'synthesizing', 'playing'))",
+                              arguments: [id.uuidString]) ?? false
+        }
     }
 
     nonisolated private func latestAttempt(_ inputID: UUID, db: Database) throws -> VoicePlaybackAttempt? {
@@ -863,10 +885,15 @@ public actor VoiceStore {
         for interaction in try allInteractions(db) where interaction.sessionKey == key
             && (!interaction.hostClosed || !interaction.state.isTerminal) {
             for attempt in try attemptsFor(interaction.id, db: db) where [.queued, .synthesizing, .playing].contains(attempt.state) {
+                if interaction.hostClosed, attempt.kind == .manual { continue }
                 try setAttemptState(attempt, to: state, db: db)
                 try insertEvent(inputID: interaction.id, kind: state == .superseded ? .superseded : .interrupted,
                                 at: now, renditionID: attempt.renditionID, attemptID: attempt.id,
                                 revision: attempt.revision, db: db)
+            }
+            if interaction.hostClosed {
+                try syncInteractionState(interaction.id, db: db)
+                continue
             }
             // A finished playback does not keep host mutation rights after a
             // new prompt or disconnect. Preserve its historical outcome.
@@ -876,24 +903,28 @@ public actor VoiceStore {
         }
     }
 
-    nonisolated private func expire(_ db: Database, now: Date) throws {
-        for attempt in try allAttempts(db) where [.queued, .synthesizing].contains(attempt.state)
+    @discardableResult
+    nonisolated private func expire(_ db: Database, now: Date) throws -> Bool {
+        var queueChanged = false
+        for attempt in try activeAttempts(db) where [.queued, .synthesizing].contains(attempt.state)
             && now.timeIntervalSince(attempt.createdAt) >= limits.queueLifetime {
             try setAttemptState(attempt, to: .expired, db: db)
             try insertEvent(inputID: attempt.inputID, kind: .expired, at: now, renditionID: attempt.renditionID,
                             attemptID: attempt.id, revision: attempt.revision, db: db)
             try syncInteractionState(attempt.inputID, db: db)
+            queueChanged = true
         }
         let cutoff = now.addingTimeInterval(-limits.retryRetention).timeIntervalSince1970
         try db.execute(sql: "DELETE FROM receipts WHERE created < ?", arguments: [cutoff])
-        _ = try pruneHistory(db, now: now)
+        let removed = try pruneHistory(db, now: now)
         // Session epoch tombstones are retained: old attachments never regain mutation rights.
+        return queueChanged || removed > 0
     }
 
     @discardableResult
     nonisolated private func pruneHistory(_ db: Database, now: Date) throws -> Int {
         var deleted = 0
-        let activeInputs = Set(try activeAttempts(db).map { $0.inputID.uuidString })
+        let inactive = "NOT EXISTS (SELECT 1 FROM attempts WHERE input = inputs.id AND state IN ('queued', 'synthesizing', 'playing'))"
         func delete(_ id: String) throws {
             try db.execute(sql: "DELETE FROM events WHERE input = ?", arguments: [id])
             try db.execute(sql: "DELETE FROM attempts WHERE input = ?", arguments: [id])
@@ -902,12 +933,14 @@ public actor VoiceStore {
             deleted += 1
         }
         let ageCutoff = now.addingTimeInterval(-limits.historyRetention).timeIntervalSince1970
-        for id in try String.fetchAll(db, sql: "SELECT id FROM inputs WHERE created < ?", arguments: [ageCutoff])
-        where !activeInputs.contains(id) { try delete(id) }
+        for id in try String.fetchAll(db, sql: "SELECT id FROM inputs WHERE created < ? AND \(inactive)", arguments: [ageCutoff]) {
+            try delete(id)
+        }
         let excess = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM inputs")! - limits.maxHistoryInteractions
         if excess > 0 {
-            for id in try String.fetchAll(db, sql: "SELECT id FROM inputs ORDER BY created ASC LIMIT ?", arguments: [excess])
-            where !activeInputs.contains(id) { try delete(id) }
+            for id in try String.fetchAll(db, sql: "SELECT id FROM inputs WHERE \(inactive) ORDER BY created ASC LIMIT ?", arguments: [excess]) {
+                try delete(id)
+            }
         }
         return deleted
     }
@@ -956,12 +989,14 @@ public actor VoiceStore {
 
 public enum VoiceError: Error, LocalizedError, Sendable {
     case unavailable(String)
-    /// Liquid ASR input exceeds the documented duration/size cap. Callers retain
-    /// the recording so the user can retry with Whisper or a shorter clip.
+    case liquidModelUnavailable
+    /// The recording exceeds a Liquid transcription limit. Callers retain it
+    /// so the user can retry with Whisper or use a shorter clip.
     case inputTooLong(String)
     public var errorDescription: String? {
         switch self {
         case .unavailable(let message), .inputTooLong(let message): return message
+        case .liquidModelUnavailable: return "Download or repair the Liquid audio model in Agent Voice, under Models."
         }
     }
 }

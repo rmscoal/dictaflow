@@ -47,9 +47,10 @@ struct LiquidSpeechPlan: Sendable {
         let fallback = (try? language(for: spokenText, fallback: nil, recognizer: recognizer))
             ?? (try? language(for: context, fallback: nil, recognizer: recognizer))
         var chunks: [LiquidSpeechChunk] = []
-        for paragraph in paragraphs {
-            let language = try language(for: paragraph, fallback: fallback, recognizer: recognizer)
+        for original in paragraphs {
+            let language = try language(for: original, fallback: fallback, recognizer: recognizer)
             let limits = Limits(language: language)
+            let paragraph = LiquidSpeechText.replacingLongIdentifiers(original, limit: limits.characters)
             let tokenizer = NLTokenizer(unit: .sentence)
             tokenizer.string = paragraph
             tokenizer.setLanguage(NLLanguage(rawValue: language))
@@ -150,23 +151,27 @@ struct LiquidSpeechPlan: Sendable {
             // isolated headings such as "Models" still inherit it.
             if text.split(whereSeparator: \.isWhitespace).count >= 2,
                text.last.map({ ".!?".contains($0) }) == true,
-               let candidate = candidates.first, candidate.value >= 0.90, supported.contains(candidate.key) {
-                return candidate.key
+               let candidate = candidates.first, candidate.value >= 0.90 {
+                return try supportedLanguage(candidate.key)
             }
             return fallback
         }
         if let candidate = candidates.first, candidate.value >= 0.70 {
-            let code = candidate.key.hasPrefix("zh") ? "zh" : candidate.key
-            guard supported.contains(code) else {
-                let name = Locale.current.localizedString(forLanguageCode: code) ?? code
-                throw VoiceError.unavailable("Liquid does not support \(name) speech. Use a supported language for the spoken response.")
-            }
-            return code
+            return try supportedLanguage(candidate.key)
         }
         if let fallback { return fallback }
         // Very short acknowledgements/numbers often have no reliable language signal.
         if text.split(whereSeparator: \.isWhitespace).count < 4, text.count < 40 { return "en" }
         throw VoiceError.unavailable("Liquid could not identify the spoken response language. Use clear prose in one supported language per paragraph.")
+    }
+
+    private static func supportedLanguage(_ candidate: String) throws -> String {
+        let code = candidate.hasPrefix("zh") ? "zh" : candidate
+        guard supported.contains(code) else {
+            let name = Locale.current.localizedString(forLanguageCode: code) ?? code
+            throw VoiceError.unavailable("Liquid does not support \(name) speech. Use a supported language for the spoken response.")
+        }
+        return code
     }
 
     private static func split(_ sentence: String, limits: Limits) throws -> [String] {

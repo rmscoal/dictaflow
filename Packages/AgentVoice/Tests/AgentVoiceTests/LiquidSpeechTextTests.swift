@@ -55,6 +55,27 @@ struct LiquidSpeechTextTests {
         #expect(try LiquidSpeechPlan.make(chinese).chunks.dropFirst().allSatisfy { $0.language == "zh" })
     }
 
+    @Test func shortUnsupportedSentenceDoesNotInheritEnglish() {
+        struct Recognizer: LiquidLanguageRecognizing {
+            func hypotheses(for text: String) -> [String: Double] {
+                text == "Selamat pagi." ? ["id": 0.99] : ["en": 0.99]
+            }
+        }
+        #expect(throws: VoiceError.self) {
+            try LiquidSpeechPlan.make("The speech test is complete.\n\nSelamat pagi.", recognizer: Recognizer())
+        }
+    }
+
+    @Test func multilingualIdentifierUsesTheParagraphLimit() throws {
+        struct Recognizer: LiquidLanguageRecognizing {
+            func hypotheses(for text: String) -> [String: Double] { ["fr": 0.99] }
+        }
+        let identifier = String(repeating: "x", count: 180)
+        let chunks = try LiquidSpeechPlan.make("Le résultat est prêt. Utilisez `\(identifier)`.", recognizer: Recognizer()).chunks
+        #expect(chunks.contains { $0.text.contains(LiquidSpeechText.identifierNotice) })
+        #expect(chunks.allSatisfy { $0.language == "fr" && $0.text.count <= 160 })
+    }
+
     @Test func oneWordTermsKeepTheExistingEnglishContextFallback() throws {
         let text = "The local voice test is complete. Your recording controls remain unchanged.\n\nRebase.\n\nDanke.\n\nGracias."
         #expect(try LiquidSpeechPlan.make(text).chunks.allSatisfy { $0.language == "en" })

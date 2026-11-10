@@ -39,10 +39,9 @@ struct LiquidASRInputTests {
     }
 
     @Test func validFixturePassesWithoutServer() throws {
-        let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let fixture = package.deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build/agentvoice-fixtures/speech.wav")
-        guard FileManager.default.fileExists(atPath: fixture.path) else { return }
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        try writeSilence(to: fixture, seconds: 1, sampleRate: 16_000)
         let data = try Data(contentsOf: fixture)
         try LiquidRuntime.validateASRInput(data)
     }

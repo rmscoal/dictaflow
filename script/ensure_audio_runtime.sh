@@ -8,12 +8,20 @@ CACHE_DIR="$ROOT_DIR/.build/liquid-runtime/b11960"
 ARCHIVE="$CACHE_DIR/llama-b11960-bin-macos-arm64.tar.gz"
 EXPECTED_SHA="58e5a5e1d7c2bf66cedd9c29e0323f3e570660a70a1e2156d32eed08f4cc1e3c"
 mkdir -p "$CACHE_DIR" "$DESTINATION_DIR"
-if [ ! -f "$ARCHIVE" ]; then
-  curl --fail --location --retry 3 --output "$ARCHIVE.partial" \
-    https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz
-  mv "$ARCHIVE.partial" "$ARCHIVE"
+verify_archive() {
+  printf '%s  %s\n' "$EXPECTED_SHA" "$1" | shasum -a 256 --check
+}
+if [ -f "$ARCHIVE" ] && ! verify_archive "$ARCHIVE"; then
+  rm -f "$ARCHIVE"
 fi
-printf '%s  %s\n' "$EXPECTED_SHA" "$ARCHIVE" | shasum -a 256 --check
+if [ ! -f "$ARCHIVE" ]; then
+  PARTIAL="$(mktemp "$ARCHIVE.partial.XXXXXX")"
+  trap 'rm -f "$PARTIAL"' EXIT
+  curl --fail --location --retry 3 --output "$PARTIAL" \
+    https://github.com/ggml-org/llama.cpp/releases/download/b11960/llama-b11960-bin-macos-arm64.tar.gz
+  verify_archive "$PARTIAL"
+  mv "$PARTIAL" "$ARCHIVE"
+fi
 EXTRACT_DIR="$(mktemp -d "$CACHE_DIR/extracted.XXXXXX")"
 trap 'rm -rf "$EXTRACT_DIR"' EXIT
 tar -xzf "$ARCHIVE" -C "$EXTRACT_DIR"

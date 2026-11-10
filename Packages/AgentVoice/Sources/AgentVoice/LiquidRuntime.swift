@@ -20,7 +20,7 @@ public struct LiquidSpeech: Sendable {
 
 public protocol LiquidRuntimeProtocol: Sendable {
     func synthesize(_ text: String) async throws -> LiquidSpeech
-    func transcribe(wav: Data, english: Bool) async throws -> String
+    func transcribe(wav: Data, translateToEnglish: Bool) async throws -> String
     func stop() async
     func hasExited() async -> Bool
 }
@@ -120,7 +120,7 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
         return response.data
     }
 
-    public func transcribe(wav: Data, english: Bool) async throws -> String {
+    public func transcribe(wav: Data, translateToEnglish: Bool) async throws -> String {
         guard !busy else { throw VoiceError.unavailable("Liquid audio is busy.") }
         try Self.validateASRInput(wav)
         busy = true; defer { busy = false }
@@ -129,7 +129,7 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
             let endpoint = try await start(token: token)
             let payload: [String: Any] = ["model": "dictaflow-liquid", "stream": false, "max_tokens": 2048,
                 "messages": [
-                    ["role": "system", "content": english ? "Perform ASR in English." : "Perform ASR."],
+                    ["role": "system", "content": translateToEnglish ? "Translate the following speech to English in text form." : "Perform ASR."],
                     ["role": "user", "content": [["type": "input_audio", "input_audio": ["data": wav.base64EncodedString()]]]]
                 ]]
             let response = try await post(endpoint.appendingPathComponent("v1/chat/completions"), payload: payload, maxBytes: 1024 * 1024)
@@ -145,7 +145,9 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
             guard let choice = try JSONDecoder().decode(Response.self, from: response.data).choices.first else {
                 throw VoiceError.unavailable("Liquid returned no transcription.")
             }
-            guard choice.finish_reason != "length" else { throw VoiceError.unavailable("Liquid reached its transcription limit. Use a shorter recording.") }
+            guard choice.finish_reason != "length" else {
+                throw VoiceError.inputTooLong("Liquid reached its transcription limit. The recording is kept so you can retry with Whisper.")
+            }
             return choice.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch { await stop(); throw error }
     }
@@ -210,7 +212,7 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
         try check(token)
         if let endpoint, process?.isRunning == true { return endpoint }
         guard process?.isRunning != true else { throw VoiceError.unavailable("The previous Liquid process has not exited yet.") }
-        guard try await assets.isReady() else { throw VoiceError.unavailable("Download the Liquid audio model first.") }
+        guard (try? await assets.isReady()) == true else { throw VoiceError.liquidModelUnavailable }
         try check(token)
         guard FileManager.default.isExecutableFile(atPath: executable.path) else { throw VoiceError.unavailable("The bundled Liquid audio runtime is missing.") }
         let port = try Self.availablePort()

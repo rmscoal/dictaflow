@@ -17,7 +17,7 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
             existing: nil, executable: executable, arguments: arguments(host: .museCode))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(json["schema_version"] as? Int, 1)
-        let (found, matches) = AgentVoiceHostInstaller.museEntryStatus(
+        let (found, matches, _) = AgentVoiceHostInstaller.museEntryStatus(
             data: data, executable: executable, arguments: arguments(host: .museCode))
         XCTAssertTrue(found)
         XCTAssertTrue(matches)
@@ -35,7 +35,7 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
             existing: existingData, executable: executable, arguments: arguments(host: .museCode))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: merged) as? [String: Any])
         XCTAssertEqual(json["provider"] as? String, "meta")
-        let (found, matches) = AgentVoiceHostInstaller.museEntryStatus(
+        let (found, matches, _) = AgentVoiceHostInstaller.museEntryStatus(
             data: merged, executable: executable, arguments: arguments(host: .museCode))
         XCTAssertTrue(found)
         XCTAssertTrue(matches)
@@ -47,16 +47,38 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
     }
 
     func testMuseEntryStatusReportsMissingAndStale() {
-        let (missingFound, missingMatches) = AgentVoiceHostInstaller.museEntryStatus(
+        let (missingFound, missingMatches, _) = AgentVoiceHostInstaller.museEntryStatus(
             data: nil, executable: executable, arguments: arguments(host: .museCode))
         XCTAssertFalse(missingFound)
         XCTAssertFalse(missingMatches)
 
         let stale = try? JSONSerialization.data(withJSONObject: ["mcp_servers": ["dictaflow": ["command": "/old"]]])
-        let (staleFound, staleMatches) = AgentVoiceHostInstaller.museEntryStatus(
+        let (staleFound, staleMatches, _) = AgentVoiceHostInstaller.museEntryStatus(
             data: stale, executable: executable, arguments: arguments(host: .museCode))
         XCTAssertTrue(staleFound)
         XCTAssertFalse(staleMatches)
+    }
+
+    func testMuseUpdateKeepsDisabledEntryDisabled() throws {
+        let existing = Data(#"{"mcpServers":{"dictaflow":{"command":"/old","enabled":false}}}"#.utf8)
+        let updated = try AgentVoiceHostInstaller.mergedMuseSettings(
+            existing: existing, executable: executable, arguments: arguments(host: .museCode))
+        let entry = AgentVoiceHostInstaller.museEntryStatus(
+            data: updated, executable: executable, arguments: arguments(host: .museCode))
+        XCTAssertTrue(entry.found)
+        XCTAssertTrue(entry.matches)
+        XCTAssertTrue(entry.disabled)
+    }
+
+    func testCodexFilePathsUseTheSameOverride() {
+        let home = URL(fileURLWithPath: "/tmp/df-fixture-home")
+        let override = "/tmp/df-fixture-codex"
+        XCTAssertEqual(AgentVoiceHostInstaller.codexHooksURL(homeDirectoryURL: home, codexHome: override).path,
+                       override + "/hooks.json")
+        XCTAssertEqual(AgentVoiceHostInstaller.codexConfigURL(homeDirectoryURL: home, codexHome: override).path,
+                       override + "/config.toml")
+        XCTAssertEqual(AgentVoiceHostInstaller.codexConfigURL(homeDirectoryURL: home, codexHome: nil).path,
+                       home.path + "/.codex/config.toml")
     }
 
     // MARK: - Codex and Claude matching
@@ -71,13 +93,49 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
             json: json, executable: "/other/path", arguments: arguments(host: .codex)))
     }
 
-    func testClaudeOutputMatchesExecutableAndInstallation() {
-        let output = "Command: \(executable)\nArgs: --installation-id \(installation.uuidString) --host claude"
+    func testClaudeOutputMatchesExactCommandAndArguments() {
+        let expected = arguments(host: .claudeCode)
+        let output = "  Command: \(executable)\n  Args: \(expected.joined(separator: " "))"
         XCTAssertTrue(AgentVoiceHostInstaller.claudeOutputMatches(
-            output: output, executable: executable, installationID: installation))
+            output: output, executable: executable, arguments: expected))
         XCTAssertFalse(AgentVoiceHostInstaller.claudeOutputMatches(
-            output: "Command: /other\nArgs: --installation-id \(installation.uuidString)",
-            executable: executable, installationID: installation))
+            output: output.replacingOccurrences(of: "com.dictaflow.dev", with: "com.dictaflow"),
+            executable: executable, arguments: expected))
+        XCTAssertFalse(AgentVoiceHostInstaller.claudeOutputMatches(
+            output: output.replacingOccurrences(of: "Command: ", with: "Command: /other/"),
+            executable: executable, arguments: expected))
+    }
+
+    func testProcessRunnerDrainsBothStreams() async throws {
+        let runner = AgentVoiceHostInstaller.ProcessCommandRunner()
+        let result = try await AgentVoiceHostInstaller.withTimeout(seconds: 3, host: "Test") {
+            try await runner.run(executablePath: "/bin/sh", arguments: [
+                "-c", "head -c 131072 /dev/zero; head -c 131072 /dev/zero >&2; exit 7"
+            ])
+        }
+        XCTAssertEqual(result.exitCode, 7)
+        XCTAssertEqual(result.stdout.utf8.count, 131_072)
+        XCTAssertEqual(result.stderr.utf8.count, 131_072)
+    }
+
+    func testProcessRunnerTimeoutKillsCommandThatIgnoresTerminate() async throws {
+        let home = try makeHome()
+        let pidFile = home.appendingPathComponent("pid")
+        let runner = AgentVoiceHostInstaller.ProcessCommandRunner()
+        let start = ContinuousClock.now
+        do {
+            _ = try await AgentVoiceHostInstaller.withTimeout(seconds: 1, host: "Test") {
+                try await runner.run(executablePath: "/bin/sh", arguments: [
+                    "-c", "trap '' TERM; printf '%s' $$ > \"$1\"; while :; do :; done", "fixture", pidFile.path
+                ])
+            }
+            XCTFail("Expected timeout")
+        } catch let error as AgentVoiceHostInstaller.InstallerError {
+            XCTAssertEqual(error, .timedOut(host: "Test"))
+        }
+        XCTAssertLessThan(start.duration(to: .now), .seconds(3))
+        let pid = try XCTUnwrap(Int32(String(contentsOf: pidFile, encoding: .utf8)))
+        XCTAssertEqual(kill(pid, 0), -1, "Setup must observe the CLI exit before returning the timeout.")
     }
 
     // MARK: - End-to-end setup with a stubbed host CLI
@@ -145,13 +203,14 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
     func testClaudeSetUpRemovesThenAddsAndVerifies() async throws {
         let executable = try makeExecutable()
         let log = CallLog()
-        let output = "Command: \(executable)\nArgs: \(installation.uuidString)"
+        let output = "Command: \(executable)\nArgs: \(arguments(host: .claudeCode).joined(separator: " "))"
         struct RecordingRunner: AgentVoiceHostInstaller.CommandRunner {
             let log: CallLog
             let output: String
             func run(executablePath: String, arguments: [String]) async throws -> AgentVoiceHostInstaller.CommandResult {
                 log.record(arguments)
-                return AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: output, stderr: "")
+                return AgentVoiceHostInstaller.CommandResult(exitCode: 0,
+                    stdout: arguments == ["--version"] ? "2.1.118 (Claude Code)" : output, stderr: "")
             }
         }
         let runner = RecordingRunner(log: log, output: output)
@@ -163,11 +222,33 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         let claudeHooks = try Data(contentsOf: AgentVoiceHostInstaller.claudeSettingsURL(homeDirectoryURL: home))
         XCTAssertTrue(AgentVoiceHostInstaller.hooksStatus(data: claudeHooks, host: .claudeCode).matches)
         XCTAssertTrue(message.contains("Turn Enable Agent Voice on"))
-        XCTAssertEqual(log.all.count, 3)
-        XCTAssertEqual(log.all.first, ["mcp", "remove", "dictaflow", "-s", "user"])
-        XCTAssertTrue(log.all[1].contains("-s"))
-        XCTAssertTrue(log.all[1].contains("add"))
+        XCTAssertEqual(log.all.count, 4)
+        XCTAssertEqual(log.all.first, ["--version"])
+        XCTAssertEqual(log.all[1], ["mcp", "remove", "dictaflow", "-s", "user"])
+        XCTAssertTrue(log.all[2].contains("-s"))
+        XCTAssertTrue(log.all[2].contains("add"))
         XCTAssertEqual(log.all.last, ["mcp", "get", "dictaflow"])
+    }
+
+    func testOldClaudeDoesNotInstallHooks() async throws {
+        let home = try makeHome()
+        let log = CallLog()
+        let runner = StubRunner(handlers: [{ _, args in
+            log.record(args)
+            return .init(exitCode: 0, stdout: "2.1.117 (Claude Code)", stderr: "")
+        }])
+        do {
+            _ = try await AgentVoiceHostInstaller.setUp(
+                host: .claudeCode, executable: try makeExecutable(), appID: "com.dictaflow.dev",
+                installationID: installation, agentVoiceEnabled: true, runner: runner,
+                homeDirectoryURL: home, cliDiscovery: { _ in "/bin/claude" })
+            XCTFail("Expected setup to reject a CLI without MCP hooks.")
+        } catch let error as AgentVoiceHostInstaller.InstallerError {
+            XCTAssertTrue(error.localizedDescription.contains("2.1.118"))
+        }
+        XCTAssertEqual(log.all, [["--version"]])
+        XCTAssertFalse(FileManager.default.fileExists(atPath:
+            AgentVoiceHostInstaller.claudeSettingsURL(homeDirectoryURL: home).path))
     }
 
     func testMuseSetUpWritesRealFileInTemporaryHome() async throws {
@@ -179,7 +260,7 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
             runner: StubRunner(handlers: []), homeDirectoryURL: home)
         XCTAssertTrue(message.contains("Start a new Muse Code session"))
         let data = try Data(contentsOf: AgentVoiceHostInstaller.museSettingsURL(homeDirectoryURL: home))
-        let (found, matches) = AgentVoiceHostInstaller.museEntryStatus(
+        let (found, matches, _) = AgentVoiceHostInstaller.museEntryStatus(
             data: data, executable: executable, arguments: arguments(host: .museCode))
         XCTAssertTrue(found)
         XCTAssertTrue(matches)
@@ -287,10 +368,14 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         let url = AgentVoiceHostInstaller.codexHooksURL(homeDirectoryURL: home)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("not json".utf8).write(to: url)
-        XCTAssertThrowsError(try AgentVoiceHostInstaller.mergedCodexHooks(existing: Data("not json".utf8))) { error in
-            guard case AgentVoiceHostInstaller.InstallerError.invalidHooksFile = error else {
-                return XCTFail("Expected invalidHooksFile, got \(error)")
-            }
+        do {
+            _ = try await AgentVoiceHostInstaller.setUp(
+                host: .codex, executable: try makeExecutable(), appID: "com.dictaflow.dev",
+                installationID: installation, agentVoiceEnabled: true,
+                runner: StubRunner(handlers: []), homeDirectoryURL: home, cliDiscovery: { _ in "/bin/codex" })
+            XCTFail("Expected invalidHooksFile")
+        } catch let error as AgentVoiceHostInstaller.InstallerError {
+            XCTAssertEqual(error, .invalidHooksFile(path: url.path))
         }
         XCTAssertEqual(try Data(contentsOf: url), Data("not json".utf8), "An invalid file is never overwritten.")
     }
@@ -495,6 +580,37 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         }
         XCTAssertEqual(try String(contentsOf: configURL, encoding: .utf8), original,
                        "A failed validation must restore the untouched bytes.")
+    }
+
+    func testCodexRollbackPreservesChangesMadeDuringValidation() async throws {
+        let helper = try makeExecutable()
+        let home = try makeHome()
+        let config = AgentVoiceHostInstaller.codexConfigURL(homeDirectoryURL: home)
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = "[mcp_servers.dictaflow]\ncommand = \"x\"\n"
+        let concurrent = "model = \"edited-during-setup\"\n" + original
+        try original.write(to: config, atomically: true, encoding: .utf8)
+        let entry = ["transport": ["command": helper, "args": arguments(host: .codex)]]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: entry), as: UTF8.self)
+        let runner = StubRunner(handlers: [{ _, args in
+            if args.contains("add") { return .init(exitCode: 0, stdout: "", stderr: "") }
+            if args.contains("get") { return .init(exitCode: 0, stdout: json, stderr: "") }
+            if args.contains("list") {
+                try? concurrent.write(to: config, atomically: true, encoding: .utf8)
+                return .init(exitCode: 1, stdout: "", stderr: "")
+            }
+            return nil
+        }])
+        do {
+            _ = try await AgentVoiceHostInstaller.setUp(
+                host: .codex, executable: helper, appID: "com.dictaflow.dev",
+                installationID: installation, agentVoiceEnabled: true,
+                runner: runner, homeDirectoryURL: home, cliDiscovery: { _ in "/bin/codex" })
+            XCTFail("Expected rollback conflict")
+        } catch let error as AgentVoiceHostInstaller.InstallerError {
+            XCTAssertEqual(error, .codexRollbackConflict(path: config.path))
+        }
+        XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), concurrent)
     }
 
     func testCodexSetUpRestoresConfigWhenGateThrows() async throws {

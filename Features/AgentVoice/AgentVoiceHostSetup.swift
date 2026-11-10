@@ -13,7 +13,7 @@ enum AgentVoiceHostSetup {
             let args = try arguments.map(stringLiteral).joined(separator: ", ")
             return "[mcp_servers.dictaflow]\ncommand = \(command)\nargs = [\(args)]\ndefault_tools_approval_mode = \"approve\""
         case .claudeCode:
-            return "claude mcp add --transport stdio dictaflow -- " + ([executable] + arguments).map(shellQuoted).joined(separator: " ")
+            return "claude mcp add --transport stdio dictaflow --scope user -- " + ([executable] + arguments).map(shellQuoted).joined(separator: " ")
         case .museCode:
             let configuration: [String: Any] = [
                 "schema_version": 1,

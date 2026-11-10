@@ -55,6 +55,7 @@ do {
     await server.withMethodHandler(CallTool.self) { params in
         do {
             let reply = try await adapter.call(name: params.name, arguments: params.arguments ?? [:])
+            try Task.checkCancellation()
             if params.name == "on_user_prompt_submit", reply.accepted {
                 let context: [String: Value] = ["hookSpecificOutput": .object([
                     "hookEventName": "UserPromptSubmit", "additionalContext": .string("DictaFlow session_id: \(params.arguments?["session_id"]?.stringValue ?? ""). Use a fresh UUID request_id for each new operation, and reuse it unchanged only for a timeout retry.\n" + reply.message)
@@ -73,6 +74,8 @@ do {
             }
             let data = try JSONEncoder().encode(reply)
             return .init(content: [.text(text: String(decoding: data, as: UTF8.self), annotations: nil, _meta: nil)], isError: !reply.accepted)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             return .init(content: [.text(text: "DictaFlow unavailable: \(error.localizedDescription) Finish your written answer normally; do not attempt repeated repairs.", annotations: nil, _meta: nil)], isError: true)
         }

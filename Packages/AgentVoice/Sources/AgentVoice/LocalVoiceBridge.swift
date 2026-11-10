@@ -58,6 +58,12 @@ private enum SocketIO {
         throw VoiceError.unavailable("Bridge frame exceeds the size limit.")
     }
 
+    static func isSameUser(_ descriptor: Int32) -> Bool {
+        var uid: uid_t = 0
+        var gid: gid_t = 0
+        return getpeereid(descriptor, &uid, &gid) == 0 && uid == getuid()
+    }
+
     static func configure(_ descriptor: Int32) {
         var enabled: Int32 = 1
         setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout.size(ofValue: enabled)))
@@ -88,6 +94,7 @@ public actor LocalVoiceClient: VoiceBridgeClientProtocol {
     deinit { if descriptor >= 0 { Darwin.close(descriptor) } }
 
     public func send(_ request: VoiceRequest) throws -> VoiceReply {
+        try Task.checkCancellation()
         var sentCompleteRequest = false
         do {
             if descriptor < 0 {
@@ -104,11 +111,17 @@ public actor LocalVoiceClient: VoiceBridgeClientProtocol {
                     var error: Int32 = 0; var length = socklen_t(MemoryLayout<Int32>.size)
                     guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0, error == 0 else { throw VoiceError.unavailable("Could not connect to DictaFlow.") }
                 }
+                guard SocketIO.isSameUser(fd) else {
+                    throw VoiceError.unavailable("Could not verify the local DictaFlow server's identity.")
+                }
             }
+            try Task.checkCancellation()
             let deadline = ContinuousClock.now.advanced(by: .milliseconds(700))
             try SocketIO.write(JSONEncoder().encode(request), to: descriptor, deadline: deadline)
             sentCompleteRequest = true
             return try JSONDecoder().decode(VoiceReply.self, from: SocketIO.read(from: descriptor, deadline: deadline))
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             if descriptor >= 0 { Darwin.close(descriptor); descriptor = -1 }
             throw VoiceBridgeTransportError(requestMayHaveBeenAccepted: sentCompleteRequest, message: error.localizedDescription)
@@ -119,7 +132,7 @@ public actor LocalVoiceClient: VoiceBridgeClientProtocol {
 /// Blocking descriptor operations run only on dedicated queues, never the app's main actor.
 public final class LocalVoiceServer: @unchecked Sendable {
     private let lock = NSLock()
-    private var listener: Int32 = -1
+    private var listener: DispatchSourceRead?
     private var clients: Set<Int32> = []
     private let url: URL
     private let handler: @Sendable (VoiceRequest, UUID) async -> VoiceReply
@@ -131,6 +144,11 @@ public final class LocalVoiceServer: @unchecked Sendable {
     }
 
     public func start() throws {
+        try lock.withLock { try startListener() }
+    }
+
+    private func startListener() throws {
+        guard listener == nil else { return }
         let directory = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         var info = stat()
@@ -146,13 +164,13 @@ public final class LocalVoiceServer: @unchecked Sendable {
         if FileManager.default.fileExists(atPath: url.path) {
             let probe = socket(AF_UNIX, SOCK_STREAM, 0)
             guard probe >= 0 else { throw VoiceError.unavailable("Could not check the existing DictaFlow bridge.") }
+            defer { Darwin.close(probe) }
             SocketIO.configure(probe)
             var address = try SocketIO.address(url.path)
             let result = withUnsafePointer(to: &address) { pointer in
                 pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(probe, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
             }
             let connectionError = errno
-            Darwin.close(probe)
             guard result != 0, connectionError == ECONNREFUSED || connectionError == ENOENT else {
                 throw VoiceError.unavailable("Another DictaFlow instance may own Agent Voice.")
             }
@@ -164,42 +182,59 @@ public final class LocalVoiceServer: @unchecked Sendable {
         }
         guard bound == 0, listen(fd, 8) == 0 else { throw VoiceError.unavailable("Could not bind the DictaFlow bridge.") }
         chmod(url.path, 0o600)
-        lock.withLock { listener = fd }
+        SocketIO.configure(fd)
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue(label: "com.dictaflow.voice.accept"))
+        source.setEventHandler { [weak self] in self?.acceptConnection(fd) }
+        source.setCancelHandler { Darwin.close(fd) }
+        listener = source
         started = true
-        DispatchQueue(label: "com.dictaflow.voice.accept").async { [weak self] in self?.acceptConnections(fd) }
+        source.resume()
     }
 
     public func stop() {
         lock.withLock {
-            guard listener >= 0 else { return }
-            shutdown(listener, SHUT_RDWR); Darwin.close(listener); listener = -1
+            guard let listener else { return }
+            listener.cancel()
+            self.listener = nil
             for client in clients { shutdown(client, SHUT_RDWR) }
             try? FileManager.default.removeItem(at: url)
         }
     }
     deinit { stop() }
 
-    private func acceptConnections(_ fd: Int32) {
-        while lock.withLock({ listener == fd }) {
+    private func acceptConnection(_ fd: Int32) {
+        lock.withLock {
+            guard let listener, listener.handle == UInt(fd) else { return }
             let client = accept(fd, nil, nil)
             guard client >= 0 else { return }
-            var uid: uid_t = 0; var gid: gid_t = 0
-            let allowed = getpeereid(client, &uid, &gid) == 0 && uid == getuid()
-            let admitted = lock.withLock { () -> Bool in
-                guard allowed, listener == fd, clients.count < 8 else { return false }
-                clients.insert(client); return true
-            }
-            guard admitted else { Darwin.close(client); continue }
+            guard clients.count < 8, SocketIO.isSameUser(client) else { Darwin.close(client); return }
+            clients.insert(client)
             SocketIO.configure(client)
-            DispatchQueue(label: "com.dictaflow.voice.connection").async { [weak self] in self?.serve(client) }
+            DispatchQueue(label: "com.dictaflow.voice.connection").async { [weak self, handler, onDisconnect] in
+                Self.serve(client, handler: handler, onDisconnect: onDisconnect) {
+                    if let self {
+                        self.lock.withLock { self.clients.remove(client); Darwin.close(client) }
+                    } else {
+                        Darwin.close(client)
+                    }
+                }
+            }
         }
     }
 
-    private func serve(_ fd: Int32) {
+    private static func serve(_ fd: Int32, handler: @escaping @Sendable (VoiceRequest, UUID) async -> VoiceReply,
+                              onDisconnect: @escaping @Sendable (UUID) async -> Void, close: () -> Void) {
         let connection = UUID()
+        var pending: Task<Void, Never>?
         defer {
-            lock.withLock { clients.remove(fd); Darwin.close(fd) }
-            Task { await onDisconnect(connection) }
+            close()
+            let pending = pending
+            Task {
+                // A timed-out attach can still commit. Disconnect only after
+                // that handler can no longer create a lease for this socket.
+                await pending?.value
+                await onDisconnect(connection)
+            }
         }
         do {
             while true {
@@ -208,8 +243,9 @@ public final class LocalVoiceServer: @unchecked Sendable {
                 // The queue is private to this connection. A synchronous wait here cannot block UI.
                 let semaphore = DispatchSemaphore(value: 0)
                 let box = ReplyBox()
-                Task { box.set(await handler(request, connection)); semaphore.signal() }
+                pending = Task { box.set(await handler(request, connection)); semaphore.signal() }
                 guard semaphore.wait(timeout: .now() + 0.7) == .success, let reply = box.get() else { return }
+                pending = nil
                 try SocketIO.write(JSONEncoder().encode(reply), to: fd, deadline: .now.advanced(by: .milliseconds(700)))
             }
         } catch { /* Disconnects are normal; do not log speech or request payloads. */ }

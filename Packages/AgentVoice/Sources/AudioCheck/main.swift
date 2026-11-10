@@ -227,17 +227,24 @@ do {
     let synthesisSeconds = started.duration(to: .now).components
     try speech.wav.write(to: fixtureDirectory.appendingPathComponent("speech.wav"))
     let recognitionStart = ContinuousClock.now
-    let text = try await runtime.transcribe(wav: speech.wav, english: true)
+    let text = try await runtime.transcribe(wav: speech.wav, translateToEnglish: false)
     let recognitionSeconds = recognitionStart.duration(to: .now).components
     guard text.lowercased().contains("voice"), text.lowercased().contains("recording") else {
         throw VoiceError.unavailable("Recognition did not recover the expected fixture words.")
     }
+    await runtime.stop()
     let synthesis = Task { try await runtime.synthesize(String(repeating: "This long speech will be interrupted. ", count: 40)) }
-    try await Task.sleep(for: .milliseconds(500))
+    let inFlightDeadline = ContinuousClock.now.advanced(by: .seconds(10))
+    while await runtime.hasExited(), ContinuousClock.now < inFlightDeadline {
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    guard !(await runtime.hasExited()) else { throw VoiceError.unavailable("Synthesis did not start before the cancellation check.") }
     let cancellationStart = ContinuousClock.now
     synthesis.cancel()
     await runtime.stop()
-    _ = try? await synthesis.value
+    if case .success = await synthesis.result {
+        throw VoiceError.unavailable("Synthesis returned audio after cancellation.")
+    }
     let cancellation = cancellationStart.duration(to: .now).components
     guard await runtime.hasExited() else { throw VoiceError.unavailable("Cancellation did not observe process exit.") }
     let report: [String: Any] = ["model_revision": LiquidAssets.revision, "runtime": "b11960 / 8642541b255bfb5dc39cd351a178be09013a55d6",

@@ -17,6 +17,8 @@ public actor VoiceAdapter {
     private let installationID: UUID
     private let host: String
     private var attachments: [String: VoiceAttachment] = [:]
+    private var pendingAttachments: [String: Task<VoiceReply, Error>] = [:]
+    private var attachmentGeneration = UUID()
     private var requests: [RequestKey: CachedRequest] = [:]
     private var nativeInputs: [NativeTurn: UUID] = [:]
 
@@ -27,6 +29,7 @@ public actor VoiceAdapter {
     }
 
     public func call(name: String, arguments: [String: Value]) async throws -> VoiceReply {
+        try Task.checkCancellation()
         guard let nativeSession = arguments["session_id"]?.stringValue, !nativeSession.isEmpty else {
             throw VoiceError.unavailable("session_id is required. Use the host's stable session identity.")
         }
@@ -42,6 +45,15 @@ public actor VoiceAdapter {
         let suppliedRequest = try uuid("request_id", in: arguments)
         if operation == .prepare || operation == .status {
             guard suppliedRequest != nil else { throw VoiceError.unavailable("request_id is required for this operation.") }
+        }
+        let nativeTurn: NativeTurn?
+        if let value = arguments["turn_id"] {
+            guard let turn = value.stringValue, !turn.isEmpty else {
+                throw VoiceError.unavailable("turn_id must be a non-empty string.")
+            }
+            nativeTurn = NativeTurn(session: nativeSession, turn: turn)
+        } else {
+            nativeTurn = nil
         }
         let requestID = suppliedRequest ?? UUID()
         let explicitInput = try uuid("input_id", in: arguments)
@@ -67,7 +79,6 @@ public actor VoiceAdapter {
 
         let session = VoiceSession(installationID: installationID, host: host, sessionID: nativeSession)
         let attachment = try await attachIfNeeded(session)
-        let nativeTurn = arguments["turn_id"]?.stringValue.map { NativeTurn(session: nativeSession, turn: $0) }
         let input = operation == .prompt ? nil : explicitInput ?? nativeTurn.flatMap { nativeInputs[$0] }
         // Without a remembered mapping, the persisted native turn in the store
         // may still resolve the input. Resolution there requires the valid
@@ -97,7 +108,7 @@ public actor VoiceAdapter {
             reply = try await send(request)
         }
         if reply.code == "stale_attachment" {
-            retireAttachments()
+            retireAttachment(for: nativeSession, matching: request.attachment)
             guard operation == .prompt else {
                 return VoiceReply(accepted: false, code: "new_prompt_required", message: "The app connection changed. Finish the written answer normally; begin a new prompt for speech.")
             }
@@ -118,29 +129,61 @@ public actor VoiceAdapter {
             let session = VoiceSession(installationID: installationID, host: host, sessionID: nativeSession)
             do {
                 let reply = try await send(VoiceRequest(session: session, operation: .heartbeat, attachment: attachment))
-                if !reply.accepted { retireAttachments(); return }
+                if !reply.accepted { retireAttachment(for: nativeSession, matching: attachment) }
             } catch { return }
         }
     }
 
     private func attachIfNeeded(_ session: VoiceSession) async throws -> VoiceAttachment {
-        if let attachment = attachments[session.sessionID] { return attachment }
-        let reply = try await send(VoiceRequest(session: session, operation: .attach))
+        try Task.checkCancellation()
+        let key = session.sessionID
+        if let attachment = attachments[key] { return attachment }
+        let generation = attachmentGeneration
+        let pending: Task<VoiceReply, Error>
+        if let existing = pendingAttachments[key] {
+            pending = existing
+        } else {
+            pending = Task {
+                defer {
+                    if generation == attachmentGeneration { pendingAttachments[key] = nil }
+                }
+                let reply = try await send(VoiceRequest(session: session, operation: .attach))
+                if generation == attachmentGeneration, reply.accepted, let attachment = reply.attachment {
+                    attachments[key] = attachment
+                }
+                return reply
+            }
+            pendingAttachments[key] = pending
+        }
+        let reply = try await pending.value
+        try Task.checkCancellation()
+        guard generation == attachmentGeneration else {
+            throw VoiceError.unavailable("The app connection changed while attaching. Begin a new prompt for speech.")
+        }
         guard reply.accepted, let attachment = reply.attachment else {
             throw VoiceError.unavailable("Could not attach to DictaFlow: \(reply.code). Finish the written answer normally.")
         }
-        attachments[session.sessionID] = attachment
         return attachment
     }
 
     private func send(_ request: VoiceRequest) async throws -> VoiceReply {
+        try Task.checkCancellation()
         do { return try await client.send(request) }
+        catch is CancellationError { throw CancellationError() }
         catch { retireAttachments(); throw error }
     }
 
     private func retireAttachments() {
+        attachmentGeneration = UUID()
+        pendingAttachments.removeAll()
         attachments.removeAll()
         nativeInputs.removeAll()
+    }
+
+    private func retireAttachment(for session: String, matching attachment: VoiceAttachment?) {
+        guard let attachment, attachments[session] == attachment else { return }
+        attachments[session] = nil
+        nativeInputs = nativeInputs.filter { $0.key.session != session }
     }
 
     private func uuid(_ key: String, in arguments: [String: Value]) throws -> UUID? {

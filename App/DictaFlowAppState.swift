@@ -26,11 +26,13 @@ protocol RecordingOverlayRouting: AnyObject {
 @MainActor
 final class DictaFlowAppState: ObservableObject {
     @Published private(set) var agentVoice: AgentVoiceCoordinator?
+    private var agentVoiceModelObservation: AnyCancellable?
     private var agentVoiceOverlay: AgentVoiceOverlayCoordinator?
     private var recordingAudioLease: UUID?
     @Published private(set) var isMainWindowVisible = false
     @Published private(set) var isSettingsWindowVisible = false
     @Published private(set) var appAppearance: AppAppearance
+    @Published var agentVoiceTab: AgentVoiceTab = .connections
     @Published var dictationSettingsTab: DictationSettingsTab = .transcription
     @Published private(set) var textTone: TextTone
     private var recordingTone: TextTone = .original
@@ -65,6 +67,8 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
     @Published private(set) var lastCapture: DictationCapture?
+    @Published private(set) var retainedCaptures: [DictationCapture] = []
+    @Published private(set) var retainedCaptureRetryText: String?
     @Published private(set) var lastTranscription: WhisperTranscriptionResult?
     @Published private(set) var lastTextInsertion: TextInsertionResult?
     @Published private(set) var statusMessage: String
@@ -187,6 +191,9 @@ final class DictaFlowAppState: ObservableObject {
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         agentVoice = AgentVoiceCoordinator()
         if let agentVoice {
+            agentVoiceModelObservation = agentVoice.$isModelReady.combineLatest(agentVoice.$isDownloading)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.objectWillChange.send() }
             agentVoiceOverlay = AgentVoiceOverlayCoordinator(voice: agentVoice) { [weak self] in
                 self?.toggleDictation()
             }
@@ -1961,6 +1968,12 @@ final class DictaFlowAppState: ObservableObject {
         setPreservedStatusMessage("Copied the last transcript to the clipboard for manual paste.")
     }
 
+    func copyRetainedCaptureRetryResult() {
+        guard let retainedCaptureRetryText else { return }
+        textInsertionService.copyTextToPasteboard(retainedCaptureRetryText)
+        setPreservedStatusMessage("Copied the Whisper retry result to the clipboard.")
+    }
+
     func openAccessibilitySettings() {
         permissionService.openAccessibilitySettings()
     }
@@ -2207,6 +2220,9 @@ final class DictaFlowAppState: ObservableObject {
         historyRetryTask?.cancel()
         history.shutdown()
         dictationToggleTask?.cancel()
+        for capture in retainedCaptures {
+            removeTemporaryCapture(capture, shouldSurfaceFailure: false)
+        }
         cancelRecordingStartFeedback()
         stopSoundCues()
         stopRecordingMetering()
@@ -2796,7 +2812,12 @@ final class DictaFlowAppState: ObservableObject {
             releaseRecordingAudioLease()
             isOnboardingPracticeSession = false
             setPreservedStatusMessage("\(whisperConfiguration.speechModelName) is not prepared. Download it before recording.", issueTitle: "Speech model is missing")
-            if usesLiquid { showSettingsCategory(.general) } else { showSpeechModels(focusing: whisperConfiguration.model) }
+            if usesLiquid {
+                agentVoiceTab = .models
+                showMainWindowPage(.agentVoice)
+            } else {
+                showSpeechModels(focusing: whisperConfiguration.model)
+            }
             return
         }
 
@@ -3211,7 +3232,25 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func transcribe(capture: DictationCapture, historyID: UUID? = nil, insertResult: Bool = true, configuration override: WhisperConfiguration? = nil, tone: TextTone? = nil, refinementMode: RefinementMode? = nil, vocabulary: VocabularySettings? = nil) async {
+    func retryRetainedCapture(_ capture: DictationCapture) {
+        guard retainedCaptures.contains(capture), !whisperSettingsLocked, dictationToggleTask == nil else { return }
+        var configuration = whisperConfiguration
+        configuration.recognitionProvider = .whisper
+        transcriptionState = .transcribing(configuration.model)
+        dictationToggleTask = Task { [weak self] in
+            guard let self else { return }
+            defer { dictationToggleTask = nil }
+            await transcribe(capture: capture, insertResult: false, configuration: configuration,
+                             vocabulary: vocabularySettings, retainOnFailure: true)
+        }
+    }
+
+    func discardRetainedCapture(_ capture: DictationCapture) {
+        guard retainedCaptures.contains(capture), !whisperSettingsLocked else { return }
+        removeTemporaryCapture(capture, shouldSurfaceFailure: true)
+    }
+
+    private func transcribe(capture: DictationCapture, historyID: UUID? = nil, insertResult: Bool = true, configuration override: WhisperConfiguration? = nil, tone: TextTone? = nil, refinementMode: RefinementMode? = nil, vocabulary: VocabularySettings? = nil, retainOnFailure: Bool = false) async {
         let audioLease = agentVoice?.acquireForeground()
         defer { if let audioLease { agentVoice?.releaseForeground(audioLease) } }
         let configuration = override ?? whisperConfiguration
@@ -3223,9 +3262,13 @@ final class DictaFlowAppState: ObservableObject {
             catch { history.report(error) }
         }
         var shouldSurfaceCleanupFailure = false
-        var retainCaptureForResourceFailure = false
+        var keepCapture = retainOnFailure
         defer {
-            if !retainCaptureForResourceFailure { removeTemporaryCapture(capture, shouldSurfaceFailure: shouldSurfaceCleanupFailure) }
+            if keepCapture, !isTerminating, isTemporaryCapture(capture) {
+                if !retainedCaptures.contains(capture) { retainedCaptures.append(capture) }
+            } else {
+                removeTemporaryCapture(capture, shouldSurfaceFailure: shouldSurfaceCleanupFailure)
+            }
         }
 
         let model = configuration.model
@@ -3251,13 +3294,18 @@ final class DictaFlowAppState: ObservableObject {
 
         do {
             do { try await agentVoice?.waitForForegroundResources() }
-            catch { retainCaptureForResourceFailure = true; throw error }
+            catch { keepCapture = true; throw error }
             var transcription: WhisperTranscriptionResult
             if configuration.recognitionProvider == .liquid {
                 guard let agentVoice else { throw VoiceError.unavailable("Liquid audio is unavailable.") }
+                await whisperService.unloadModel()
+                try Task.checkCancellation()
                 transcription = try await agentVoice.recognize(capture.fileURL, configuration: configuration)
             } else {
                 transcription = try await whisperService.transcribe(audioFileURL: capture.fileURL, modelURL: modelURL!, configuration: configuration)
+            }
+            if retainOnFailure, transcription.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw VoiceError.unavailable("Whisper did not detect speech. The recording is still available to retry or discard.")
             }
 
             transcription.toneFormatting = TextToneFormatter.format(
@@ -3272,9 +3320,14 @@ final class DictaFlowAppState: ObservableObject {
                 catch { history.report(error); historyAttempt = nil }
             }
             lastTranscription = transcription
+            if !retainOnFailure { retainedCaptureRetryText = nil }
             clearPreservedStatusMessage()
             let insertionTranscription = await refinedTranscriptionIfNeeded(transcription, historyTranscriptionID: historyAttempt, protectedTerms: configuration.customVocabulary, mode: refinementMode, replacementRules: vocabularySnapshot.enabledRules)
             guard !isTerminating else { return }
+            if retainOnFailure, insertionTranscription.insertionText.isEmpty {
+                throw VoiceError.unavailable("The retry produced no text. The recording is still available to retry or discard.")
+            }
+            keepCapture = false
 
             if isOnboardingPracticeSession {
                 let practiceText = insertionTranscription.insertionText
@@ -3298,13 +3351,22 @@ final class DictaFlowAppState: ObservableObject {
             } else {
                 transcriptionState = .idle
                 setRecordingOverlaySessionActive(false)
-                setPreservedStatusMessage("New transcription saved to history. Review it before inserting.")
+                if historyID != nil {
+                    setPreservedStatusMessage("New transcription saved to history. Review it before inserting.")
+                } else {
+                    lastTranscription = insertionTranscription
+                    retainedCaptureRetryText = insertionTranscription.insertionText
+                    setPreservedStatusMessage("Recording transcribed with Whisper. You can copy the result.")
+                }
                 resetWhisperIdleTimer()
             }
             shouldSurfaceCleanupFailure = true
         } catch {
-            if let voice = error as? VoiceError, case .inputTooLong = voice {
-                retainCaptureForResourceFailure = true
+            if let voice = error as? VoiceError {
+                switch voice {
+                case .inputTooLong, .liquidModelUnavailable: keepCapture = true
+                case .unavailable: break
+                }
             }
             if let historyAttempt {
                 do { try await historyStore?.finishTranscription(historyAttempt, result: nil, error: error.localizedDescription) }
@@ -3313,26 +3375,28 @@ final class DictaFlowAppState: ObservableObject {
             transcriptionState = .idle
             isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
-            setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)", issueTitle: insertResult ? "Transcription failed" : nil)
-            if !insertResult { history.report(error) }
+            setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)", issueTitle: historyID == nil ? "Transcription failed" : nil)
+            if !insertResult, historyID != nil { history.report(error) }
             playSoundCue(.error)
-            showMainWindowPage(insertResult ? .dictation : .history)
+            showMainWindowPage(insertResult || historyID == nil ? .dictation : .history)
             resetWhisperIdleTimer()
         }
     }
 
-    private func removeTemporaryCapture(_ capture: DictationCapture, shouldSurfaceFailure: Bool) {
+    private func isTemporaryCapture(_ capture: DictationCapture) -> Bool {
         let recordingsDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("DictaFlowRecordings", isDirectory: true)
             .standardizedFileURL
+        return capture.fileURL.standardizedFileURL.path.hasPrefix(recordingsDirectory.path + "/")
+    }
+
+    private func removeTemporaryCapture(_ capture: DictationCapture, shouldSurfaceFailure: Bool) {
+        guard isTemporaryCapture(capture) else { return }
         let captureURL = capture.fileURL.standardizedFileURL
-
-        guard captureURL.path.hasPrefix(recordingsDirectory.path + "/") else {
-            return
-        }
-
         do {
             try FileManager.default.removeItem(at: captureURL)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+            // A recording removed outside DictaFlow no longer needs recovery.
         } catch {
             logger.error(
                 "Could not delete temporary recording \(captureURL.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
@@ -3344,6 +3408,7 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
+        retainedCaptures.removeAll { $0.fileURL == capture.fileURL }
         if lastCapture?.fileURL == capture.fileURL {
             lastCapture = nil
         }

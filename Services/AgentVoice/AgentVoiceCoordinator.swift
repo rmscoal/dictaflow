@@ -49,6 +49,8 @@ final class AgentVoiceCoordinator: ObservableObject {
     @Published private(set) var isSpeaking = false
     @Published private(set) var isGenerating = false
     @Published private(set) var activeError: AgentVoiceError?
+    @Published private(set) var replayError: String?
+    private var rejectedRenditionID: UUID?
 
     let assets: LiquidAssets
     let runtime: any LiquidRuntimeProtocol
@@ -57,10 +59,13 @@ final class AgentVoiceCoordinator: ObservableObject {
     var prepareSpeechResources: (() async -> Void)?
     private let defaults: UserDefaults
     private let player: AgentSpeechPlayerProtocol
+    private let beforeIdleRefresh: (() async -> Void)?
     private let logger = Logger(subsystem: "com.dictaflow.agentvoice", category: "Coordinator")
     private var store: VoiceStore?
     private var bridge: LocalVoiceServer?
     private var worker: Task<Void, Never>?
+    private var workerNeedsWake = false
+    private var maintenance: Task<Void, Never>?
     private var resourceRelease: Task<Void, Never>?
     private var activeJob: UUID?
     private var activeInput: UUID?
@@ -70,8 +75,9 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     init(defaults: UserDefaults = .standard, player: AgentSpeechPlayerProtocol? = nil,
          supportDirectory: URL? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil,
-         limits: VoiceLimits = VoiceLimits()) {
+         limits: VoiceLimits = VoiceLimits(), beforeIdleRefresh: (() async -> Void)? = nil) {
         self.defaults = defaults; self.player = player ?? AgentSpeechPlayer()
+        self.beforeIdleRefresh = beforeIdleRefresh
         appID = appIdentity ?? (Bundle.main.bundleIdentifier == "com.dictaflow" ? "com.dictaflow" : "com.dictaflow.dev")
         let name = appID == "com.dictaflow" ? "DictaFlow" : "DictaFlow Dev"
         let support = supportDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(name)
@@ -87,6 +93,21 @@ final class AgentVoiceCoordinator: ObservableObject {
             isEnabled = false
         }
         if isEnabled { startBridge() }
+        if let store {
+            maintenance = Task { [weak self, weak store] in
+                while !Task.isCancelled {
+                    do {
+                        try await Task.sleep(for: .seconds(60))
+                        guard let self, let store else { return }
+                        if try await store.performMaintenance() { await self.didReceiveRequest() }
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        self?.reportStorageError(error)
+                    }
+                }
+            }
+        }
         Task { [weak self, assets] in
             await self?.refresh()
             self?.isModelReady = (try? await assets.isReady()) == true
@@ -182,6 +203,21 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func stopSpeech() { interruptActiveSpeech(suppress: true) }
 
+    func dismissReadyInteraction(_ id: UUID) {
+        guard let store else { return }
+        Task { [weak self] in
+            do {
+                try await store.suppressInteraction(inputID: id)
+                await self?.didReceiveRequest()
+            } catch { self?.reportPlaybackError(error) }
+        }
+    }
+
+    func dismissReplayError() {
+        replayError = nil
+        rejectedRenditionID = nil
+    }
+
     func setAdmissionPolicy(_ policy: VoiceAdmissionPolicy) {
         guard let store else { return }
         if policy == .manualOnly { interruptActiveSpeech() }
@@ -194,15 +230,19 @@ final class AgentVoiceCoordinator: ObservableObject {
         }
     }
 
-    func playRendition(_ id: UUID) {
+    func playRendition(_ id: UUID) async {
         guard isEnabled, let store else { return }
-        Task { [weak self] in
-            do {
-                _ = try await store.requestManualPlayback(renditionID: id)
-                if self?.activeError?.scope == .playback { self?.activeError = nil }
-                await self?.refresh()
-                self?.pump()
-            } catch { self?.reportPlaybackError(error); await self?.refresh() }
+        do {
+            _ = try await store.requestManualPlayback(renditionID: id)
+            if rejectedRenditionID == id { dismissReplayError() }
+            if activeError?.scope == .playback { activeError = nil }
+            await refresh()
+            pump()
+        } catch {
+            reportPlaybackError(error)
+            rejectedRenditionID = id
+            replayError = error.localizedDescription
+            await refresh()
         }
     }
 
@@ -237,11 +277,23 @@ final class AgentVoiceCoordinator: ObservableObject {
             try file.write(from: buffer)
         }
         do {
-            let text = try await runtime.transcribe(wav: Data(contentsOf: temporary), english: configuration.taskMode == .translateToEnglish)
+            let text = try await runtime.transcribe(wav: Data(contentsOf: temporary), translateToEnglish: configuration.taskMode == .translateToEnglish)
             await runtime.stop()
             return WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: configuration.taskMode == .translateToEnglish ? "en" : nil,
                                               model: nil, taskMode: configuration.taskMode, completedAt: Date(), recognitionProvider: .liquid)
-        } catch { await runtime.stop(); throw error }
+        } catch {
+            updateReadiness(after: error)
+            await runtime.stop()
+            throw error
+        }
+    }
+
+    private func updateReadiness(after error: Error) {
+        // The runtime has just verified the pinned files. Avoid rehashing the
+        // same failed assets before presenting the Download button.
+        if let error = error as? VoiceError, case .liquidModelUnavailable = error {
+            isModelReady = false
+        }
     }
 
     /// Metadata-only duration check before the potentially unbounded full decode.
@@ -264,6 +316,7 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func shutdown() {
         stopped = true; bridge?.stop(); bridge = nil
+        maintenance?.cancel(); maintenance = nil
         interruptActiveSpeech(stopAllInference: true)
     }
 
@@ -275,7 +328,7 @@ final class AgentVoiceCoordinator: ObservableObject {
             guard await self?.isEnabled == true else { return VoiceReply(accepted: false, code: "disabled") }
             do {
                 let reply = try await store.handle(request, connectionID: connection)
-                await self?.didReceiveRequest()
+                if request.operation != .heartbeat { await self?.didReceiveRequest() }
                 if reply.code == "stop_observed_queue_full" {
                     await self?.reportPlaybackError(VoiceError.unavailable("The speech queue is full. This response is saved in History for Play."))
                 } else if reply.code == "stop_observed_stale_rendition" {
@@ -299,10 +352,13 @@ final class AgentVoiceCoordinator: ObservableObject {
     }
 
     private func didReceiveRequest() async {
+        if let job = activeJob {
+            let isActive = (try? await store?.isActiveAttempt(job)) == true
+            // A committed correction can invalidate audio already on the
+            // player. Stop when the store cannot confirm it is still current.
+            if activeJob == job, !isActive { interruptActiveSpeech() }
+        }
         await refresh()
-        if let activeJob, !history.contains(where: { record in
-            record.attempts.contains { $0.id == activeJob && !$0.state.isTerminal }
-        }) { interruptActiveSpeech() }
         pump()
     }
 
@@ -312,12 +368,14 @@ final class AgentVoiceCoordinator: ObservableObject {
             history = try await store?.historyRecords(limit: 500) ?? []
             admissionPolicy = try await store?.admissionPolicy() ?? .automatic
         }
-        catch {
-            status = "Agent Voice storage failed: \(error.localizedDescription)"
-            activeError = AgentVoiceError(scope: .setup, message: status)
-        }
+        catch { reportStorageError(error) }
         // Success never clears: heartbeat and routine refreshes must not
         // hide an actionable error set by a real failure.
+    }
+
+    private func reportStorageError(_ error: Error) {
+        status = "Agent Voice storage failed: \(error.localizedDescription)"
+        activeError = AgentVoiceError(scope: .setup, message: status)
     }
 
     private func interruptActiveSpeech(stopAllInference: Bool = false, suppress: Bool = false,
@@ -352,7 +410,8 @@ final class AgentVoiceCoordinator: ObservableObject {
     }
 
     private func pump() {
-        guard isEnabled, !stopped, foregroundLeases.isEmpty, worker == nil, let store else { return }
+        guard isEnabled, !stopped, foregroundLeases.isEmpty, let store else { return }
+        if worker != nil { workerNeedsWake = true; return }
         let token = generation
         let release = resourceRelease
         worker = Task { [weak self] in
@@ -366,7 +425,13 @@ final class AgentVoiceCoordinator: ObservableObject {
             }
             while !Task.isCancelled, generation == token, foregroundLeases.isEmpty, isEnabled {
                 do {
-                    guard let job = try await store.nextJob() else { await refresh(); return }
+                    workerNeedsWake = false
+                    guard let job = try await store.nextJob() else {
+                        await beforeIdleRefresh?()
+                        await refresh()
+                        if workerNeedsWake { continue }
+                        return
+                    }
                     guard !Task.isCancelled, generation == token, foregroundLeases.isEmpty else {
                         _ = try? await store.transition(job.id, from: .synthesizing, to: .cancelled)
                         return
@@ -398,6 +463,7 @@ final class AgentVoiceCoordinator: ObservableObject {
                     await refresh()
                 } catch {
                     if generation != token { return }
+                    updateReadiness(after: error)
                     let failedJob = activeJob
                     if let activeJob {
                         _ = try? await store.transition(activeJob, from: .synthesizing, to: .failed, failure: error.localizedDescription)

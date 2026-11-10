@@ -4,23 +4,22 @@ import SwiftUI
 /// Connections, Models, History, and Connections is the default landing tab.
 struct AgentVoiceView: View {
     @ObservedObject var appState: DictaFlowAppState
-    @State private var selectedTab: AgentVoiceTab = .connections
 
     var body: some View {
         EmberPage {
             EmberPageHeading(title: "Agent Voice")
             HStack(spacing: 3) {
                 ForEach(AgentVoiceTab.allCases) { tab in
-                    Button { selectedTab = tab } label: {
+                    Button { appState.agentVoiceTab = tab } label: {
                         Text(tab.title).font(.system(size: 12))
                             .frame(minWidth: 82).padding(.horizontal, 12).padding(.vertical, 9)
-                            .background(selectedTab == tab ? AppTheme.tileFill : .clear,
+                            .background(appState.agentVoiceTab == tab ? AppTheme.tileFill : .clear,
                                         in: RoundedRectangle(cornerRadius: 7))
                             .contentShape(RoundedRectangle(cornerRadius: 7))
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("agent-voice-\(tab.rawValue)")
-                    .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
+                    .accessibilityAddTraits(appState.agentVoiceTab == tab ? .isSelected : [])
                 }
             }
             .padding(3).background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 9))
@@ -29,7 +28,7 @@ struct AgentVoiceView: View {
             .accessibilityElement(children: .contain).accessibilityLabel("Agent Voice sections")
 
             if let voice = appState.agentVoice {
-                switch selectedTab {
+                switch appState.agentVoiceTab {
                 case .connections: AgentVoiceConnectionsTab(voice: voice)
                 case .models: AgentVoiceModelsTab(voice: voice)
                 case .history: AgentVoiceHistoryTab(voice: voice)

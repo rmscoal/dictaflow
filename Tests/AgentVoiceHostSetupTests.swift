@@ -45,13 +45,13 @@ final class AgentVoiceHostSetupTests: XCTestCase {
         // A local shell fixture captures argv without invoking a host or MCP helper.
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-c", "claude() { printf '%s' \"$7\"; }; " + snippet]
+        process.arguments = ["-c", "claude() { printf '%s\\n' \"$6\" \"$7\" \"$8\" \"$9\"; }; " + snippet]
         let output = Pipe()
         process.standardOutput = output
         try process.run()
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
-        XCTAssertEqual(String(decoding: data, as: UTF8.self), path)
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "--scope\nuser\n--\n\(path)\n")
     }
 }

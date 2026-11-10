@@ -5,6 +5,56 @@ import MCP
 import Testing
 
 struct MCPBridgeTests {
+    @Test func droppingServerReleasesSocketEvenWithAConnectedClient() async throws {
+        let root = URL(fileURLWithPath: "/tmp/df-test-\(UUID().uuidString.prefix(8))")
+        let socket = root.appendingPathComponent("voice.sock")
+        defer { try? FileManager.default.removeItem(at: root) }
+        func makeServer() -> LocalVoiceServer {
+            LocalVoiceServer(socketURL: socket, handler: { _, _ in .init(accepted: true, code: "ok") },
+                             onDisconnect: { _ in })
+        }
+        var server: LocalVoiceServer? = makeServer()
+        weak let reference = server
+        try server?.start()
+        let client = LocalVoiceClient(socketURL: socket)
+        let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "release")
+        #expect(try await client.send(.init(session: session, operation: .attach)).accepted)
+        server = nil
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while reference != nil, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(reference == nil)
+        let replacement = makeServer()
+        try replacement.start()
+        replacement.stop()
+    }
+
+    @Test func attachThatCommitsAfterTimeoutDoesNotLeaveALease() async throws {
+        let root = URL(fileURLWithPath: "/tmp/df-test-\(UUID().uuidString.prefix(8))")
+        let socket = root.appendingPathComponent("voice.sock")
+        let store = try VoiceStore(url: root.appendingPathComponent("voice.sqlite"))
+        let fixture = LostReplyFixture()
+        let server = LocalVoiceServer(socketURL: socket, handler: { request, connection in
+            if await fixture.record(request, reply: .init(accepted: true, code: "fixture")) {
+                try? await Task.sleep(for: .milliseconds(950))
+            }
+            return (try? await store.handle(request, connectionID: connection)) ?? .init(accepted: false, code: "storage_failed")
+        }, onDisconnect: { connection in
+            try? await store.disconnect(connectionID: connection)
+            await fixture.disconnected()
+        })
+        try server.start()
+        defer { server.stop(); try? FileManager.default.removeItem(at: root) }
+        let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "late-attach")
+        let first = LocalVoiceClient(socketURL: socket)
+        await #expect(throws: VoiceBridgeTransportError.self) {
+            try await first.send(.init(session: session, operation: .attach))
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !(await fixture.didDisconnect), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        let second = LocalVoiceClient(socketURL: socket)
+        #expect(try await second.send(.init(session: session, operation: .attach)).accepted)
+    }
+
     @Test func lostCommittedReplyRetiresAttachmentAndIdenticalRetryReadsReceipt() async throws {
         let root = URL(fileURLWithPath: "/tmp/df-test-\(UUID().uuidString.prefix(8))")
         let socket = root.appendingPathComponent("voice.sock")

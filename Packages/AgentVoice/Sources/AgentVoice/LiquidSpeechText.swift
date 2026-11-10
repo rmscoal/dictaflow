@@ -141,14 +141,14 @@ enum LiquidSpeechText {
         return result
     }
 
-    private static func replacingLongIdentifiers(_ text: String) -> String {
-        guard let expression = try? NSRegularExpression(pattern: "\\S{321,}") else { return text }
+    static func replacingLongIdentifiers(_ text: String, limit: Int = 320) -> String {
+        guard let expression = try? NSRegularExpression(pattern: "\\S{\(limit + 1),}") else { return text }
         var result = text
         for match in expression.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
             guard let range = Range(match.range, in: result) else { continue }
             let token = result[range]
             // Unspaced non-Latin prose is handled by the language-aware planner.
-            guard token.count > 320, !token.unicodeScalars.contains(where: {
+            guard token.count > limit, !token.unicodeScalars.contains(where: {
                 CharacterSet.letters.contains($0) && $0.value > 0x024F
             }) else { continue }
             let ending = token.last.map { ".!?;:,".contains($0) ? String($0) : "" } ?? ""

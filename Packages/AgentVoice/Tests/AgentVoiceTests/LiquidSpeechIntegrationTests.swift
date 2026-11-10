@@ -7,6 +7,29 @@ import Testing
 struct LiquidSpeechIntegrationTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["DICTAFLOW_RUN_LIQUID_SPEECH_CHECKS"] == "1",
                    "Requires explicit opt-in and existing pinned Liquid fixtures."))
+    func translationReturnsEnglishForFrenchSpeech() async throws {
+        let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let root = package.deletingLastPathComponent().deletingLastPathComponent()
+        let assets = LiquidAssets(directory: root.appendingPathComponent(".build/agentvoice-fixtures/models"))
+        let runtime = LiquidRuntime(executable: root.appendingPathComponent(".build/liquid-runtime/bin/llama-server"),
+                                    assets: assets, configuration: LiquidRuntimeConfiguration(ttsSeed: 42))
+        do {
+            let speech = try await runtime.synthesize("Bonjour, mon ordinateur est sur la table. Il fonctionne très bien.")
+            let transcript = try await runtime.transcribe(wav: speech.wav, translateToEnglish: false)
+            let translation = try await runtime.transcribe(wav: speech.wav, translateToEnglish: true)
+            #expect(transcript.lowercased().contains("ordinateur"))
+            #expect(translation.lowercased().contains("computer"))
+            #expect(translation.lowercased().contains("table"))
+            #expect(!translation.lowercased().contains("ordinateur"))
+            await runtime.stop()
+        } catch {
+            await runtime.stop()
+            throw error
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["DICTAFLOW_RUN_LIQUID_SPEECH_CHECKS"] == "1",
+                   "Requires explicit opt-in and existing pinned Liquid fixtures."))
     func verifiedModelSynthesizesCompleteBoundedResponses() async throws {
         let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let root = package.deletingLastPathComponent().deletingLastPathComponent()

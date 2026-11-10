@@ -22,6 +22,13 @@ struct AgentVoiceHistoryTab: View {
                         .accessibilityIdentifier("agent-voice-history-stop")
                 }
             }
+            if let error = voice.replayError {
+                HStack {
+                    EmberErrorBanner(title: "Could not replay response", message: error)
+                    Button("Dismiss") { voice.dismissReplayError() }
+                        .buttonStyle(EmberButtonStyle())
+                }
+            }
             TextField("Search sessions and responses", text: $searchQuery)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Search voice history")
@@ -124,7 +131,7 @@ struct AgentVoiceHistoryTab: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
-                Button(active ? "In progress" : "Play") { voice.playRendition(rendition.id) }
+                Button(active ? "In progress" : "Play") { Task { await voice.playRendition(rendition.id) } }
                     .buttonStyle(EmberButtonStyle())
                     .disabled(active || !voice.isEnabled || !voice.isModelReady)
                     .accessibilityLabel("Play revision \(rendition.revision)")

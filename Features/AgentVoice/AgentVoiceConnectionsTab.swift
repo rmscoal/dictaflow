@@ -13,6 +13,7 @@ struct AgentVoiceConnectionsTab: View {
     @State private var copiedConfirmation: String?
     @State private var hostAvailability: [AgentVoiceHostAvailability.Host: AgentVoiceHostAvailability.Result] = [:]
     @State private var hostState: [AgentVoiceHostAvailability.Host: AgentVoiceHostInstaller.HostState] = [:]
+    @State private var refreshGeneration = UUID()
     @State private var isSettingUp = false
     @State private var setupNotice: String?
     @State private var setupError: String?
@@ -113,8 +114,8 @@ struct AgentVoiceConnectionsTab: View {
                                 .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 8))
                             if let hooks = try? AgentVoiceHostSetup.hooksSnippet(for: selectedHost) {
                                 Text(selectedHost == .codex
-                                     ? "Merge into ~/.codex/hooks.json, then review the hooks in Codex with /hooks."
-                                     : "Merge the hooks into ~/.claude/settings.json.")
+                                     ? "Merge into \(AgentVoiceHostInstaller.codexHooksURL().path), then review the hooks in Codex with /hooks."
+                                     : "With Claude Code 2.1.118 or later, merge the hooks into ~/.claude/settings.json.")
                                     .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
                                 Text(hooks)
                                     .font(.system(size: 10, design: .monospaced))
@@ -176,6 +177,9 @@ struct AgentVoiceConnectionsTab: View {
                     Label(state.hooksConfigured ? "MCP + hooks installed" : "MCP configured", systemImage: "checkmark.circle")
                         .font(.system(size: 11)).foregroundStyle(AppTheme.modelActive)
                         .accessibilityLabel("\(host.name). \(state.hooksConfigured ? "MCP and hook definitions installed. Review them in the host." : "MCP configured. Lifecycle hooks are not verified.") Start a new session.")
+                case .disabled:
+                    Label("MCP disabled", systemImage: "pause.circle")
+                        .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
                 case .foundNotConfigured:
                     Label("Found · Not configured", systemImage: "circle")
                         .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
@@ -208,6 +212,8 @@ struct AgentVoiceConnectionsTab: View {
     }
 
     private func refreshStatus() {
+        let generation = UUID()
+        refreshGeneration = generation
         let executable = Self.executablePath
         let appID = voice.appID
         let installationID = voice.installationID
@@ -220,6 +226,7 @@ struct AgentVoiceConnectionsTab: View {
             }
             let checked = next
             await MainActor.run {
+                guard refreshGeneration == generation else { return }
                 hostState = checked
                 for host in AgentVoiceHostAvailability.Host.allCases where host != .other {
                     hostAvailability[host] = AgentVoiceHostAvailability.check(host)
@@ -233,6 +240,7 @@ struct AgentVoiceConnectionsTab: View {
         let appID = voice.appID
         let installationID = voice.installationID
         let agentVoiceEnabled = voice.isEnabled
+        refreshGeneration = UUID()
         isSettingUp = true
         setupNotice = nil
         setupError = nil

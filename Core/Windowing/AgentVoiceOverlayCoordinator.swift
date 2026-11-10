@@ -58,9 +58,15 @@ final class AgentVoiceOverlayCoordinator {
             source: voice.activeSource ?? readySource ?? "Agent Voice",
             status: voice.isSpeaking ? "Speaking" : voice.isGenerating ? "Generating speech…" : "Response ready",
             isReady: showReady && !voice.isSpeaking && !voice.isGenerating,
-            stop: { [weak voice] in voice?.stopSpeech() },
+            stop: { [weak voice] in
+                guard let voice else { return }
+                if voice.isSpeaking || voice.isGenerating { voice.stopSpeech() }
+                else if let id = ready?.id { voice.dismissReadyInteraction(id) }
+            },
             play: { [weak voice] in
-                if let id = ready?.interaction.currentRenditionID { voice?.playRendition(id) }
+                if let id = ready?.interaction.currentRenditionID {
+                    Task { await voice?.playRendition(id) }
+                }
             },
             record: record
         ))

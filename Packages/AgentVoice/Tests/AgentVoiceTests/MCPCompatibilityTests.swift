@@ -5,7 +5,7 @@ import Testing
 
 struct MCPCompatibilityTests {
     private var codexInitialization: Data {
-        Data(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"experimental":{"codex/auth-change":{}},"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"codex-mcp-client","title":"Codex","version":"0.166.0"}}}"#.utf8)
+        Data(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"experimental":{"codex/auth-change":{},"compatible":"value"},"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"codex-mcp-client","title":"Codex","version":"0.166.0"}}}"#.utf8)
     }
 
     @Test func compatibilityOnlyIgnoresUnsupportedInitializationExtensions() throws {
@@ -14,7 +14,10 @@ struct MCPCompatibilityTests {
         let params = try #require(message["params"] as? [String: Any])
         #expect(params["protocolVersion"] as? String == "2025-06-18")
         let capabilities = try #require(params["capabilities"] as? [String: Any])
-        #expect((capabilities["experimental"] as? [String: Any])?.isEmpty == true)
+        #expect((capabilities["experimental"] as? [String: String]) == ["compatible": "value"])
+        let allStrings = Data(String(decoding: codexInitialization, as: UTF8.self)
+            .replacingOccurrences(of: #""codex/auth-change":{},"#, with: "").utf8)
+        #expect(InitializationCompatibilityTransport.compatibleInitialization(allStrings) == allStrings)
         #expect((capabilities["elicitation"] as? [String: Any])?.count == 2)
         let tool = Data(#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"prepare_spoken_response","arguments":{"text":"Keep this unchanged."}}}"#.utf8)
         #expect(InitializationCompatibilityTransport.compatibleInitialization(tool) == tool)

@@ -517,6 +517,36 @@ struct VoiceStoreTests {
         #expect(try await store.handle(changed, connectionID: connection).code == "request_conflict")
     }
 
+    @Test func liveAttachmentCanOnlyBeRecoveredOnItsOriginalConnection() async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let initial = try await attach(store, session, connection)
+        let input = try await prompt(store, session, initial, connection)
+
+        let rejected = try await store.handle(.init(session: session, operation: .attach), connectionID: UUID())
+        #expect(rejected.code == "session_already_attached")
+        let recovered = try await attach(store, session, connection)
+        #expect(recovered == initial)
+        let prepare = try await store.handle(.init(session: session, operation: .prepare, attachment: recovered,
+                                                   inputID: input, text: "Existing turn."), connectionID: connection)
+        #expect(prepare.accepted)
+    }
+
+    @Test func periodicMaintenancePrunesExpiredHistoryWithoutAnotherBridgeRequest() async throws {
+        var limits = VoiceLimits()
+        limits.historyRetention = 10
+        let (store, root, session, connection) = try fixture(limits: limits)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date()
+        let attachment = try await attach(store, session, connection, now: now)
+        _ = try await prompt(store, session, attachment, connection, now: now)
+
+        #expect(try await store.performMaintenance(now: now.addingTimeInterval(9)) == false)
+        #expect(try await store.historyRecords().count == 1)
+        #expect(try await store.performMaintenance(now: now.addingTimeInterval(11)))
+        #expect(try await store.historyRecords().isEmpty)
+    }
+
     @Test func newPromptInvalidatesOldSpeechAndRecoveryNeverAutoReplays() async throws {
         let (store, root, session, connection) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -557,23 +587,39 @@ struct VoiceStoreTests {
         var limits = VoiceLimits(); limits.maxHistoryInteractions = 2
         let (store, root, session, connection) = try fixture(limits: limits)
         defer { try? FileManager.default.removeItem(at: root) }
-        var firstInput: UUID?
-        var last: (VoiceSession, VoiceAttachment?, UUID)?
+        var ids: [UUID] = []
         for index in 0..<3 {
             let each = VoiceSession(installationID: session.installationID, host: session.host, sessionID: "s-\(index)")
             let attachment = try await attach(store, each, connection)
             let input = try await prompt(store, each, attachment, connection)
-            if index == 0 { firstInput = input }
-            _ = try await store.handle(.init(session: each, operation: .prepare, attachment: attachment,
-                                             inputID: input, text: "Answer \(index)."), connectionID: connection)
-            last = (each, attachment, input)
+            ids.append(input)
+            if index == 0 {
+                _ = try await store.handle(.init(session: each, operation: .prepare, attachment: attachment,
+                                                 inputID: input, text: "Oldest answer."), connectionID: connection)
+                _ = try await store.handle(.init(session: each, operation: .stop, attachment: attachment,
+                                                 inputID: input), connectionID: connection)
+                #expect(try await store.nextJob()?.inputID == input)
+            }
         }
-        // The newest interaction is made active so pruning must spare it.
-        _ = try await store.handle(.init(session: last!.0, operation: .stop, attachment: last!.1, inputID: last!.2), connectionID: connection)
-        #expect(try await store.nextJob() != nil)
+        // LIMIT must skip the oldest interaction because it is generating.
         _ = try await store.pruneHistory()
-        #expect(try await store.interactions(limit: 10).count <= 2)
-        #expect(try await store.interaction(inputID: firstInput!) == nil)
+        #expect(try await store.interactions(limit: 10).count == 2)
+        #expect(try await store.interaction(inputID: ids[0]) != nil)
+        #expect(try await store.interaction(inputID: ids[1]) == nil)
+    }
+
+    @Test func hostChangesPreserveManualReplayOfAlreadyClosedInteraction() async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        let prepared = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                    inputID: input, text: "A retained response."), connectionID: connection)
+        _ = try await prompt(store, session, attachment, connection)
+        let replay = try await store.requestManualPlayback(renditionID: try #require(prepared.renditionID))
+        _ = try await prompt(store, session, attachment, connection)
+        try await store.disconnect(connectionID: connection)
+        #expect(try await store.nextJob()?.attemptID == replay.id)
     }
 
     @Test func unknownManualPlaybackThrowsInsteadOfRecreating() async throws {
