@@ -166,6 +166,7 @@ enum AgentVoiceHostInstaller {
         homeDirectoryURL.appendingPathComponent(".config/muse/settings.json")
     }
 
+    /// Resolves the effective Codex home, honoring an explicit override or `CODEX_HOME`.
     private static func codexDirectoryURL(homeDirectoryURL: URL?, codexHome: String?) -> URL {
         // An explicit home is isolated from the running app's environment.
         let override = codexHome ?? (homeDirectoryURL == nil ? ProcessInfo.processInfo.environment["CODEX_HOME"] : nil)
@@ -374,17 +375,20 @@ enum AgentVoiceHostInstaller {
         return entry.transport.args == arguments
     }
 
+    /// Checks that `mcp get` output names the exact helper command and arguments.
     static func claudeOutputMatches(output: String, executable: String, arguments: [String]) -> Bool {
         let lines = Set(output.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) })
         return lines.contains("Command: \(executable)") && lines.contains("Args: \(arguments.joined(separator: " "))")
     }
 
+    /// Reports whether a Claude Code version string supports hooks (2.1.118 or later).
     private static func supportsClaudeHooks(_ output: String) -> Bool {
         guard let version = output.split(whereSeparator: \.isWhitespace).first else { return false }
         let fields = version.split(separator: ".").compactMap { Int($0) }
         return fields.count == 3 && !fields.lexicographicallyPrecedes([2, 1, 118])
     }
 
+    /// Reads the DictaFlow server entry, reporting whether it exists, matches, or is disabled.
     static func museEntryStatus(data: Data?, executable: String, arguments: [String]) -> (found: Bool, matches: Bool, disabled: Bool) {
         guard let data, !data.isEmpty,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -395,6 +399,7 @@ enum AgentVoiceHostInstaller {
         return (true, matches, (entry["enabled"] as? Bool) == false)
     }
 
+    /// Merges the DictaFlow server into Muse settings, preserving the existing `enabled` flag.
     static func mergedMuseSettings(existing: Data?, executable: String, arguments: [String],
                                    path: String = museSettingsURL(homeDirectoryURL: defaultHomeDirectoryURL()).path) throws -> Data {
         var json: [String: Any]
@@ -545,6 +550,7 @@ enum AgentVoiceHostInstaller {
         return groups.flatMap { ($0["hooks"] as? [[String: Any]]) ?? [] }
     }
 
+    /// Strips DictaFlow handlers from hook groups, dropping groups left empty.
     private static func groupsWithoutDictaFlow(in groups: [[String: Any]]) -> [[String: Any]] {
         groups.compactMap { group in
             var copy = group
@@ -566,6 +572,7 @@ enum AgentVoiceHostInstaller {
         return String(decoding: data, as: UTF8.self)
     }
 
+    /// Attaches hook install status from a settings file to a host state.
     private static func withHookStatus(_ state: HostState, host: Host, url: URL) -> HostState {
         var state = state
         let status = hooksStatus(data: try? Data(contentsOf: url), host: host)
@@ -574,6 +581,7 @@ enum AgentVoiceHostInstaller {
         return state
     }
 
+    /// Merges DictaFlow hooks into the host settings file at `url`.
     private static func writeHooks(host: Host, url: URL) throws {
         let merged = try mergedHooksData(existing: readIfPresent(url), host: host, path: url.path)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
@@ -695,6 +703,7 @@ enum AgentVoiceHostInstaller {
         return codexEntryMatches(json: Data(output.stdout.utf8), executable: executable, arguments: arguments)
     }
 
+    /// Verifies via the Claude CLI that the DictaFlow server entry is current.
     private static func isClaudeConfigured(executable: String, arguments: [String],
                                            cliPath: String, runner: any CommandRunner) async -> Bool {
         guard let output = try? await withTimeout(seconds: 30, host: "Claude Code", operation: {
@@ -712,11 +721,13 @@ enum AgentVoiceHostInstaller {
         try merged.write(to: url, options: .atomic)
     }
 
+    /// Reads a file, returning nil only when it is genuinely missing.
     private static func readIfPresent(_ url: URL) throws -> Data? {
         do { return try Data(contentsOf: url) }
         catch let error as CocoaError where error.code == .fileReadNoSuchFile { return nil }
     }
 
+    /// Runs an operation with a timeout, cancelling it and throwing when the deadline passes.
     static func withTimeout<T: Sendable>(seconds: UInt64, host: String,
                                                  operation: @escaping @Sendable () async throws -> T) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in

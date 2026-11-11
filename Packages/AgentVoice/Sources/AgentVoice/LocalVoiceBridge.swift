@@ -58,6 +58,7 @@ private enum SocketIO {
         throw VoiceError.unavailable("Bridge frame exceeds the size limit.")
     }
 
+    /// Checks that a socket peer runs as the current user via `getpeereid`.
     static func isSameUser(_ descriptor: Int32) -> Bool {
         var uid: uid_t = 0
         var gid: gid_t = 0
@@ -147,6 +148,7 @@ public final class LocalVoiceServer: @unchecked Sendable {
         try lock.withLock { try startListener() }
     }
 
+    /// Binds the bridge socket and serves accepted connections on a dispatch source.
     private func startListener() throws {
         guard listener == nil else { return }
         let directory = url.deletingLastPathComponent()
@@ -202,6 +204,7 @@ public final class LocalVoiceServer: @unchecked Sendable {
     }
     deinit { stop() }
 
+    /// Admits one same-user connection within the client cap, closing anything else.
     private func acceptConnection(_ fd: Int32) {
         lock.withLock {
             guard let listener, listener.handle == UInt(fd) else { return }
@@ -222,6 +225,7 @@ public final class LocalVoiceServer: @unchecked Sendable {
         }
     }
 
+    /// Serves bridge requests on one connection until it closes, errors, or a handler times out.
     private static func serve(_ fd: Int32, handler: @escaping @Sendable (VoiceRequest, UUID) async -> VoiceReply,
                               onDisconnect: @escaping @Sendable (UUID) async -> Void, close: () -> Void) {
         let connection = UUID()

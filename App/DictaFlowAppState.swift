@@ -1968,6 +1968,7 @@ final class DictaFlowAppState: ObservableObject {
         setPreservedStatusMessage("Copied the last transcript to the clipboard for manual paste.")
     }
 
+    /// Copies the retained-capture Whisper retry result to the pasteboard for manual use.
     func copyRetainedCaptureRetryResult() {
         guard let retainedCaptureRetryText else { return }
         textInsertionService.copyTextToPasteboard(retainedCaptureRetryText)
@@ -3232,6 +3233,7 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    /// Retries a retained recording with Whisper without inserting, keeping it on empty output.
     func retryRetainedCapture(_ capture: DictationCapture) {
         guard retainedCaptures.contains(capture), !whisperSettingsLocked, dictationToggleTask == nil else { return }
         var configuration = whisperConfiguration
@@ -3245,11 +3247,14 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    /// Deletes a retained recording from temporary storage and drops it from the retry list.
     func discardRetainedCapture(_ capture: DictationCapture) {
         guard retainedCaptures.contains(capture), !whisperSettingsLocked else { return }
         removeTemporaryCapture(capture, shouldSurfaceFailure: true)
     }
 
+    /// Transcribes a capture, then records history and inserts or saves the result.
+    /// When `retainOnFailure` is set, the recording is kept for retry unless transcription fully succeeds.
     private func transcribe(capture: DictationCapture, historyID: UUID? = nil, insertResult: Bool = true, configuration override: WhisperConfiguration? = nil, tone: TextTone? = nil, refinementMode: RefinementMode? = nil, vocabulary: VocabularySettings? = nil, retainOnFailure: Bool = false) async {
         let audioLease = agentVoice?.acquireForeground()
         defer { if let audioLease { agentVoice?.releaseForeground(audioLease) } }
@@ -3383,6 +3388,7 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    /// Checks whether a capture lives under DictaFlow's temporary recordings directory.
     private func isTemporaryCapture(_ capture: DictationCapture) -> Bool {
         let recordingsDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("DictaFlowRecordings", isDirectory: true)
@@ -3390,6 +3396,7 @@ final class DictaFlowAppState: ObservableObject {
         return capture.fileURL.standardizedFileURL.path.hasPrefix(recordingsDirectory.path + "/")
     }
 
+    /// Deletes a temporary recording, tolerating files already removed outside the app.
     private func removeTemporaryCapture(_ capture: DictationCapture, shouldSurfaceFailure: Bool) {
         guard isTemporaryCapture(capture) else { return }
         let captureURL = capture.fileURL.standardizedFileURL

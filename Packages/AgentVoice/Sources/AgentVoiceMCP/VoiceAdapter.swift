@@ -61,24 +61,15 @@ public actor VoiceAdapter {
 
         requests = requests.filter { Date().timeIntervalSince($0.value.request.issuedAt) < 24 * 60 * 60 }
         let key = RequestKey(session: nativeSession, id: requestID)
-        if let cached = requests[key] {
-            guard cached.tool == name, cached.arguments == arguments else {
-                throw VoiceError.unavailable("request_id was already used with different arguments.")
-            }
-            // Preserve the original envelope for receipt lookup, including after reconnect.
-            // A stale reply means no receipt exists for this envelope. Do not reattach or
-            // resend with changed identity: the original may still commit, and a new
-            // attachment would conflict with that receipt or supersede fresher work.
-            // Return an actionable error without retiring the current valid attachment.
-            let retry = try await send(cached.request)
-            if retry.code == "stale_attachment" {
-                return VoiceReply(accepted: false, code: "new_prompt_required", message: "The app connection changed. Finish the written answer normally; begin a new prompt for speech.")
-            }
-            return retry
-        }
+        if let retry = try await sendReservedRequest(key: key, tool: name, arguments: arguments) { return retry }
 
         let session = VoiceSession(installationID: installationID, host: host, sessionID: nativeSession)
         let attachment = try await attachIfNeeded(session)
+        // A concurrent identical call may have reserved this key while the
+        // attachment was acquired. Reuse its envelope instead of building a
+        // competing one: this stretch holds no await, so actor isolation
+        // keeps the recheck and the reservation below atomic.
+        if let retry = try await sendReservedRequest(key: key, tool: name, arguments: arguments) { return retry }
         let input = operation == .prompt ? nil : explicitInput ?? nativeTurn.flatMap { nativeInputs[$0] }
         // Without a remembered mapping, the persisted native turn in the store
         // may still resolve the input. Resolution there requires the valid
@@ -122,6 +113,26 @@ public actor VoiceAdapter {
             nativeInputs[nativeTurn] = input
         }
         return reply
+    }
+
+    /// Resends the envelope reserved for `key` when another call already
+    /// claimed it. Returns nil when no reservation exists and the caller must
+    /// build a new envelope.
+    private func sendReservedRequest(key: RequestKey, tool: String, arguments: [String: Value]) async throws -> VoiceReply? {
+        guard let cached = requests[key] else { return nil }
+        guard cached.tool == tool, cached.arguments == arguments else {
+            throw VoiceError.unavailable("request_id was already used with different arguments.")
+        }
+        // Preserve the original envelope for receipt lookup, including after reconnect.
+        // A stale reply means no receipt exists for this envelope. Do not reattach or
+        // resend with changed identity: the original may still commit, and a new
+        // attachment would conflict with that receipt or supersede fresher work.
+        // Return an actionable error without retiring the current valid attachment.
+        let retry = try await send(cached.request)
+        if retry.code == "stale_attachment" {
+            return VoiceReply(accepted: false, code: "new_prompt_required", message: "The app connection changed. Finish the written answer normally; begin a new prompt for speech.")
+        }
+        return retry
     }
 
     public func heartbeat() async {
@@ -180,6 +191,7 @@ public actor VoiceAdapter {
         nativeInputs.removeAll()
     }
 
+    /// Drops one session's cached attachment and native-turn mappings when it still matches.
     private func retireAttachment(for session: String, matching attachment: VoiceAttachment?) {
         guard let attachment, attachments[session] == attachment else { return }
         attachments[session] = nil

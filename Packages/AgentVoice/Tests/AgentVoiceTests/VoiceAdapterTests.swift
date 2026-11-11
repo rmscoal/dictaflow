@@ -138,6 +138,29 @@ struct VoiceAdapterTests {
         #expect(await client.sent.map(\.operation) == [.attach, .stop, .stop])
     }
 
+    @Test func concurrentIdenticalCallsShareOneEnvelope() async throws {
+        let requestID = UUID()
+        let client = BridgeFixture(actions: [
+            .delayedAttachment,
+            .reply(.init(accepted: true, code: "observed")),
+            .reply(.init(accepted: true, code: "observed")),
+            .reply(.init(accepted: true, code: "observed"))
+        ])
+        let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "fixture")
+        let args: [String: Value] = ["session_id": "session", "request_id": .string(requestID.uuidString)]
+        async let first = adapter.call(name: "on_stop", arguments: args)
+        async let second = adapter.call(name: "on_stop", arguments: args)
+        let replies = try await [first, second]
+        #expect(replies.allSatisfy { $0.accepted })
+        let sent = await client.sent
+        #expect(sent.map(\.operation) == [.attach, .stop, .stop])
+        #expect(sent[1] == sent[2], "Concurrent identical calls must reuse one envelope, including its timestamp.")
+        let retry = try await adapter.call(name: "on_stop", arguments: args)
+        #expect(retry.accepted)
+        let afterRetry = await client.sent
+        #expect(afterRetry[3] == sent[1], "A later retry must retrieve the committed envelope.")
+    }
+
     @Test func staleSessionDoesNotDiscardAnotherSessionsInFlightAttachment() async throws {
         let old = VoiceAttachment(id: UUID(), epoch: 1)
         let fresh = VoiceAttachment(id: UUID(), epoch: 1)

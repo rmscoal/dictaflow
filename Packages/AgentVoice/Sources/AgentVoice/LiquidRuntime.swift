@@ -20,6 +20,7 @@ public struct LiquidSpeech: Sendable {
 
 public protocol LiquidRuntimeProtocol: Sendable {
     func synthesize(_ text: String) async throws -> LiquidSpeech
+    /// Transcribes Liquid audio, translating the speech to English when requested.
     func transcribe(wav: Data, translateToEnglish: Bool) async throws -> String
     func stop() async
     func hasExited() async -> Bool
@@ -120,6 +121,7 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
         return response.data
     }
 
+    /// Transcribes the WAV with the Liquid sidecar, requesting English translation when asked.
     public func transcribe(wav: Data, translateToEnglish: Bool) async throws -> String {
         guard !busy else { throw VoiceError.unavailable("Liquid audio is busy.") }
         try Self.validateASRInput(wav)

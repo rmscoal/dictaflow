@@ -141,6 +141,7 @@ enum LiquidSpeechText {
         return result
     }
 
+    /// Replaces unspaced tokens longer than `limit` with a short spoken notice, leaving non-Latin prose intact.
     static func replacingLongIdentifiers(_ text: String, limit: Int = 320) -> String {
         guard let expression = try? NSRegularExpression(pattern: "\\S{\(limit + 1),}") else { return text }
         var result = text

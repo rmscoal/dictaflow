@@ -165,6 +165,7 @@ struct LiquidSpeechPlan: Sendable {
         throw VoiceError.unavailable("Liquid could not identify the spoken response language. Use clear prose in one supported language per paragraph.")
     }
 
+    /// Maps a recognizer candidate to a supported voice code, throwing for unsupported languages.
     private static func supportedLanguage(_ candidate: String) throws -> String {
         let code = candidate.hasPrefix("zh") ? "zh" : candidate
         guard supported.contains(code) else {

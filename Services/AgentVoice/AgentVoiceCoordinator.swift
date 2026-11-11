@@ -203,6 +203,7 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func stopSpeech() { interruptActiveSpeech(suppress: true) }
 
+    /// Suppresses a ready interaction so the overlay and queue move on.
     func dismissReadyInteraction(_ id: UUID) {
         guard let store else { return }
         Task { [weak self] in
@@ -213,6 +214,7 @@ final class AgentVoiceCoordinator: ObservableObject {
         }
     }
 
+    /// Clears the retained replay error and its rejected rendition.
     func dismissReplayError() {
         replayError = nil
         rejectedRenditionID = nil
@@ -230,6 +232,7 @@ final class AgentVoiceCoordinator: ObservableObject {
         }
     }
 
+    /// Queues a rendition for manual playback, retaining any rejection for display until retried.
     func playRendition(_ id: UUID) async {
         guard isEnabled, let store else { return }
         do {
@@ -288,6 +291,7 @@ final class AgentVoiceCoordinator: ObservableObject {
         }
     }
 
+    /// Marks the Liquid model not ready when the runtime reports its assets unavailable.
     private func updateReadiness(after error: Error) {
         // The runtime has just verified the pinned files. Avoid rehashing the
         // same failed assets before presenting the Download button.
@@ -373,6 +377,7 @@ final class AgentVoiceCoordinator: ObservableObject {
         // hide an actionable error set by a real failure.
     }
 
+    /// Publishes a storage failure as the coordinator's setup error status.
     private func reportStorageError(_ error: Error) {
         status = "Agent Voice storage failed: \(error.localizedDescription)"
         activeError = AgentVoiceError(scope: .setup, message: status)

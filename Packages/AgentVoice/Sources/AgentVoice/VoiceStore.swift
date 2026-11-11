@@ -781,6 +781,7 @@ public actor VoiceStore {
                          arguments: [renditionID.uuidString]).map { try attemptRow($0, db: db) }
     }
 
+    /// Reports whether an attempt is still queued, synthesizing, or playing.
     public func isActiveAttempt(_ id: UUID) throws -> Bool {
         try database.read { db in
             try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM attempts WHERE id = ? AND state IN ('queued', 'synthesizing', 'playing'))",
@@ -903,6 +904,7 @@ public actor VoiceStore {
         }
     }
 
+    /// Expires stale queued work and prunes history, reporting whether anything changed.
     @discardableResult
     nonisolated private func expire(_ db: Database, now: Date) throws -> Bool {
         var queueChanged = false

@@ -50,6 +50,7 @@ public actor LiquidAssets {
         try await task.value
     }
 
+    /// Installs an already checksum-verified download, removing the staging file on any failure.
     static func installVerifiedDownload(_ temporary: URL, at destination: URL) throws {
         let staging = destination.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".download")
         let files = FileManager.default
