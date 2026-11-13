@@ -1,4 +1,5 @@
 import AppKit
+import AgentVoice
 import Combine
 import Foundation
 import OSLog
@@ -24,9 +25,14 @@ protocol RecordingOverlayRouting: AnyObject {
 
 @MainActor
 final class DictaFlowAppState: ObservableObject {
+    @Published private(set) var agentVoice: AgentVoiceCoordinator?
+    private var agentVoiceModelObservation: AnyCancellable?
+    private var agentVoiceOverlay: AgentVoiceOverlayCoordinator?
+    private var recordingAudioLease: UUID?
     @Published private(set) var isMainWindowVisible = false
     @Published private(set) var isSettingsWindowVisible = false
     @Published private(set) var appAppearance: AppAppearance
+    @Published var agentVoiceTab: AgentVoiceTab = .general
     @Published var dictationSettingsTab: DictationSettingsTab = .transcription
     @Published private(set) var textTone: TextTone
     private var recordingTone: TextTone = .original
@@ -61,6 +67,8 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
     @Published private(set) var lastCapture: DictationCapture?
+    @Published private(set) var retainedCaptures: [DictationCapture] = []
+    @Published private(set) var retainedCaptureRetryText: String?
     @Published private(set) var lastTranscription: WhisperTranscriptionResult?
     @Published private(set) var lastTextInsertion: TextInsertionResult?
     @Published private(set) var statusMessage: String
@@ -98,6 +106,7 @@ final class DictaFlowAppState: ObservableObject {
     let history: HistoryViewModel
     let historyStore: HistoryStoreProtocol?
     @Published private(set) var historyRetention: HistoryRetention
+    @Published private(set) var voiceHistoryRetention: VoiceHistoryRetention
     @Published private(set) var isHistoryProcessing = false
     @Published private(set) var processingHistoryID: UUID?
     private var activeHistoryCapture: HistoryCapture?
@@ -178,6 +187,29 @@ final class DictaFlowAppState: ObservableObject {
             appUpdateService: GitHubReleaseUpdateService(),
             historyStore: SQLiteHistoryStore()
         )
+        // Hosted tests use isolated coordinator fixtures. Do not bind the user's socket
+        // or recover/cancel speech from a separately running installed Dev app.
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+        agentVoice = AgentVoiceCoordinator()
+        if let agentVoice {
+            agentVoiceModelObservation = agentVoice.$isModelReady.combineLatest(agentVoice.$isDownloading)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.objectWillChange.send() }
+            agentVoiceOverlay = AgentVoiceOverlayCoordinator(voice: agentVoice) { [weak self] in
+                self?.toggleDictation()
+            }
+        }
+        agentVoice?.prepareSpeechResources = { [weak self] in
+            guard let self else { return }
+            await self.whisperService.unloadModel()
+            guard !Task.isCancelled else { return }
+            self.stopRefinement()
+            await self.refinementShutdownTask?.value
+        }
+        // The store defaults to 30 days until told otherwise; push the
+        // persisted selection so an injected settings store stays authoritative.
+        let initialVoiceRetention = voiceHistoryRetention
+        Task { [weak self] in await self?.agentVoice?.setVoiceHistoryRetention(initialVoiceRetention) }
     }
 
     init(
@@ -218,6 +250,7 @@ final class DictaFlowAppState: ObservableObject {
         self.historyStore = historyStore
         self.history = HistoryViewModel(store: historyStore)
         self.historyRetention = settingsStore.historyRetention
+        self.voiceHistoryRetention = settingsStore.voiceHistoryRetention
         self.appAppearance = settingsStore.appAppearance
         self.settingsStore = settingsStore
         self.permissionService = permissionService
@@ -300,6 +333,24 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
+    func updateRecognitionProvider(_ provider: SpeechRecognitionProvider) {
+        guard !whisperSettingsLocked else { return }
+        whisperConfiguration.recognitionProvider = provider
+        settingsStore.saveWhisperConfiguration(whisperConfiguration)
+        updateStatusMessage()
+    }
+
+    /// Selects the Liquid speech model. The recognition engine follows the
+    /// selected provider, so callers never set the engine directly.
+    func updateSpeechToLiquid() {
+        guard !whisperSettingsLocked else { return }
+        guard whisperConfiguration.recognitionProvider != .liquid else { return }
+        whisperConfiguration.recognitionProvider = .liquid
+        persistWhisperConfiguration()
+        updateStatusMessage()
+        resetWhisperIdleTimer()
+    }
+
     var appDisplayNameText: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "DictaFlow"
     }
@@ -330,6 +381,8 @@ final class DictaFlowAppState: ObservableObject {
             break
         case .transcribing:
             return "Running Whisper locally"
+        case .transcribingLiquid:
+            return "Running Liquid audio locally"
         case .refining:
             return "Refining locally"
         }
@@ -409,6 +462,8 @@ final class DictaFlowAppState: ObservableObject {
             break
         case .transcribing(let model):
             return "Transcribing locally with the \(model.displayName) model."
+        case .transcribingLiquid:
+            return "Transcribing locally with Liquid LFM3-Audio."
         case .refining(let model):
             return "Refining the transcript locally with \(model.displayName)."
         }
@@ -446,12 +501,17 @@ final class DictaFlowAppState: ObservableObject {
     var modelStatusText: String {
         switch transcriptionState {
         case .idle:
+            if whisperConfiguration.recognitionProvider == .liquid {
+                return agentVoice?.isModelReady == true ? "Liquid LFM3-Audio is ready." : "Download Liquid audio in Agent Voice, under Models."
+            }
             if isWhisperModelPrepared(whisperConfiguration.model) {
                 return "\(whisperConfiguration.model.displayName) model stored in \(modelsDirectoryPath)"
             }
             return "\(whisperConfiguration.model.displayName) is not prepared. Download it in Dictation → Transcription."
         case .transcribing(let model):
             return "Using \(model.displayName) from \(modelsDirectoryPath)"
+        case .transcribingLiquid:
+            return "Using Liquid LFM3-Audio locally."
         case .refining(let model):
             return "Using \(model.displayName) from \(modelsDirectoryPath)"
         }
@@ -459,7 +519,7 @@ final class DictaFlowAppState: ObservableObject {
 
     var whisperConfigurationSummaryText: String {
         let refinementText = refinementConfiguration.isEnabled ? "Refinement On" : "Refinement Off"
-        return "\(whisperConfiguration.taskMode.title) • \(whisperConfiguration.inputLanguage.displayName) • \(whisperConfiguration.model.displayName) • \(refinementText)"
+        return "\(whisperConfiguration.taskMode.title) • \(whisperConfiguration.inputLanguage.displayName) • \(whisperConfiguration.speechModelName) • \(refinementText)"
     }
 
     var refinementStatusText: String {
@@ -1336,8 +1396,10 @@ final class DictaFlowAppState: ObservableObject {
         refinementPreparationID = id
         isRefinementServerPreparing = true
         let shutdown = refinementShutdownTask
+        let audioLease = agentVoice?.acquireForeground()
         refinementPreparationTask = Task { [weak self, transcriptRefinementService, modelDownloadService] in
             defer {
+                if let audioLease { self?.agentVoice?.releaseForeground(audioLease) }
                 if self?.refinementPreparationID == id {
                     self?.isRefinementServerPreparing = false
                     self?.refinementPreparationTask = nil
@@ -1345,6 +1407,7 @@ final class DictaFlowAppState: ObservableObject {
                 }
             }
             await shutdown?.value
+            try await self?.agentVoice?.waitForForegroundResources()
             try Task.checkCancellation()
             guard let modelURL = await modelDownloadService.verifiedRefinementModelURL(for: model) else {
                 throw TranscriptRefinementServiceError.failedToRun("The model could not be verified. Remove it and download it again from Refinement.")
@@ -1554,7 +1617,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func updateWhisperModel(_ model: WhisperModelDescriptor) {
-        guard whisperConfiguration.model != model else {
+        guard whisperConfiguration.model != model || whisperConfiguration.recognitionProvider != .whisper else {
             return
         }
 
@@ -1565,6 +1628,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         whisperConfiguration.model = model
+        whisperConfiguration.recognitionProvider = .whisper
         persistWhisperConfiguration()
         updateStatusMessage()
         resetWhisperIdleTimer()
@@ -1709,6 +1773,7 @@ final class DictaFlowAppState: ObservableObject {
         guard recordingState.isRecording else {
             return
         }
+        defer { releaseRecordingAudioLease() }
 
         recordingState = .stopping
         let startFeedbackTask = cancelRecordingStartFeedback()
@@ -1778,6 +1843,25 @@ final class DictaFlowAppState: ObservableObject {
         return nil
     }
 
+    /// Voice retention twin of updateHistoryRetention: returns an affected
+    /// interaction count when shortening needs confirmation, leaving the
+    /// setting and stored history unchanged until the user confirms.
+    /// No recording-pipeline guard: voice pruning is independent of dictation
+    /// and never touches interactions with active attempts.
+    @discardableResult
+    func updateVoiceHistoryRetention(_ retention: VoiceHistoryRetention, confirmedDeletion: Bool = false) async -> Int? {
+        guard let voice = agentVoice else { return nil }
+        if !confirmedDeletion {
+            let count = await voice.countVoiceInteractionsExpiring(retention)
+            if count > 0 { return count }
+        }
+        await voice.setVoiceHistoryRetention(retention)
+        voiceHistoryRetention = retention
+        settingsStore.saveVoiceHistoryRetention(retention)
+        await voice.pruneVoiceHistory()
+        return nil
+    }
+
     func retryHistoryTranscription(model: WhisperModelDescriptor? = nil) {
         guard canProcessHistory, let id = history.selectedID, let historyStore else { return }
         let previousText = history.displayedText
@@ -1787,7 +1871,7 @@ final class DictaFlowAppState: ObservableObject {
         let retryVocabulary = vocabularySettings
         let previousLatestAttemptID = history.detail?.transcriptions.first?.id
         var configuration = whisperConfiguration
-        if let model { configuration.model = model }
+        if let model { configuration.model = model; configuration.recognitionProvider = .whisper }
         processingHistoryID = id
         isHistoryProcessing = true
         historyRetryTask = Task { [weak self] in
@@ -1873,6 +1957,14 @@ final class DictaFlowAppState: ObservableObject {
         textInsertionService.copyTextToPasteboard(text)
     }
 
+    func copySetupSnippet(_ text: String) {
+        textInsertionService.copyTextToPasteboard(text)
+    }
+
+    func copyVoiceHistoryText(_ text: String) {
+        textInsertionService.copyTextToPasteboard(text)
+    }
+
     func insertHistoryText() {
         guard canProcessHistory, let result = history.transcription?.result else { return }
         var selected = result
@@ -1907,6 +1999,13 @@ final class DictaFlowAppState: ObservableObject {
 
         textInsertionService.copyTextToPasteboard(lastTranscription.insertionText)
         setPreservedStatusMessage("Copied the last transcript to the clipboard for manual paste.")
+    }
+
+    /// Copies the retained-capture Whisper retry result to the pasteboard for manual use.
+    func copyRetainedCaptureRetryResult() {
+        guard let retainedCaptureRetryText else { return }
+        textInsertionService.copyTextToPasteboard(retainedCaptureRetryText)
+        setPreservedStatusMessage("Copied the Whisper retry result to the clipboard.")
     }
 
     func openAccessibilitySettings() {
@@ -2151,9 +2250,13 @@ final class DictaFlowAppState: ObservableObject {
 
     func prepareForTermination() {
         isTerminating = true
+        agentVoice?.shutdown()
         historyRetryTask?.cancel()
         history.shutdown()
         dictationToggleTask?.cancel()
+        for capture in retainedCaptures {
+            removeTemporaryCapture(capture, shouldSurfaceFailure: false)
+        }
         cancelRecordingStartFeedback()
         stopSoundCues()
         stopRecordingMetering()
@@ -2167,6 +2270,7 @@ final class DictaFlowAppState: ObservableObject {
 
     func waitForRefinementShutdown() async {
         await refinementShutdownTask?.value
+        await agentVoice?.waitForShutdown()
     }
 
     func quit() {
@@ -2477,7 +2581,9 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         isWarmingUpWhisperEncoder = true
+        let audioLease = agentVoice?.acquireForeground()
         defer {
+            if let audioLease { agentVoice?.releaseForeground(audioLease) }
             isWarmingUpWhisperEncoder = false
         }
 
@@ -2489,6 +2595,7 @@ final class DictaFlowAppState: ObservableObject {
         updateStatusMessage()
 
         do {
+            try await agentVoice?.waitForForegroundResources()
             let silenceURL = try Self.silentWarmupAudioURL()
             defer {
                 try? FileManager.default.removeItem(at: silenceURL)
@@ -2731,10 +2838,20 @@ final class DictaFlowAppState: ObservableObject {
         cancelRecordingStartFeedback()
         stopSoundCues()
 
-        guard isWhisperModelPrepared(whisperConfiguration.model) else {
+        let usesLiquid = whisperConfiguration.recognitionProvider == .liquid
+        // Silence agent speech even when recording cannot start (for example,
+        // while its recognition model is missing).
+        recordingAudioLease = agentVoice?.acquireForeground()
+        guard usesLiquid ? agentVoice?.isModelReady == true : isWhisperModelPrepared(whisperConfiguration.model) else {
+            releaseRecordingAudioLease()
             isOnboardingPracticeSession = false
-            setPreservedStatusMessage("\(whisperConfiguration.model.displayName) is not prepared. Open Transcription and download it before recording.", issueTitle: "Speech model is missing")
-            showSpeechModels(focusing: whisperConfiguration.model)
+            setPreservedStatusMessage("\(whisperConfiguration.speechModelName) is not prepared. Download it before recording.", issueTitle: "Speech model is missing")
+            if usesLiquid {
+                agentVoiceTab = .general
+                showMainWindowPage(.agentVoice)
+            } else {
+                showSpeechModels(focusing: whisperConfiguration.model)
+            }
             return
         }
 
@@ -2756,6 +2873,7 @@ final class DictaFlowAppState: ObservableObject {
         microphonePermissionState = permissionState
 
         guard permissionState == .granted else {
+            releaseRecordingAudioLease()
             recordingState = .idle
             isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
@@ -2789,10 +2907,13 @@ final class DictaFlowAppState: ObservableObject {
             beginRecordingStartFeedback()
             logger.info("Recording ready in \((ProcessInfo.processInfo.systemUptime - requestedAt) * 1_000, privacy: .public) ms")
             resetWhisperIdleTimer()
-            prewarmWhisperModel()
-            prewarmRefinementModel()
+            if !usesLiquid {
+                prewarmWhisperModel()
+                prewarmRefinementModel()
+            }
             updateStatusMessage()
         } catch {
+            defer { releaseRecordingAudioLease() }
             do {
                 try await audioRecorderService.discardRecording()
             } catch AudioRecorderServiceError.notRecording {
@@ -2817,6 +2938,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func finishRecordingFlow() async {
+        defer { releaseRecordingAudioLease() }
         recordingState = .stopping
         let startFeedbackTask = cancelRecordingStartFeedback()
         stopRecordingMetering()
@@ -2859,6 +2981,11 @@ final class DictaFlowAppState: ObservableObject {
             setRecordingOverlaySessionActive(false)
             reportRecordingFailure("Could not stop recording cleanly. \(error.localizedDescription)")
         }
+    }
+
+    private func releaseRecordingAudioLease() {
+        if let recordingAudioLease { agentVoice?.releaseForeground(recordingAudioLease) }
+        recordingAudioLease = nil
     }
 
     private func beginRecordingStartFeedback() {
@@ -2941,6 +3068,7 @@ final class DictaFlowAppState: ObservableObject {
 
     private func handleRecordingFailure(_ error: Error) async {
         guard recordingState.isRecording else { return }
+        defer { releaseRecordingAudioLease() }
         recordingState = .stopping
         let feedbackTask = cancelRecordingStartFeedback()
         stopRecordingMetering()
@@ -3012,6 +3140,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     private func prewarmWhisperModel() {
+        guard whisperConfiguration.recognitionProvider == .whisper else { return }
         let model = whisperConfiguration.model
         guard modelDownloadService.isWhisperModelPrepared(model) else {
             return
@@ -3025,6 +3154,7 @@ final class DictaFlowAppState: ObservableObject {
             }
 
             do {
+                try await self.agentVoice?.waitForForegroundResources()
                 try await whisperService.prepare(modelURL: modelURL)
             } catch {
                 logger.error("Whisper prewarm failed, transcription will load on demand: \(error.localizedDescription, privacy: .public)")
@@ -3100,6 +3230,8 @@ final class DictaFlowAppState: ObservableObject {
                 detail: "\(model.displayName) locally",
                 audioLevel: 0
             )
+        case .transcribingLiquid:
+            return RecordingOverlayPresentation(phase: .transcribing, title: "Transcribing", detail: "Liquid audio locally", audioLevel: 0)
         case .refining(let model):
             return RecordingOverlayPresentation(
                 phase: .refining,
@@ -3134,7 +3266,31 @@ final class DictaFlowAppState: ObservableObject {
         }
     }
 
-    private func transcribe(capture: DictationCapture, historyID: UUID? = nil, insertResult: Bool = true, configuration override: WhisperConfiguration? = nil, tone: TextTone? = nil, refinementMode: RefinementMode? = nil, vocabulary: VocabularySettings? = nil) async {
+    /// Retries a retained recording with Whisper without inserting, keeping it on empty output.
+    func retryRetainedCapture(_ capture: DictationCapture) {
+        guard retainedCaptures.contains(capture), !whisperSettingsLocked, dictationToggleTask == nil else { return }
+        var configuration = whisperConfiguration
+        configuration.recognitionProvider = .whisper
+        transcriptionState = .transcribing(configuration.model)
+        dictationToggleTask = Task { [weak self] in
+            guard let self else { return }
+            defer { dictationToggleTask = nil }
+            await transcribe(capture: capture, insertResult: false, configuration: configuration,
+                             vocabulary: vocabularySettings, retainOnFailure: true)
+        }
+    }
+
+    /// Deletes a retained recording from temporary storage and drops it from the retry list.
+    func discardRetainedCapture(_ capture: DictationCapture) {
+        guard retainedCaptures.contains(capture), !whisperSettingsLocked else { return }
+        removeTemporaryCapture(capture, shouldSurfaceFailure: true)
+    }
+
+    /// Transcribes a capture, then records history and inserts or saves the result.
+    /// When `retainOnFailure` is set, the recording is kept for retry unless transcription fully succeeds.
+    private func transcribe(capture: DictationCapture, historyID: UUID? = nil, insertResult: Bool = true, configuration override: WhisperConfiguration? = nil, tone: TextTone? = nil, refinementMode: RefinementMode? = nil, vocabulary: VocabularySettings? = nil, retainOnFailure: Bool = false) async {
+        let audioLease = agentVoice?.acquireForeground()
+        defer { if let audioLease { agentVoice?.releaseForeground(audioLease) } }
         let configuration = override ?? whisperConfiguration
         let selectedTone = tone ?? textTone
         let vocabularySnapshot = vocabulary ?? recordingVocabulary
@@ -3144,15 +3300,21 @@ final class DictaFlowAppState: ObservableObject {
             catch { history.report(error) }
         }
         var shouldSurfaceCleanupFailure = false
+        var keepCapture = retainOnFailure
         defer {
-            removeTemporaryCapture(capture, shouldSurfaceFailure: shouldSurfaceCleanupFailure)
+            if keepCapture, !isTerminating, isTemporaryCapture(capture) {
+                if !retainedCaptures.contains(capture) { retainedCaptures.append(capture) }
+            } else {
+                removeTemporaryCapture(capture, shouldSurfaceFailure: shouldSurfaceCleanupFailure)
+            }
         }
 
         let model = configuration.model
-        transcriptionState = .transcribing(model)
+        transcriptionState = configuration.recognitionProvider == .liquid ? .transcribingLiquid : .transcribing(model)
         updateStatusMessage()
 
-        guard let modelURL = await modelDownloadService.verifiedWhisperModelURL(for: model) else {
+        let modelURL = configuration.recognitionProvider == .whisper ? await modelDownloadService.verifiedWhisperModelURL(for: model) : nil
+        guard configuration.recognitionProvider == .liquid || modelURL != nil else {
             if let historyAttempt {
                 do { try await historyStore?.finishTranscription(historyAttempt, result: nil, error: "The selected Whisper model is not prepared.") }
                 catch { history.report(error) }
@@ -3169,11 +3331,20 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         do {
-            var transcription = try await whisperService.transcribe(
-                audioFileURL: capture.fileURL,
-                modelURL: modelURL,
-                configuration: configuration
-            )
+            do { try await agentVoice?.waitForForegroundResources() }
+            catch { keepCapture = true; throw error }
+            var transcription: WhisperTranscriptionResult
+            if configuration.recognitionProvider == .liquid {
+                guard let agentVoice else { throw VoiceError.unavailable("Liquid audio is unavailable.") }
+                await whisperService.unloadModel()
+                try Task.checkCancellation()
+                transcription = try await agentVoice.recognize(capture.fileURL, configuration: configuration)
+            } else {
+                transcription = try await whisperService.transcribe(audioFileURL: capture.fileURL, modelURL: modelURL!, configuration: configuration)
+            }
+            if retainOnFailure, transcription.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw VoiceError.unavailable("Whisper did not detect speech. The recording is still available to retry or discard.")
+            }
 
             transcription.toneFormatting = TextToneFormatter.format(
                 transcription.text, tone: selectedTone,
@@ -3187,9 +3358,14 @@ final class DictaFlowAppState: ObservableObject {
                 catch { history.report(error); historyAttempt = nil }
             }
             lastTranscription = transcription
+            if !retainOnFailure { retainedCaptureRetryText = nil }
             clearPreservedStatusMessage()
             let insertionTranscription = await refinedTranscriptionIfNeeded(transcription, historyTranscriptionID: historyAttempt, protectedTerms: configuration.customVocabulary, mode: refinementMode, replacementRules: vocabularySnapshot.enabledRules)
             guard !isTerminating else { return }
+            if retainOnFailure, insertionTranscription.insertionText.isEmpty {
+                throw VoiceError.unavailable("The retry produced no text. The recording is still available to retry or discard.")
+            }
+            keepCapture = false
 
             if isOnboardingPracticeSession {
                 let practiceText = insertionTranscription.insertionText
@@ -3213,11 +3389,23 @@ final class DictaFlowAppState: ObservableObject {
             } else {
                 transcriptionState = .idle
                 setRecordingOverlaySessionActive(false)
-                setPreservedStatusMessage("New transcription saved to history. Review it before inserting.")
+                if historyID != nil {
+                    setPreservedStatusMessage("New transcription saved to history. Review it before inserting.")
+                } else {
+                    lastTranscription = insertionTranscription
+                    retainedCaptureRetryText = insertionTranscription.insertionText
+                    setPreservedStatusMessage("Recording transcribed with Whisper. You can copy the result.")
+                }
                 resetWhisperIdleTimer()
             }
             shouldSurfaceCleanupFailure = true
         } catch {
+            if let voice = error as? VoiceError {
+                switch voice {
+                case .inputTooLong, .liquidModelUnavailable: keepCapture = true
+                case .unavailable: break
+                }
+            }
             if let historyAttempt {
                 do { try await historyStore?.finishTranscription(historyAttempt, result: nil, error: error.localizedDescription) }
                 catch { history.report(error) }
@@ -3225,26 +3413,30 @@ final class DictaFlowAppState: ObservableObject {
             transcriptionState = .idle
             isOnboardingPracticeSession = false
             setRecordingOverlaySessionActive(false)
-            setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)", issueTitle: insertResult ? "Transcription failed" : nil)
-            if !insertResult { history.report(error) }
+            setPreservedStatusMessage("Could not transcribe the recording locally. \(error.localizedDescription)", issueTitle: historyID == nil ? "Transcription failed" : nil)
+            if !insertResult, historyID != nil { history.report(error) }
             playSoundCue(.error)
-            showMainWindowPage(insertResult ? .dictation : .history)
+            showMainWindowPage(insertResult || historyID == nil ? .dictation : .history)
             resetWhisperIdleTimer()
         }
     }
 
-    private func removeTemporaryCapture(_ capture: DictationCapture, shouldSurfaceFailure: Bool) {
+    /// Checks whether a capture lives under DictaFlow's temporary recordings directory.
+    private func isTemporaryCapture(_ capture: DictationCapture) -> Bool {
         let recordingsDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("DictaFlowRecordings", isDirectory: true)
             .standardizedFileURL
+        return capture.fileURL.standardizedFileURL.path.hasPrefix(recordingsDirectory.path + "/")
+    }
+
+    /// Deletes a temporary recording, tolerating files already removed outside the app.
+    private func removeTemporaryCapture(_ capture: DictationCapture, shouldSurfaceFailure: Bool) {
+        guard isTemporaryCapture(capture) else { return }
         let captureURL = capture.fileURL.standardizedFileURL
-
-        guard captureURL.path.hasPrefix(recordingsDirectory.path + "/") else {
-            return
-        }
-
         do {
             try FileManager.default.removeItem(at: captureURL)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+            // A recording removed outside DictaFlow no longer needs recovery.
         } catch {
             logger.error(
                 "Could not delete temporary recording \(captureURL.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
@@ -3256,12 +3448,15 @@ final class DictaFlowAppState: ObservableObject {
             return
         }
 
+        retainedCaptures.removeAll { $0.fileURL == capture.fileURL }
         if lastCapture?.fileURL == capture.fileURL {
             lastCapture = nil
         }
     }
 
     private func refinedTranscriptionIfNeeded(_ transcription: WhisperTranscriptionResult, historyTranscriptionID: UUID? = nil, forceEnabled: Bool = false, protectedTerms: [String] = [], mode: RefinementMode? = nil, replacementRules: [VocabularyReplacementRule] = []) async -> WhisperTranscriptionResult {
+        let audioLease = agentVoice?.acquireForeground()
+        defer { if let audioLease { agentVoice?.releaseForeground(audioLease) } }
         guard !isTerminating, refinementConfiguration.isEnabled || forceEnabled else {
             return transcription
         }
@@ -3634,6 +3829,9 @@ final class DictaFlowAppState: ObservableObject {
             break
         case .transcribing(let model):
             statusMessage = "Running local \(model.displayName) Whisper transcription on the last recorded clip."
+            return
+        case .transcribingLiquid:
+            statusMessage = "Running local Liquid audio transcription on the last recorded clip."
             return
         case .refining(let model):
             statusMessage = "Refining the latest transcript locally with \(model.displayName)."
