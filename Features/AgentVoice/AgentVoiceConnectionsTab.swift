@@ -2,211 +2,190 @@ import AppKit
 import AgentVoice
 import SwiftUI
 
-/// First Agent Voice tab. Local enable/disable state plus per-host setup
-/// with a one-click Set up button. Status never claims a live host
-/// connection: it reports whether the host CLI was found and whether its
-/// DictaFlow server entry is configured. The connection itself happens
-/// inside a new host session.
+/// General controls, speech model, and host setup. Host status describes
+/// installed configuration, not a live MCP connection.
 struct AgentVoiceConnectionsTab: View {
     @ObservedObject var voice: AgentVoiceCoordinator
-    @State private var selectedHost: AgentVoiceHostAvailability.Host = .codex
+    /// Copies setup snippets. Wired to the shared pasteboard writer so
+    /// copied text is marked transient and concealed.
+    var onCopy: ((String) -> Void)?
     @State private var copiedConfirmation: String?
+    @State private var selectedHost: AgentVoiceHostAvailability.Host?
     @State private var hostAvailability: [AgentVoiceHostAvailability.Host: AgentVoiceHostAvailability.Result] = [:]
     @State private var hostState: [AgentVoiceHostAvailability.Host: AgentVoiceHostInstaller.HostState] = [:]
     @State private var refreshGeneration = UUID()
-    @State private var isSettingUp = false
+    @State private var settingUpHost: AgentVoiceHostAvailability.Host?
+    @State private var setupHost: AgentVoiceHostAvailability.Host?
     @State private var setupNotice: String?
     @State private var setupError: String?
+
+    private typealias Host = AgentVoiceHostAvailability.Host
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             EmberPanel {
-                EmberRow(title: "Enable Agent Voice") {
+                HStack {
+                    Text("Enable Agent Voice").font(.system(size: 14, weight: .semibold))
+                    Spacer(minLength: 12)
                     Toggle("Enable Agent Voice", isOn: Binding(
                         get: { voice.isEnabled },
                         set: { voice.setEnabled($0) }
                     ))
-                    .toggleStyle(.switch).controlSize(.mini).labelsHidden()
+                    .toggleStyle(.switch).controlSize(.small).labelsHidden()
                     .accessibilityLabel("Enable Agent Voice")
                 }
-                EmberRow(title: "Playback") {
+                .padding(18)
+                EmberDivider()
+                HStack(spacing: 14) {
+                    Text("Playback").font(.system(size: 13))
+                    Spacer(minLength: 12)
                     Picker("Playback", selection: Binding(
                         get: { voice.admissionPolicy },
                         set: { voice.setAdmissionPolicy($0) }
                     )) {
                         Text("Speak automatically").tag(VoiceAdmissionPolicy.automatic)
-                        Text("Show Play control").tag(VoiceAdmissionPolicy.manualOnly)
+                        Text("Play on request").tag(VoiceAdmissionPolicy.manualOnly)
                     }
-                    .labelsHidden().frame(width: 190)
+                    .labelsHidden().fixedSize()
                     .accessibilityLabel("Agent Voice playback")
                 }
+                .padding(18)
             }
             .padding(.bottom, 18)
-            if let error = voice.activeError {
+            if let error = voice.activeError, error.scope != .models {
                 EmberErrorBanner(title: "Agent Voice needs attention", message: error.message)
                     .padding(.bottom, 18)
                     .accessibilityLabel("Agent Voice error. \(error.message)")
             }
 
-            EmberSectionHeading(title: "Host setup")
-            EmberPanel {
-                VStack(alignment: .leading, spacing: 12) {
-                    Picker("Host", selection: $selectedHost) {
-                        ForEach(AgentVoiceHostAvailability.Host.allCases) { host in
-                            Text(host.name).tag(host)
-                        }
-                    }
-                    .pickerStyle(.segmented).labelsHidden()
-                    .accessibilityLabel("Host")
-                    HStack(spacing: 10) {
-                        Text(selectedHost.name).font(.system(size: 14, weight: .medium))
-                        Spacer(minLength: 8)
-                        availabilityLabel(host: selectedHost)
-                    }
-                    steps(for: selectedHost)
-                    HStack(spacing: 8) {
-                        if selectedHost != .other {
-                            Button(isSettingUp ? "Setting up…" : setupButtonTitle(for: selectedHost)) {
-                                setUp(selectedHost)
-                            }
-                            .buttonStyle(EmberButtonStyle(primary: true))
-                            .disabled(isSettingUp || !canSetUp(selectedHost))
-                            .accessibilityLabel("Set up \(selectedHost.name)")
-                        }
-                        Button("Copy setup") { copy(setupSnippet(for: selectedHost), label: selectedHost.name) }
-                            .buttonStyle(EmberButtonStyle(primary: selectedHost == .other))
-                            .accessibilityLabel("Copy \(selectedHost.name) setup")
-                        if let url = selectedHost.docsURL {
-                            Link(selectedHost.docsLabel, destination: url)
-                                .font(.system(size: 12))
-                                .accessibilityLabel("\(selectedHost.docsLabel), opens in browser")
-                        }
-                        Spacer(minLength: 0)
-                        if copiedConfirmation == selectedHost.name {
-                            Label("Copied", systemImage: "checkmark")
-                                .font(.system(size: 12)).foregroundStyle(AppTheme.modelActive)
-                                .accessibilityLabel("\(selectedHost.name) setup copied")
-                        }
-                    }
-                    if let setupNotice {
-                        Label(setupNotice, systemImage: "checkmark.circle")
-                            .font(.system(size: 12)).foregroundStyle(AppTheme.modelActive)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityLabel(setupNotice)
-                    }
-                    if let setupError {
-                        Label(setupError, systemImage: "exclamationmark.circle")
-                            .font(.system(size: 12)).foregroundStyle(AppTheme.destructive)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityLabel("Setup failed. \(setupError)")
-                    }
-                    DisclosureGroup {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(Self.executablePath)
-                                .font(.system(size: 11, design: .monospaced))
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text(setupSnippet(for: selectedHost))
-                                .font(.system(size: 10, design: .monospaced))
-                                .textSelection(.enabled)
-                                .padding(10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 8))
-                            if let hooks = try? AgentVoiceHostSetup.hooksSnippet(for: selectedHost) {
-                                Text(selectedHost == .codex
-                                     ? "Merge into \(AgentVoiceHostInstaller.codexHooksURL().path), then review the hooks in Codex with /hooks."
-                                     : "With Claude Code 2.1.118 or later, merge the hooks into ~/.claude/settings.json.")
-                                    .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
-                                Text(hooks)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .padding(10)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 8))
-                                Button("Copy hooks") { copy(hooks, label: "hooks") }
-                                    .buttonStyle(EmberButtonStyle())
-                            }
-                        }
-                        .padding(.top, 8)
-                    } label: {
-                        Text("Advanced config").font(.system(size: 12))
-                    }
-                    .disclosureGroupStyle(EmberDisclosureGroupStyle())
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(20)
-            }
-            .padding(.bottom, 26)
+            AgentVoiceModelsTab(voice: voice)
+                .padding(.bottom, 22)
 
-            EmberSectionHeading(title: "Available tools")
-            EmberPanel {
-                toolsList
-            }
+            EmberSectionHeading(title: "Connections")
+            hostTabBar
+            hostCard(for: effectiveHost)
+                .padding(.bottom, 12)
+            DisclosureGroup("Available MCP tools") { toolsList.padding(.top, 8) }
+                .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+                .disclosureGroupStyle(EmberDisclosureGroupStyle())
         }
         .onChange(of: voice.connectionCommand) { _, _ in
             copiedConfirmation = nil
+            setupHost = nil
             setupNotice = nil
             setupError = nil
             refreshStatus()
         }
-        .onChange(of: selectedHost) { _, _ in
-            setupNotice = nil
-            setupError = nil
-        }
         .onAppear {
-            for host in AgentVoiceHostAvailability.Host.allCases where host != .other {
+            for host in Host.allCases where host != .other {
                 hostAvailability[host] = AgentVoiceHostAvailability.check(host)
             }
             refreshStatus()
         }
     }
 
-    // MARK: - Host setup
+    // MARK: - Host cards
 
-    private func availabilityLabel(host: AgentVoiceHostAvailability.Host) -> some View {
-        Group {
-            if host == .other {
-                Text("Manual setup")
-                    .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
-                    .padding(.horizontal, 7).padding(.vertical, 4)
-                    .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 5))
-                    .accessibilityLabel("Manual setup only, no installation detection")
-            } else if let state = hostState[host] {
-                switch state.status {
-                case .configured:
-                    Label(state.hooksConfigured ? "MCP + hooks installed" : "MCP configured", systemImage: "checkmark.circle")
-                        .font(.system(size: 11)).foregroundStyle(AppTheme.modelActive)
-                        .accessibilityLabel("\(host.name). \(state.hooksConfigured ? "MCP and hook definitions installed. Review them in the host." : "MCP configured. Lifecycle hooks are not verified.") Start a new session.")
-                case .disabled:
-                    Label("MCP disabled", systemImage: "pause.circle")
-                        .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
-                case .foundNotConfigured:
-                    Label("Found · Not configured", systemImage: "circle")
-                        .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
-                        .accessibilityLabel("\(host.name) found on this Mac, DictaFlow entry not configured.")
-                case .notFound, .manualOnly:
-                    Label("Not found", systemImage: "minus.circle")
-                        .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
-                        .accessibilityLabel("\(host.name) not detected in common install locations")
+    /// Host tabs in fixed order. One host card shows at a time.
+    private var tabHosts: [Host] { [.codex, .museCode, .claudeCode, .other] }
+
+    private var effectiveHost: Host { selectedHost ?? recommendedHost }
+
+    private var hostTabBar: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 3) {
+                ForEach(tabHosts) { host in
+                    Button { selectedHost = host } label: {
+                        HStack(spacing: 7) {
+                            AgentVoiceHostIcon(brand: .brand(for: host), size: 18)
+                            Text(host == .other ? "Other" : host.name).lineLimit(1)
+                        }
+                        .font(.system(size: 12))
+                        .frame(minWidth: 82).padding(.horizontal, 12).padding(.vertical, 9)
+                        .background(effectiveHost == host ? AppTheme.tileFill : .clear,
+                                    in: RoundedRectangle(cornerRadius: 7))
+                        .contentShape(RoundedRectangle(cornerRadius: 7))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("agent-voice-host-\(host.rawValue)")
+                    .accessibilityAddTraits(effectiveHost == host ? .isSelected : [])
                 }
-            } else if hostAvailability[host]?.isDetected == true {
-                Label("Found · Checking…", systemImage: "circle")
-                    .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
-                    .accessibilityLabel("\(host.name) found on this Mac, checking configuration.")
-            } else {
-                Label("Not found", systemImage: "minus.circle")
-                    .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
-                    .accessibilityLabel("\(host.name) not detected in common install locations")
             }
+            .padding(3).background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 9))
+            .overlay { RoundedRectangle(cornerRadius: 9).stroke(AppTheme.border, lineWidth: 1) }
+            .padding(.bottom, 12)
+            .accessibilityElement(children: .contain).accessibilityLabel("Host setup")
+            Picker("Host", selection: Binding(get: { effectiveHost }, set: { selectedHost = $0 })) {
+                ForEach(tabHosts) { host in Text(host == .other ? "Other" : host.name).tag(host) }
+            }
+            .labelsHidden().padding(.bottom, 12)
+            .accessibilityLabel("Host setup")
         }
     }
 
-    private func setupButtonTitle(for host: AgentVoiceHostAvailability.Host) -> String {
-        if hostState[host]?.status == .configured { return "Update \(host.name)" }
-        return "Set up \(host.name)"
+    /// First CLI-detected host, else the first host that supports one-click
+    /// setup. Muse Code needs no detected CLI, so this always resolves.
+    private var recommendedHost: Host {
+        let installable: [Host] = [.codex, .claudeCode, .museCode]
+        return installable.first { hostAvailability[$0]?.isDetected == true }
+            ?? installable.first { canSetUp($0) }
+            ?? .museCode
     }
 
-    private func canSetUp(_ host: AgentVoiceHostAvailability.Host) -> Bool {
+    private func hostCard(for host: Host) -> some View {
+        let status = cardStatus(for: host)
+        let hooksSnippet = try? AgentVoiceHostSetup.hooksSnippet(for: host)
+        return AgentVoiceHostCard(
+            brand: AgentVoiceHostBrand.brand(for: host),
+            status: status,
+            hint: Self.hint(for: host),
+            setupTitle: setupButtonTitle(for: host),
+            showSetupButton: host != .other,
+            canSetUp: canSetUp(host),
+            isSettingUp: settingUpHost == host,
+            notice: setupHost == host ? setupNotice : nil,
+            errorMessage: setupHost == host ? setupError : nil,
+            copiedSetup: copiedConfirmation == Self.setupCopyKey(host),
+            copiedHooks: copiedConfirmation == Self.hooksCopyKey(host),
+            advanced: AgentVoiceHostAdvancedConfig(
+                snippet: setupSnippet(for: host),
+                hooksSnippet: hooksSnippet,
+                hooksNote: Self.hooksNote(for: host, hasHooks: hooksSnippet != nil)
+            ),
+            onSetUp: { setUp(host) },
+            onCopySetup: { copy(setupSnippet(for: host), key: Self.setupCopyKey(host)) },
+            onCopyHooks: {
+                if let hooks = try? AgentVoiceHostSetup.hooksSnippet(for: host) {
+                    copy(hooks, key: Self.hooksCopyKey(host))
+                }
+            }
+        )
+    }
+
+    private func cardStatus(for host: Host) -> AgentVoiceHostCardStatus {
+        if host == .other { return .manualOnly }
+        if let state = hostState[host] {
+            switch state.status {
+            case .configured:
+                return .ready(hooksInstalled: state.hooksConfigured)
+            case .disabled:
+                return .disabledInHost
+            case .foundNotConfigured:
+                return .needsSetup
+            case .notFound, .manualOnly:
+                return .notFound
+            }
+        }
+        if hostAvailability[host]?.isDetected == true { return .checking }
+        return .notFound
+    }
+
+    private func setupButtonTitle(for host: Host) -> String {
+        if hostState[host]?.status == .configured { return "Update" }
+        return "Set up"
+    }
+
+    private func canSetUp(_ host: Host) -> Bool {
         if host == .museCode { return true }
         return hostAvailability[host]?.isDetected == true
     }
@@ -218,8 +197,8 @@ struct AgentVoiceConnectionsTab: View {
         let appID = voice.appID
         let installationID = voice.installationID
         Task {
-            var next: [AgentVoiceHostAvailability.Host: AgentVoiceHostInstaller.HostState] = [:]
-            for host in AgentVoiceHostAvailability.Host.allCases where host != .other {
+            var next: [Host: AgentVoiceHostInstaller.HostState] = [:]
+            for host in Host.allCases where host != .other {
                 next[host] = await AgentVoiceHostInstaller.refreshState(
                     host: host, executable: executable,
                     appID: appID, installationID: installationID)
@@ -228,20 +207,21 @@ struct AgentVoiceConnectionsTab: View {
             await MainActor.run {
                 guard refreshGeneration == generation else { return }
                 hostState = checked
-                for host in AgentVoiceHostAvailability.Host.allCases where host != .other {
+                for host in Host.allCases where host != .other {
                     hostAvailability[host] = AgentVoiceHostAvailability.check(host)
                 }
             }
         }
     }
 
-    private func setUp(_ host: AgentVoiceHostAvailability.Host) {
+    private func setUp(_ host: Host) {
         let executable = Self.executablePath
         let appID = voice.appID
         let installationID = voice.installationID
         let agentVoiceEnabled = voice.isEnabled
         refreshGeneration = UUID()
-        isSettingUp = true
+        settingUpHost = host
+        setupHost = host
         setupNotice = nil
         setupError = nil
         Task {
@@ -258,22 +238,9 @@ struct AgentVoiceConnectionsTab: View {
             await MainActor.run {
                 setupNotice = notice
                 setupError = failure
-                isSettingUp = false
+                settingUpHost = nil
             }
             refreshStatus()
-        }
-    }
-
-    @ViewBuilder
-    private func steps(for host: AgentVoiceHostAvailability.Host) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(Self.manualSteps(for: host), id: \.self) { step in
-                HStack(alignment: .top, spacing: 8) {
-                    Text("·").foregroundStyle(AppTheme.secondaryText)
-                    Text(step).font(.system(size: 12)).foregroundStyle(AppTheme.primaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
         }
     }
 
@@ -283,48 +250,46 @@ struct AgentVoiceConnectionsTab: View {
         Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/dictaflow-mcp").path
     }
 
-    private func setupSnippet(for host: AgentVoiceHostAvailability.Host) -> String {
+    private func setupSnippet(for host: Host) -> String {
         do {
             return try AgentVoiceHostSetup.snippet(for: host, executable: Self.executablePath,
                                                   appID: voice.appID, installationID: voice.installationID)
         } catch { return "Could not create the setup snippet. Try reopening Agent Voice." }
     }
 
-    private static func manualSteps(for host: AgentVoiceHostAvailability.Host) -> [String] {
+    private static func hint(for host: Host) -> String {
         switch host {
         case .codex:
-            return [
-                "Keep Enable Agent Voice turned on above.",
-                "Set up registers DictaFlow and installs prompt, Stop, and interruption hooks in your user configuration, preserving other settings.",
-                "Open /hooks in Codex and review and trust the DictaFlow hooks. Start a new session to use Agent Voice.",
-            ]
+            return "Adds DictaFlow and its voice hooks to Codex."
         case .claudeCode:
-            return [
-                "Keep Enable Agent Voice turned on above.",
-                "Set up registers DictaFlow and installs prompt and Stop hooks in your user configuration, preserving other settings.",
-                "Start a new Claude Code session so it picks up the server.",
-                "Use DictaFlow's Stop or dictation control to interrupt speech. Claude's own interruption event is not connected.",
-            ]
+            return "Adds DictaFlow and its voice hooks to Claude Code."
         case .museCode:
-            return [
-                "Keep Enable Agent Voice turned on above.",
-                "Press Set up Muse Code. It merges the dictaflow entry into ~/.config/muse/settings.json and keeps your other settings. Advanced config below holds the manual equivalent.",
-                "Start a new Muse session so it loads the server at startup.",
-                "Native lifecycle hooks are not configured for Muse. Use manual playback until your host integration supplies them.",
-            ]
+            return "Adds DictaFlow to your Muse settings."
         case .other:
-            return [
-                "Keep Enable Agent Voice turned on above.",
-                "Register the copied command as a stdio MCP server named dictaflow in your host.",
-                "Connect your host's prompt, completion, and interruption events. Hosts without lifecycle integration can use manual playback.",
-            ]
+            return "Copy the command and register it as a stdio server named dictaflow."
         }
     }
 
-    private func copy(_ text: String, label: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        copiedConfirmation = label
+    private static func hooksNote(for host: Host, hasHooks: Bool) -> String? {
+        guard hasHooks else { return nil }
+        if host == .codex {
+            return "Merge into \(AgentVoiceHostInstaller.codexHooksURL().path), then review the hooks in Codex with /hooks."
+        }
+        return "With Claude Code 2.1.118 or later, merge the hooks into ~/.claude/settings.json."
+    }
+
+    private static func setupCopyKey(_ host: Host) -> String { "setup-\(host.rawValue)" }
+
+    private static func hooksCopyKey(_ host: Host) -> String { "hooks-\(host.rawValue)" }
+
+    private func copy(_ text: String, key: String) {
+        if let onCopy {
+            onCopy(text)
+        } else {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+        copiedConfirmation = key
     }
 
     // MARK: - Tools list

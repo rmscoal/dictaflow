@@ -4,13 +4,19 @@ Agent Voice provides automatic, interruptible local speech for connected agent s
 
 ## User experience
 
-Enable Agent Voice and download the verified Liquid model. Under MCP Connections, choose **Speak automatically** or **Show Play control**. Automatic mode admits the current eligible rendition when the host reports Stop. Manual mode retains the response and shows a compact Play control.
+Under **Agent Voice > General**, enable Agent Voice and download the verified Liquid model. Choose **Speak automatically** or **Play on request**. Automatic mode admits the current eligible rendition when the host reports Stop. Manual mode retains the response for explicit playback. General also contains host connections, manual configuration with a Copy action in each code block, and a collapsed MCP tool reference.
 
 The floating control identifies the speaking session and provides Stop and Dictate. It does not take keyboard focus from the target app. The existing dictation shortcut also interrupts speech. Interruption is a deliberate button or shortcut action; DictaFlow does not listen continuously for speech over the agent.
 
-Stop persists suppression for the interrupted interaction. Delayed Stop observations and corrections cannot automatically make it speak again. Explicit Play remains possible, and a new user turn is independently eligible. Dictation holds audio priority through recording, transcription, refinement, and insertion. Responses arriving during that work wait in the queue. Stopping speech does not cancel the coding agent.
+Stopping the current response persists suppression for the interrupted interaction. Delayed Stop observations and corrections cannot automatically make it speak again. Explicit Play remains possible, and a new user turn is independently eligible.
 
-History shows interactions, retained prompt text when supplied, each spoken revision, playback attempts, and relevant events. Search matches session identities, prompts, and renditions. Play regenerates speech from the selected text; generated audio is not retained for exact replay. Deleting an interaction removes its retained speech history and cancels its active attempts. Ordinary dictation history remains separate.
+A bubble's Stop cancels only its playback, preserving other queued responses. Stopping an older revision leaves the current response eligible. The toolbar and floating control's Stop clear active and queued speech.
+
+Dictation holds audio priority through recording, transcription, refinement, and insertion. Responses arriving during that work wait in the queue. Stopping speech does not cancel the coding agent.
+
+**History** lists sessions using prompt titles and recent message previews. Selecting a session opens its retained exchanges in chronological order, with prompts on the right and spoken responses on the left. Play, Copy, and timestamps stay inside the bubbles. Earlier spoken revisions remain available within their response bubble. Very long messages can be expanded in place.
+
+Search matches session identities, prompts, and all spoken revisions. It keeps the complete matching session visible, highlights matching text, and provides previous/next exchange navigation. Session details contain the session ID and start time. Right-click a bubble for exchange details, diagnostics, or **Delete exchange**. The session header's trash button deletes every saved exchange in that session, including while searching. Both deletion scopes require confirmation and cancel affected active attempts. Play regenerates speech from the selected text; generated audio is not retained for exact replay. Ordinary dictation history remains separate.
 
 ## Lifecycle contract
 
@@ -27,7 +33,9 @@ The bridge authenticates the local OS user, not whether a tool invocation origin
 
 ## Setup and host boundaries
 
-MCP Connections registers the bundled helper for the chosen host. Codex and Claude Code lifecycle setup uses their user-level configuration; review the exact hooks in the host when prompted and start a new session. Existing unrelated configuration must be preserved. A configured server entry alone does not prove that a host has reviewed and activated hooks.
+The **Connections** section in General registers the bundled helper for the chosen host. Each host tab includes its logo. The host card has a **Set up** or **Update** action at the top right, and the external-link icon beside its name opens documentation. **Update** refreshes DictaFlow's integration configuration. Hosts without automatic setup offer **Show setup** for manual configuration.
+
+Codex and Claude Code lifecycle setup uses their user-level configuration; review the exact hooks in the host when prompted and start a new session. Existing unrelated configuration must be preserved. A configured server entry alone does not prove that a host has reviewed and activated hooks.
 
 Codex setup also pre-approves DictaFlow's own tools with `default_tools_approval_mode = "approve"` under `[mcp_servers.dictaflow]` in `~/.codex/config.toml`, so sessions are not interrupted by approval prompts for the speech tools. The key is only added when absent; an existing value is never overwritten. If setup edits the file, it re-runs `codex mcp list` as a parse check and restores the original bytes on failure, so a failed run never strands a broken config. Manual setup carries the same line. This mirrors what Codex writes for a manual Always-allow, but as one server default covering every DictaFlow tool, including the read-only status query. When pasting the manual snippet, if the `[mcp_servers.dictaflow]` table already exists, add only the missing lines; duplicating the table breaks the file.
 

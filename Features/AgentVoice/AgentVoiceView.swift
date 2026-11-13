@@ -1,13 +1,31 @@
 import SwiftUI
 
-/// Dedicated Agent Voice destination. Tabs always appear in the order
-/// Connections, Models, History, and Connections is the default landing tab.
+/// General contains playback, the shared speech model, and host setup.
+/// History gets the available window height for its conversation browser.
 struct AgentVoiceView: View {
     @ObservedObject var appState: DictaFlowAppState
 
     var body: some View {
-        EmberPage {
-            EmberPageHeading(title: "Agent Voice")
+        // History is a window-filling browser like recording history, so it
+        // lives outside the scrolling page; the split view takes the rest of
+        // the window instead of collapsing to its content.
+        if appState.agentVoiceTab == .history, let voice = appState.agentVoice {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                AgentVoiceHistoryTab(voice: voice, appState: appState) { appState.copyVoiceHistoryText($0) }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .padding(.horizontal, AppLayout.contentPadding).padding(.top, 10).padding(.bottom, 28)
+        } else {
+            EmberPage {
+                header
+                tabBody
+            }
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 3) {
                 ForEach(AgentVoiceTab.allCases) { tab in
                     Button { appState.agentVoiceTab = tab } label: {
@@ -24,14 +42,17 @@ struct AgentVoiceView: View {
             }
             .padding(3).background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 9))
             .overlay { RoundedRectangle(cornerRadius: 9).stroke(AppTheme.border, lineWidth: 1) }
-            .padding(.bottom, 26)
+            .padding(.bottom, 16)
             .accessibilityElement(children: .contain).accessibilityLabel("Agent Voice sections")
+        }
+    }
 
+    private var tabBody: some View {
+        Group {
             if let voice = appState.agentVoice {
                 switch appState.agentVoiceTab {
-                case .connections: AgentVoiceConnectionsTab(voice: voice)
-                case .models: AgentVoiceModelsTab(voice: voice)
-                case .history: AgentVoiceHistoryTab(voice: voice)
+                case .general: AgentVoiceConnectionsTab(voice: voice) { appState.copySetupSnippet($0) }
+                case .history: AgentVoiceHistoryTab(voice: voice, appState: appState) { appState.copyVoiceHistoryText($0) }
                 }
             } else {
                 Text("Agent Voice is unavailable in this session.")
@@ -42,12 +63,11 @@ struct AgentVoiceView: View {
 }
 
 enum AgentVoiceTab: String, CaseIterable, Identifiable {
-    case connections, models, history
+    case general, history
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .connections: "MCP Connections"
-        case .models: "Models"
+        case .general: "General"
         case .history: "History"
         }
     }

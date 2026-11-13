@@ -50,7 +50,7 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(state.interfaceIssue?.title, "Speech model is missing")
     }
 
-    func testMissingLiquidModelOpensAgentVoiceModelsWithoutStartingCapture() async throws {
+    func testMissingLiquidModelOpensAgentVoiceGeneralWithoutStartingCapture() async throws {
         let fixture = try RecordingStartupFixture()
         defer { fixture.cleanup() }
         let state = fixture.state
@@ -61,7 +61,7 @@ final class RecordingStartupTests: XCTestCase {
         state.toggleDictation()
         await fulfillment(of: [routed], timeout: 2)
         observation.cancel()
-        XCTAssertEqual(state.agentVoiceTab, .models)
+        XCTAssertEqual(state.agentVoiceTab, .general)
         XCTAssertEqual(state.recordingState, .idle)
         XCTAssertNil(state.lastCapture)
         XCTAssertEqual(state.interfaceIssue?.title, "Speech model is missing")

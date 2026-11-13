@@ -172,6 +172,53 @@ struct VoiceStoreTests {
         #expect(try await store.transition(manual.id, from: .synthesizing, to: .playing) == false)
     }
 
+    @Test func stoppingPlaybackBlocksLateAutomaticSpeechButLeavesNewManualReplayAlone() async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        let first = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                 inputID: input, text: "First response."), connectionID: connection)
+        _ = try await store.handle(.init(session: session, operation: .stop, attachment: attachment, inputID: input), connectionID: connection)
+        let generating = try #require(try await store.nextJob())
+        #expect(try await store.stopPlayback(attemptID: generating.id))
+        #expect(try await store.transition(generating.id, from: .synthesizing, to: .playing) == false)
+        #expect(try await store.interaction(inputID: input)?.isSuppressed == true)
+        #expect(try await store.interaction(inputID: input)?.stopEligibleRevision == nil)
+
+        let corrected = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                     inputID: input, text: "Late correction.", replacesDraftID: first.renditionID,
+                                                     expectedRevision: 1), connectionID: connection)
+        let lateStop = try await store.handle(.init(session: session, operation: .stop, attachment: attachment, inputID: input), connectionID: connection)
+        #expect(lateStop.code == "stop_suppressed")
+        let replay = try await store.requestManualPlayback(renditionID: #require(corrected.renditionID))
+        #expect(try await store.stopPlayback(attemptID: generating.id) == false, "A stale Stop must not cancel the newer replay.")
+        #expect(try await store.stopPlayback(attemptID: UUID()) == false)
+        #expect(try await store.nextJob()?.id == replay.id)
+    }
+
+    @Test func stoppingOlderRevisionPreservesCurrentQueuedPlayback() async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        let first = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                 inputID: input, text: "Earlier response."), connectionID: connection)
+        let current = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                   inputID: input, text: "Current response.", replacesDraftID: first.renditionID,
+                                                   expectedRevision: 1), connectionID: connection)
+        let olderPlayback = try await store.requestManualPlayback(renditionID: #require(first.renditionID))
+        #expect(try await store.nextJob()?.id == olderPlayback.id)
+        #expect(try await store.transition(olderPlayback.id, from: .synthesizing, to: .playing))
+        let currentPlayback = try await store.requestManualPlayback(renditionID: #require(current.renditionID))
+
+        #expect(try await store.stopPlayback(attemptID: olderPlayback.id))
+        #expect(try await store.attempts(inputID: input).first { $0.id == olderPlayback.id }?.state == .cancelled)
+        #expect(try await store.isActiveAttempt(currentPlayback.id))
+        #expect(try await store.interaction(inputID: input)?.isSuppressed == false)
+        #expect(try await store.nextJob()?.id == currentPlayback.id)
+    }
+
     @Test func suppressActiveSpeechCoversLateAttemptsButLeavesPreparedAlone() async throws {
         let (store, root, session, connection) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }

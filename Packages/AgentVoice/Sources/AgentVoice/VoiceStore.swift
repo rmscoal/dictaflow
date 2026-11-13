@@ -14,6 +14,9 @@ import GRDB
 /// - `events` is an append-only history log. It explains history and is not
 ///   the source of truth for playback state.
 /// - `settings` holds the app-set admission policy. Models cannot change it.
+/// - `inputs.expires_at` (migration v5) stamps each interaction with its
+///   history expiry. A NULL stamp means history is off for that turn: the
+///   live pipeline still runs, but the row is dropped once settled.
 public actor VoiceStore {
     private let database: DatabaseQueue
     private let limits: VoiceLimits
@@ -79,6 +82,10 @@ public actor VoiceStore {
         migrator.registerMigration("agentVoice-v4-queue-indexes") { db in
             try db.execute(sql: "CREATE INDEX attempts_active ON attempts(state, created) WHERE state IN ('queued', 'synthesizing', 'playing')")
             try db.execute(sql: "CREATE INDEX receipts_created ON receipts(created)")
+        }
+        migrator.registerMigration("agentVoice-v5-interaction-expiry") { db in
+            try db.execute(sql: "ALTER TABLE inputs ADD COLUMN expires_at REAL")
+            try db.execute(sql: "UPDATE inputs SET expires_at = created + ?", arguments: [limits.historyRetention])
         }
         try migrator.migrate(database)
         try backfillLegacyDrafts()
@@ -199,6 +206,31 @@ public actor VoiceStore {
             throw VoiceError.unavailable("This response is no longer available.")
         }
         return try suppressInteraction(inputID: interaction.id, now: now)
+    }
+
+    /// Stops only the named playback attempt. A stale Stop is a no-op, so it
+    /// cannot cancel a newer replay. Stopping the current rendition also
+    /// blocks later automatic speech for that interaction; stopping an older
+    /// revision leaves the current response eligible.
+    @discardableResult
+    public func stopPlayback(attemptID: UUID, now: Date = Date()) throws -> Bool {
+        try database.write { db in
+            guard let attempt = try fetchAttempt(attemptID, db: db),
+                  [.queued, .synthesizing, .playing].contains(attempt.state) else { return false }
+            try setAttemptState(attempt, to: .cancelled, db: db)
+            try insertEvent(inputID: attempt.inputID, kind: .playbackCancelled, at: now,
+                            renditionID: attempt.renditionID, attemptID: attempt.id,
+                            revision: attempt.revision, db: db)
+            if try currentRendition(attempt.inputID, db: db)?.id == attempt.renditionID {
+                try db.execute(sql: "UPDATE inputs SET suppressed = 1, suppressed_at = ?, eligible_revision = NULL WHERE id = ?",
+                               arguments: [now.timeIntervalSince1970, attempt.inputID.uuidString])
+                try insertEvent(inputID: attempt.inputID, kind: .suppressed, at: now,
+                                renditionID: attempt.renditionID, attemptID: attempt.id,
+                                revision: attempt.revision, db: db)
+            }
+            try syncInteractionState(attempt.inputID, db: db)
+            return true
+        }
     }
 
     /// Suppresses every interaction that currently holds an active playback
@@ -350,6 +382,45 @@ public actor VoiceStore {
     @discardableResult
     public func pruneHistory(now: Date = Date()) throws -> Int {
         try database.write { db in try pruneHistory(db, now: now) }
+    }
+
+    /// Effective history age limit, or nil when history is Off. Falls back
+    /// to the configured limits when the app has never set a value, so
+    /// existing databases keep their 30-day behavior until the user changes it.
+    public func historyRetentionInterval() throws -> TimeInterval? {
+        try database.read { db in try storedHistoryRetentionInterval(db) }
+    }
+
+    /// App-facing retention control, mirroring HistoryStore.setRetention. A
+    /// nil (Off) selection only stops new turns from being retained and
+    /// leaves existing expiry stamps untouched; a concrete limit restamps
+    /// every interaction from its creation date. Skips the rewrite when the
+    /// value is unchanged.
+    public func setHistoryRetentionInterval(_ interval: TimeInterval?) throws {
+        try database.write { db in
+            guard try storedHistoryRetentionInterval(db) != interval else { return }
+            if let interval {
+                try db.execute(sql: "INSERT OR REPLACE INTO settings VALUES ('historyRetentionInterval', ?)",
+                               arguments: [String(interval)])
+                try db.execute(sql: "UPDATE inputs SET expires_at = created + ?", arguments: [interval])
+            } else {
+                try db.execute(sql: "INSERT OR REPLACE INTO settings VALUES ('historyRetentionInterval', '0')")
+            }
+        }
+    }
+
+    /// Counts interactions a proposed retention would delete, for the
+    /// shorten-retention confirm dialog. Like pruneHistory it only counts
+    /// interactions without active attempts; like HistoryStore it returns 0
+    /// for Off. Evaluated against creation dates because expiry is restamped
+    /// on apply, so the count matches the prune that follows confirmation.
+    public func countInteractionsExpiring(retention: TimeInterval?, now: Date = Date()) throws -> Int {
+        guard let retention, retention > 0 else { return 0 }
+        return try database.read { db in
+            let cutoff = now.addingTimeInterval(-retention).timeIntervalSince1970
+            return try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM inputs WHERE created <= ? AND \(Self.inactiveInputs)",
+                                    arguments: [cutoff]) ?? 0
+        }
     }
 
     /// Runs periodic expiry independently of bridge traffic. Reports whether
@@ -512,10 +583,13 @@ public actor VoiceStore {
             try closeInputs(key, state: .superseded, db: db)
             let inputID = UUID()
             let promptText = (request.promptText ?? request.text).map { String($0.prefix(limits.maxPromptCharacters)) }
+            // A NULL stamp means history is off for this turn: the live
+            // pipeline still runs, but prune drops the row once settled.
+            let expiry: Double? = try storedHistoryRetentionInterval(db).map { now.timeIntervalSince1970 + $0 }
             try db.execute(sql: """
-                INSERT INTO inputs (id, session, state, created, draft, host_closed, native_turn, prompt_text)
-                VALUES (?, ?, ?, ?, NULL, 0, ?, ?)
-                """, arguments: [inputID.uuidString, key, VoiceState.open.rawValue, now.timeIntervalSince1970,
+                INSERT INTO inputs (id, session, state, created, expires_at, draft, host_closed, native_turn, prompt_text)
+                VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?)
+                """, arguments: [inputID.uuidString, key, VoiceState.open.rawValue, now.timeIntervalSince1970, expiry,
                                  request.nativeTurnID, promptText])
             try insertEvent(inputID: inputID, kind: .promptOpened, at: now, db: db)
             return VoiceReply(accepted: true, code: "input_opened", inputID: inputID, state: .open,
@@ -923,10 +997,22 @@ public actor VoiceStore {
         return queueChanged || removed > 0
     }
 
+    /// Interactions with an active attempt are never pruned, whatever pass selects them.
+    private static let inactiveInputs = "NOT EXISTS (SELECT 1 FROM attempts WHERE input = inputs.id AND state IN ('queued', 'synthesizing', 'playing'))"
+    /// Settled turns the host can no longer mutate.
+    private static let settledInputs = "(host_closed = 1 OR state IN ('completed', 'skippedMissingDraft', 'interrupted', 'cancelled', 'expired', 'superseded', 'failed'))"
+
+    /// Reads the app-set age limit in seconds, or nil when history is Off.
+    /// Absent means the app never chose: fall back to the configured limits.
+    nonisolated private func storedHistoryRetentionInterval(_ db: Database) throws -> TimeInterval? {
+        guard let raw = try String.fetchOne(db, sql: "SELECT value FROM settings WHERE key = 'historyRetentionInterval'"),
+              let seconds = Double(raw) else { return limits.historyRetention }
+        return seconds > 0 ? seconds : nil
+    }
+
     @discardableResult
     nonisolated private func pruneHistory(_ db: Database, now: Date) throws -> Int {
         var deleted = 0
-        let inactive = "NOT EXISTS (SELECT 1 FROM attempts WHERE input = inputs.id AND state IN ('queued', 'synthesizing', 'playing'))"
         func delete(_ id: String) throws {
             try db.execute(sql: "DELETE FROM events WHERE input = ?", arguments: [id])
             try db.execute(sql: "DELETE FROM attempts WHERE input = ?", arguments: [id])
@@ -934,13 +1020,18 @@ public actor VoiceStore {
             try db.execute(sql: "DELETE FROM inputs WHERE id = ?", arguments: [id])
             deleted += 1
         }
-        let ageCutoff = now.addingTimeInterval(-limits.historyRetention).timeIntervalSince1970
-        for id in try String.fetchAll(db, sql: "SELECT id FROM inputs WHERE created < ? AND \(inactive)", arguments: [ageCutoff]) {
+        let nowEpoch = now.timeIntervalSince1970
+        for id in try String.fetchAll(db, sql: "SELECT id FROM inputs WHERE expires_at IS NOT NULL AND expires_at <= ? AND \(Self.inactiveInputs)", arguments: [nowEpoch]) {
+            try delete(id)
+        }
+        // History-off turns carry no stamp. They are dropped once settled so
+        // the live pipeline keeps working while history is off.
+        for id in try String.fetchAll(db, sql: "SELECT id FROM inputs WHERE expires_at IS NULL AND \(Self.inactiveInputs) AND \(Self.settledInputs)") {
             try delete(id)
         }
         let excess = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM inputs")! - limits.maxHistoryInteractions
         if excess > 0 {
-            for id in try String.fetchAll(db, sql: "SELECT id FROM inputs WHERE \(inactive) ORDER BY created ASC LIMIT ?", arguments: [excess]) {
+            for id in try String.fetchAll(db, sql: "SELECT id FROM inputs WHERE \(Self.inactiveInputs) ORDER BY created ASC LIMIT ?", arguments: [excess]) {
                 try delete(id)
             }
         }

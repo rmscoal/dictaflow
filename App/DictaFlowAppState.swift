@@ -32,7 +32,7 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isMainWindowVisible = false
     @Published private(set) var isSettingsWindowVisible = false
     @Published private(set) var appAppearance: AppAppearance
-    @Published var agentVoiceTab: AgentVoiceTab = .connections
+    @Published var agentVoiceTab: AgentVoiceTab = .general
     @Published var dictationSettingsTab: DictationSettingsTab = .transcription
     @Published private(set) var textTone: TextTone
     private var recordingTone: TextTone = .original
@@ -106,6 +106,7 @@ final class DictaFlowAppState: ObservableObject {
     let history: HistoryViewModel
     let historyStore: HistoryStoreProtocol?
     @Published private(set) var historyRetention: HistoryRetention
+    @Published private(set) var voiceHistoryRetention: VoiceHistoryRetention
     @Published private(set) var isHistoryProcessing = false
     @Published private(set) var processingHistoryID: UUID?
     private var activeHistoryCapture: HistoryCapture?
@@ -205,6 +206,10 @@ final class DictaFlowAppState: ObservableObject {
             self.stopRefinement()
             await self.refinementShutdownTask?.value
         }
+        // The store defaults to 30 days until told otherwise; push the
+        // persisted selection so an injected settings store stays authoritative.
+        let initialVoiceRetention = voiceHistoryRetention
+        Task { [weak self] in await self?.agentVoice?.setVoiceHistoryRetention(initialVoiceRetention) }
     }
 
     init(
@@ -245,6 +250,7 @@ final class DictaFlowAppState: ObservableObject {
         self.historyStore = historyStore
         self.history = HistoryViewModel(store: historyStore)
         self.historyRetention = settingsStore.historyRetention
+        self.voiceHistoryRetention = settingsStore.voiceHistoryRetention
         self.appAppearance = settingsStore.appAppearance
         self.settingsStore = settingsStore
         self.permissionService = permissionService
@@ -1837,6 +1843,25 @@ final class DictaFlowAppState: ObservableObject {
         return nil
     }
 
+    /// Voice retention twin of updateHistoryRetention: returns an affected
+    /// interaction count when shortening needs confirmation, leaving the
+    /// setting and stored history unchanged until the user confirms.
+    /// No recording-pipeline guard: voice pruning is independent of dictation
+    /// and never touches interactions with active attempts.
+    @discardableResult
+    func updateVoiceHistoryRetention(_ retention: VoiceHistoryRetention, confirmedDeletion: Bool = false) async -> Int? {
+        guard let voice = agentVoice else { return nil }
+        if !confirmedDeletion {
+            let count = await voice.countVoiceInteractionsExpiring(retention)
+            if count > 0 { return count }
+        }
+        await voice.setVoiceHistoryRetention(retention)
+        voiceHistoryRetention = retention
+        settingsStore.saveVoiceHistoryRetention(retention)
+        await voice.pruneVoiceHistory()
+        return nil
+    }
+
     func retryHistoryTranscription(model: WhisperModelDescriptor? = nil) {
         guard canProcessHistory, let id = history.selectedID, let historyStore else { return }
         let previousText = history.displayedText
@@ -1929,6 +1954,14 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     func copyHistoryText(_ text: String) {
+        textInsertionService.copyTextToPasteboard(text)
+    }
+
+    func copySetupSnippet(_ text: String) {
+        textInsertionService.copyTextToPasteboard(text)
+    }
+
+    func copyVoiceHistoryText(_ text: String) {
         textInsertionService.copyTextToPasteboard(text)
     }
 
@@ -2814,7 +2847,7 @@ final class DictaFlowAppState: ObservableObject {
             isOnboardingPracticeSession = false
             setPreservedStatusMessage("\(whisperConfiguration.speechModelName) is not prepared. Download it before recording.", issueTitle: "Speech model is missing")
             if usesLiquid {
-                agentVoiceTab = .models
+                agentVoiceTab = .general
                 showMainWindowPage(.agentVoice)
             } else {
                 showSpeechModels(focusing: whisperConfiguration.model)

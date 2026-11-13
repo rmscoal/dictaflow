@@ -511,6 +511,97 @@ final class AgentVoiceTests: XCTestCase {
         voice.shutdown(); await voice.waitForShutdown()
     }
 
+    func testStoppingOnePlaybackPreservesOtherQueuedResponses() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let player = VoicePlayerFixture()
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
+                                          runtime: VoiceRuntimeFixture(), appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
+        defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        voice.setEnabled(true)
+        let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
+        let first = try await prepareDraft(voice: voice, client: client, sessionID: "first")
+        let second = try await prepareDraft(voice: voice, client: client, sessionID: "second")
+        let third = try await prepareDraft(voice: voice, client: client, sessionID: "third")
+        let firstID = try XCTUnwrap(first.renditionID)
+        let secondID = try XCTUnwrap(second.renditionID)
+        let thirdID = try XCTUnwrap(third.renditionID)
+        await voice.playRendition(firstID)
+        try await waitUntil { voice.isSpeaking && player.playCount == 1 }
+        let firstAttempt = try XCTUnwrap(voice.history.flatMap(\.attempts).first { $0.renditionID == firstID })
+        await voice.playRendition(secondID)
+        await voice.playRendition(thirdID)
+        XCTAssertEqual(voice.history.flatMap(\.attempts).filter { $0.state == .queued }.count, 2)
+
+        await voice.stopPlayback(attemptID: firstAttempt.id)
+        try await waitUntil {
+            voice.isSpeaking && voice.history.flatMap(\.attempts).contains { $0.renditionID == secondID && $0.state == .playing }
+        }
+        XCTAssertEqual(player.playCount, 2)
+        XCTAssertEqual(voice.history.flatMap(\.attempts).first { $0.id == firstAttempt.id }?.state, .cancelled)
+        XCTAssertEqual(voice.history.first { $0.id == first.inputID }?.interaction.isSuppressed, true)
+        XCTAssertEqual(voice.history.first { $0.id == second.inputID }?.interaction.isSuppressed, false)
+        XCTAssertEqual(voice.history.flatMap(\.attempts).first { $0.renditionID == thirdID }?.state, .queued)
+
+        // A delayed click from the stopped bubble cannot stop the next response.
+        let stops = player.stopCount
+        await voice.stopPlayback(attemptID: firstAttempt.id)
+        XCTAssertEqual(player.stopCount, stops)
+        XCTAssertTrue(voice.isSpeaking)
+        XCTAssertEqual(voice.history.flatMap(\.attempts).first { $0.renditionID == secondID }?.state, .playing)
+
+        // The toolbar and floating control retain their global Stop behavior.
+        voice.stopSpeech()
+        await voice.waitForShutdown()
+        XCTAssertFalse(voice.isSpeaking)
+        for draft in [second, third] {
+            let record = try XCTUnwrap(voice.history.first { $0.id == draft.inputID })
+            XCTAssertTrue(record.interaction.isSuppressed)
+            XCTAssertEqual(record.attempts.last?.state, .cancelled)
+        }
+        voice.shutdown(); await voice.waitForShutdown()
+    }
+
+    func testStoppingExpiredSynthesisRejectsLateResultAndContinuesQueue() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let runtime = SuspendedVoiceRuntimeFixture()
+        let player = VoicePlayerFixture()
+        var limits = VoiceLimits()
+        limits.queueLifetime = 1
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
+                                          runtime: runtime, appIdentity: "df-test-\(UUID().uuidString.prefix(8))", limits: limits)
+        defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        voice.setEnabled(true)
+        let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
+        let first = try await prepareDraft(voice: voice, client: client, sessionID: "slow")
+        let second = try await prepareDraft(voice: voice, client: client, sessionID: "next")
+        await voice.playRendition(try XCTUnwrap(first.renditionID))
+        try await waitUntil { voice.isGenerating && voice.history.flatMap(\.attempts).contains { $0.state == .synthesizing } }
+        let attempt = try XCTUnwrap(voice.history.flatMap(\.attempts).first { $0.state == .synthesizing })
+        try await Task.sleep(for: .milliseconds(1_100))
+        await voice.playRendition(try XCTUnwrap(second.renditionID))
+        XCTAssertEqual(voice.history.flatMap(\.attempts).first { $0.id == attempt.id }?.state, .expired)
+
+        await voice.stopPlayback(attemptID: attempt.id)
+        XCTAssertFalse(voice.isGenerating, "Stop must release an in-flight runtime even after its attempt expires.")
+        await runtime.releaseLateResult()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !(await runtime.isSuspended), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let nextStarted = await runtime.isSuspended
+        XCTAssertTrue(nextStarted)
+        XCTAssertEqual(player.playCount, 0, "The cancelled synthesis result must never reach playback.")
+        await runtime.releaseLateResult()
+        try await waitUntil { voice.isSpeaking && player.playCount == 1 }
+        XCTAssertEqual(voice.history.first { $0.id == second.inputID }?.attempts.last?.state, .playing)
+        XCTAssertEqual(voice.history.first { $0.id == second.inputID }?.interaction.isSuppressed, false)
+        voice.shutdown(); await voice.waitForShutdown()
+    }
+
     func testManualModeRetainsResponseAndDeletionStopsPlayback() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"

@@ -203,6 +203,20 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func stopSpeech() { interruptActiveSpeech(suppress: true) }
 
+    /// Stops the playback shown in one bubble and continues unrelated queued speech.
+    func stopPlayback(attemptID: UUID) async {
+        guard let store else { return }
+        do {
+            let cancelled = try await store.stopPlayback(attemptID: attemptID)
+            if activeJob == attemptID {
+                // An expired attempt can still own an in-flight runtime call.
+                interruptActiveSpeech()
+            } else if !cancelled { return }
+            await refresh()
+            pump()
+        } catch { reportPlaybackError(error) }
+    }
+
     /// Suppresses a ready interaction so the overlay and queue move on.
     func dismissReadyInteraction(_ id: UUID) {
         guard let store else { return }
@@ -258,6 +272,52 @@ final class AgentVoiceCoordinator: ObservableObject {
                 await self?.refresh()
             } catch { self?.reportPlaybackError(error) }
         }
+    }
+
+    /// Deletes every interaction in a session (prompts, revisions, attempts,
+    /// events) with a single refresh. Interrupts active speech first when the
+    /// session owns it.
+    func deleteInteractions(_ ids: [UUID]) {
+        guard let store, !ids.isEmpty else { return }
+        if let active = activeInput, ids.contains(active) { interruptActiveSpeech() }
+        Task { [weak self] in
+            do {
+                for id in ids { _ = try await store.deleteInteraction(inputID: id) }
+                await self?.refresh()
+            } catch { self?.reportPlaybackError(error) }
+        }
+    }
+
+    /// Counts interactions a proposed voice retention would delete, for the
+    /// shorten-retention confirm dialog. Active playback is never counted.
+    func countVoiceInteractionsExpiring(_ retention: VoiceHistoryRetention) async -> Int {
+        guard let store else { return 0 }
+        do {
+            return try await store.countInteractionsExpiring(retention: retention.retentionInterval, now: Date())
+        } catch {
+            reportStorageError(error)
+            return 0
+        }
+    }
+
+    /// Applies a voice retention selection to the store and refreshes history.
+    /// Retention changes never interrupt active speech: prune skips
+    /// interactions with active attempts.
+    func setVoiceHistoryRetention(_ retention: VoiceHistoryRetention) async {
+        guard let store else { return }
+        do {
+            try await store.setHistoryRetentionInterval(retention.retentionInterval)
+            await refresh()
+        } catch { reportStorageError(error) }
+    }
+
+    /// Prunes expired voice history after a retention change and refreshes.
+    func pruneVoiceHistory() async {
+        guard let store else { return }
+        do {
+            _ = try await store.pruneHistory(now: Date())
+            await refresh()
+        } catch { reportStorageError(error) }
     }
 
     private func reportPlaybackError(_ error: Error) {
