@@ -740,9 +740,39 @@ final class AgentVoiceTests: XCTestCase {
         XCTAssertTrue(overlay.isControlVisible, "The control must appear while speech generates.")
         try await waitUntil { voice.isSpeaking }
         XCTAssertTrue(overlay.isControlVisible, "The control must stay visible while speaking.")
+        let collapsedFrame = try XCTUnwrap(overlay.controlFrame)
+        XCTAssertEqual(collapsedFrame.size, NSSize(width: 176, height: 44))
+        overlay.setHovered(true)
+        try await waitUntil { overlay.isControlExpanded && overlay.controlFrame?.width == 340 }
+        let expandedFrame = try XCTUnwrap(overlay.controlFrame)
+        XCTAssertEqual(expandedFrame.height, 68)
+        XCTAssertEqual(expandedFrame.maxX, collapsedFrame.maxX, accuracy: 0.5)
+        XCTAssertEqual(expandedFrame.minY, collapsedFrame.minY, accuracy: 0.5)
+
+        // Briefly leaving and re-entering must cancel the pending collapse.
+        overlay.setHovered(false)
+        try await Task.sleep(for: .milliseconds(80))
+        overlay.setHovered(true)
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertTrue(overlay.isControlExpanded)
+        // Re-enter during the actual shrink, rather than only during its delay.
+        overlay.setHovered(false)
+        try await waitUntil { !overlay.isControlExpanded && (overlay.controlFrame?.width ?? 340) < 340 }
+        overlay.setHovered(true)
+        try await waitUntil { overlay.isControlExpanded && overlay.controlFrame?.width == 340 }
+        XCTAssertEqual(overlay.controlFrame?.maxX ?? 0, collapsedFrame.maxX, accuracy: 0.5)
+        overlay.setHovered(false)
+        try await waitUntil { !overlay.isControlExpanded && overlay.controlFrame?.width == 176 }
+        XCTAssertEqual(overlay.controlFrame?.maxX ?? 0, collapsedFrame.maxX, accuracy: 0.5)
+
+        // A delayed hover must not reopen the control after speech stops.
+        overlay.setHovered(true)
         voice.stopSpeech()
         try await waitUntil { !voice.isSpeaking && !voice.isGenerating }
         try await waitUntil { !overlay.isControlVisible }
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertFalse(overlay.isControlVisible)
+        XCTAssertFalse(overlay.isControlExpanded)
         voice.shutdown(); await voice.waitForShutdown()
     }
 
@@ -770,6 +800,8 @@ final class AgentVoiceTests: XCTestCase {
         // The Stop must endorse the revision so the overlay can offer replay.
         try await waitUntil { voice.history.first?.interaction.stopEligibleRevision != nil }
         XCTAssertTrue(overlay.isControlVisible, "Manual mode must surface the Response ready control.")
+        overlay.setHovered(true)
+        try await waitUntil { overlay.isControlExpanded && overlay.controlFrame?.width == 360 }
         await voice.playRendition(try XCTUnwrap(response.renditionID))
         try await waitUntil { voice.isSpeaking }
         XCTAssertTrue(overlay.isControlVisible)
