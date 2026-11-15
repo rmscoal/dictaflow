@@ -48,6 +48,7 @@ struct AgentVoiceHostCard: View {
     let showSetupButton: Bool
     let canSetUp: Bool
     let isSettingUp: Bool
+    let isSetupDisabled: Bool
     let notice: String?
     let errorMessage: String?
     let copiedSetup: Bool
@@ -156,7 +157,7 @@ struct AgentVoiceHostCard: View {
         if offersOneClickSetup {
             Button(isSettingUp ? "Setting up…" : status == .checking ? "Checking…" : setupTitle, action: onSetUp)
                 .buttonStyle(EmberButtonStyle(primary: true))
-                .disabled(isSettingUp || status == .checking)
+                .disabled(isSetupDisabled || status == .checking)
                 .accessibilityLabel("\(setupTitle) Agent Voice for \(brand.displayName)")
                 .accessibilityHint(status.accessibilityDescription)
                 .accessibilityIdentifier("agent-voice-setup-\(brand.host.rawValue)")

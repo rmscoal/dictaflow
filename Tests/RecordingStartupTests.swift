@@ -583,6 +583,57 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(remaining.map(\.id), [ids[1]], "Confirmation only deletes recordings beyond the new retention")
     }
 
+    func testVoiceRetentionFailuresPreserveSelectionAndAllowRetry() async throws {
+        for failsCount in [true, false] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("VoiceRetention-\(UUID())")
+            let suite = "DictaFlow.VoiceRetentionTests.\(UUID())"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let voice = AgentVoiceCoordinator(defaults: defaults, supportDirectory: root,
+                                              appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
+            let fixture = try RecordingStartupFixture(agentVoice: voice)
+            defer {
+                fixture.cleanup()
+                defaults.removePersistentDomain(forName: suite)
+                try? FileManager.default.removeItem(at: root)
+            }
+            let database = try DatabaseQueue(path: root.appendingPathComponent("AgentVoice/voice.sqlite").path)
+            try await database.write { db in
+                if failsCount {
+                    try db.execute(sql: "ALTER TABLE inputs RENAME TO unavailable_inputs")
+                } else {
+                    try db.execute(sql: """
+                        CREATE TRIGGER fail_retention_write BEFORE INSERT ON settings
+                        WHEN NEW.key = 'historyRetentionInterval'
+                        BEGIN SELECT RAISE(ABORT, 'Injected retention write failure'); END
+                        """)
+                }
+            }
+
+            let selection: VoiceHistoryRetention = failsCount ? .sevenDays : .off
+            let confirmation = await fixture.state.updateVoiceHistoryRetention(selection)
+            XCTAssertNil(confirmation)
+            XCTAssertEqual(fixture.state.voiceHistoryRetention, .thirtyDays)
+            let savedDefaults = try XCTUnwrap(UserDefaults(suiteName: fixture.suiteName))
+            XCTAssertEqual(VoiceHistoryRetention.load(from: savedDefaults), .thirtyDays)
+            let stored = try await database.read { db in
+                try String.fetchOne(db, sql: "SELECT value FROM settings WHERE key = 'historyRetentionInterval'")
+            }
+            XCTAssertNil(stored, "A failed count or write must leave the database at its default")
+            XCTAssertEqual(voice.activeError?.scope, .setup)
+
+            try await database.write { db in
+                try db.execute(sql: failsCount
+                    ? "ALTER TABLE unavailable_inputs RENAME TO inputs"
+                    : "DROP TRIGGER fail_retention_write")
+            }
+            await fixture.state.updateVoiceHistoryRetention(selection)
+            XCTAssertEqual(fixture.state.voiceHistoryRetention, selection)
+            XCTAssertEqual(VoiceHistoryRetention.load(from: savedDefaults), selection)
+            voice.shutdown()
+            await voice.waitForShutdown()
+        }
+    }
+
     func testHistoryRetryFailurePreservesOriginalAndShowsError() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryPipeline-\(UUID())")
         let store = SQLiteHistoryStore(root: root)
@@ -1271,6 +1322,7 @@ private final class RecordingStartupFixture {
         refinementEnabled: Bool? = nil,
         refinementModel: RefinementModelDescriptor = .recommendedDefault,
         historyStore: HistoryStoreProtocol? = nil,
+        agentVoice: AgentVoiceCoordinator? = nil,
         promptStore: RefinementPromptStoreProtocol? = nil,
         allowsInsertion: Bool = false,
         hotkeyService: HotkeyServiceProtocol? = nil
@@ -1302,7 +1354,8 @@ private final class RecordingStartupFixture {
             textInsertionService: insertion,
             localNotificationService: notifications,
             appUpdateService: GitHubReleaseUpdateService(),
-            historyStore: historyStore
+            historyStore: historyStore,
+            agentVoice: agentVoice
         )
         state.attach(recordingOverlayRouter: overlay)
     }

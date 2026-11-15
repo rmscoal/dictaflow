@@ -1,4 +1,3 @@
-import AppKit
 import AgentVoice
 import SwiftUI
 
@@ -8,7 +7,7 @@ struct AgentVoiceConnectionsTab: View {
     @ObservedObject var voice: AgentVoiceCoordinator
     /// Copies setup snippets. Wired to the shared pasteboard writer so
     /// copied text is marked transient and concealed.
-    var onCopy: ((String) -> Void)?
+    var onCopy: (String) -> Void
     @State private var copiedConfirmation: String?
     @State private var selectedHost: AgentVoiceHostAvailability.Host?
     @State private var hostAvailability: [AgentVoiceHostAvailability.Host: AgentVoiceHostAvailability.Result] = [:]
@@ -143,6 +142,7 @@ struct AgentVoiceConnectionsTab: View {
             showSetupButton: host != .other,
             canSetUp: canSetUp(host),
             isSettingUp: settingUpHost == host,
+            isSetupDisabled: settingUpHost != nil,
             notice: setupHost == host ? setupNotice : nil,
             errorMessage: setupHost == host ? setupError : nil,
             copiedSetup: copiedConfirmation == Self.setupCopyKey(host),
@@ -215,6 +215,7 @@ struct AgentVoiceConnectionsTab: View {
     }
 
     private func setUp(_ host: Host) {
+        guard settingUpHost == nil else { return }
         let executable = Self.executablePath
         let appID = voice.appID
         let installationID = voice.installationID
@@ -283,12 +284,7 @@ struct AgentVoiceConnectionsTab: View {
     private static func hooksCopyKey(_ host: Host) -> String { "hooks-\(host.rawValue)" }
 
     private func copy(_ text: String, key: String) {
-        if let onCopy {
-            onCopy(text)
-        } else {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-        }
+        onCopy(text)
         copiedConfirmation = key
     }
 

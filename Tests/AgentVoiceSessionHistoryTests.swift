@@ -176,6 +176,23 @@ final class AgentVoiceSessionHistoryTests: XCTestCase {
         historyRecs = try await store.store.historyRecords(limit: 100)
         record = try XCTUnwrap(historyRecs.first)
         XCTAssertEqual(AgentVoiceSpeechStatus.headline(for: record), "Suppressed")
+
+        let replay = try await store.store.requestManualPlayback(renditionID: rendition.id)
+        for state in [VoiceState.queued, .synthesizing, .playing, .completed] {
+            if state == .synthesizing {
+                let job = try await store.store.nextJob()
+                XCTAssertEqual(job?.id, replay.id)
+            } else if state == .playing || state == .completed {
+                let previous: VoiceState = state == .playing ? .synthesizing : .playing
+                let transitioned = try await store.store.transition(replay.id, from: previous, to: state)
+                XCTAssertTrue(transitioned)
+            }
+            historyRecs = try await store.store.historyRecords(limit: 100)
+            record = try XCTUnwrap(historyRecs.first)
+            XCTAssertTrue(record.interaction.isSuppressed, "Manual playback preserves suppression")
+            let expected = state == .playing ? "Playing" : state == .completed ? "Suppressed" : "Generating speech"
+            XCTAssertEqual(AgentVoiceSpeechStatus.headline(for: record), expected)
+        }
     }
 
     func testThreadHeadlineFallsBackToOlderRecord() async throws {
@@ -240,6 +257,46 @@ final class AgentVoiceSessionHistoryTests: XCTestCase {
         XCTAssertNil(pruned)
         let remaining = try await store.store.historyRecords(limit: 100)
         XCTAssertEqual(remaining.count, 1)
+    }
+
+    func testRetentionCountIncludesActivePlaybackAndPruningWaitsForCompletion() async throws {
+        let store = try makeStore()
+        defer { cleanup(store) }
+        let connection = UUID()
+        let now = Date()
+        let old = now.addingTimeInterval(-8 * 86400)
+        let session = VoiceSession(installationID: UUID(), host: "codex", sessionID: "active-retention")
+        let attachment = try await attach(store, session: session, connection: connection, now: old)
+        let input = try await prompt(store, session: session, attachment: attachment, turn: "old-turn",
+                                     text: "Old prompt", connection: connection, now: old)
+        var request = VoiceRequest(session: session, operation: .prepare, attachment: attachment,
+                                   inputID: input, text: "Old response")
+        request.issuedAt = old
+        let reply = try await store.store.handle(request, connectionID: connection, now: old)
+        let replay = try await store.store.requestManualPlayback(renditionID: XCTUnwrap(reply.renditionID), now: now)
+
+        let count = try await store.store.countInteractionsExpiring(retention: 7 * 86400, now: now)
+        XCTAssertEqual(count, 1, "Confirmation includes interactions that will expire after playback")
+        try await store.store.setHistoryRetentionInterval(7 * 86400)
+        for state in [VoiceState.queued, .synthesizing, .playing] {
+            if state == .synthesizing {
+                let job = try await store.store.nextJob(now: now)
+                XCTAssertEqual(job?.id, replay.id)
+            } else if state == .playing {
+                let transitioned = try await store.store.transition(replay.id, from: .synthesizing, to: .playing, now: now)
+                XCTAssertTrue(transitioned)
+            }
+            let activeCount = try await store.store.countInteractionsExpiring(retention: 7 * 86400, now: now)
+            XCTAssertEqual(activeCount, 1)
+            let pruned = try await store.store.pruneHistory(now: now)
+            XCTAssertEqual(pruned, 0, "Active playback must survive the retention change")
+        }
+        let completed = try await store.store.transition(replay.id, from: .playing, to: .completed, now: now)
+        XCTAssertTrue(completed)
+        let pruned = try await store.store.pruneHistory(now: now)
+        XCTAssertEqual(pruned, 1)
+        let remaining = try await store.store.interaction(inputID: input)
+        XCTAssertNil(remaining)
     }
 
     func testOffStopsRetainingNewHistoryButKeepsExisting() async throws {

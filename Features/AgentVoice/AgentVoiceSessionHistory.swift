@@ -47,7 +47,6 @@ enum AgentVoiceSpeechStatus {
     static let noResponse = "No spoken response"
 
     static func headline(for record: VoiceHistoryRecord) -> String {
-        if record.interaction.isSuppressed { return "Suppressed" }
         if let active = record.attempts.first(where: { !$0.state.isTerminal }) {
             switch active.state {
             case .playing: return "Playing"
@@ -55,6 +54,7 @@ enum AgentVoiceSpeechStatus {
             default: return "In progress"
             }
         }
+        if record.interaction.isSuppressed { return "Suppressed" }
         if record.interaction.currentRenditionID != nil ||
             !record.renditions.isEmpty { return "Ready to play" }
         return noResponse

@@ -1,6 +1,7 @@
 import AgentVoice
 import AVFoundation
 import Foundation
+import GRDB
 import XCTest
 @testable import DictaFlow_Dev
 
@@ -600,6 +601,60 @@ final class AgentVoiceTests: XCTestCase {
         XCTAssertEqual(voice.history.first { $0.id == second.inputID }?.attempts.last?.state, .playing)
         XCTAssertEqual(voice.history.first { $0.id == second.inputID }?.interaction.isSuppressed, false)
         voice.shutdown(); await voice.waitForShutdown()
+    }
+
+    func testDeletingActiveInteractionContinuesOtherQueuedSpeech() async throws {
+        for deleteSession in [false, true] {
+            try await assertDeletionContinuesQueue(deleteSession: deleteSession, failDeletion: false)
+        }
+    }
+
+    func testFailedDeletionContinuesOtherQueuedSpeech() async throws {
+        for deleteSession in [false, true] {
+            try await assertDeletionContinuesQueue(deleteSession: deleteSession, failDeletion: true)
+        }
+    }
+
+    private func assertDeletionContinuesQueue(deleteSession: Bool, failDeletion: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let player = VoicePlayerFixture()
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
+                                          runtime: VoiceRuntimeFixture(), appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
+        defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        voice.setEnabled(true)
+        let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
+        let first = try await prepareDraft(voice: voice, client: client, sessionID: "delete")
+        let second = try await prepareDraft(voice: voice, client: client, sessionID: "keep")
+        await voice.playRendition(try XCTUnwrap(first.renditionID))
+        try await waitUntil { voice.isSpeaking && player.playCount == 1 }
+        await voice.playRendition(try XCTUnwrap(second.renditionID))
+        XCTAssertEqual(voice.history.first { $0.id == second.inputID }?.attempts.last?.state, .queued)
+
+        if failDeletion {
+            let database = try DatabaseQueue(path: root.appendingPathComponent("AgentVoice/voice.sqlite").path)
+            try await database.write { db in
+                try db.execute(sql: """
+                    CREATE TRIGGER fail_deletion BEFORE DELETE ON inputs
+                    BEGIN SELECT RAISE(ABORT, 'Injected deletion failure'); END
+                    """)
+            }
+        }
+        let input = try XCTUnwrap(first.inputID)
+        if deleteSession { voice.deleteInteractions([input]) }
+        else { voice.deleteInteraction(input) }
+        XCTAssertFalse(voice.isSpeaking, "Deleting the active interaction stops playback synchronously")
+        try await waitUntil {
+            voice.isSpeaking && voice.history.first { $0.id == second.inputID }?.attempts.last?.state == .playing
+        }
+        XCTAssertEqual(player.playCount, 2, "Queued speech must resume without another bridge or UI action")
+        XCTAssertEqual(voice.history.contains { $0.id == input }, failDeletion)
+        if failDeletion {
+            XCTAssertTrue(voice.activeError?.message.contains("Injected deletion failure") == true)
+        }
+        voice.shutdown()
+        await voice.waitForShutdown()
     }
 
     func testManualModeRetainsResponseAndDeletionStopsPlayback() async throws {

@@ -209,7 +209,11 @@ final class DictaFlowAppState: ObservableObject {
         // The store defaults to 30 days until told otherwise; push the
         // persisted selection so an injected settings store stays authoritative.
         let initialVoiceRetention = voiceHistoryRetention
-        Task { [weak self] in await self?.agentVoice?.setVoiceHistoryRetention(initialVoiceRetention) }
+        Task { [weak self] in
+            guard let voice = self?.agentVoice else { return }
+            do { try await voice.setVoiceHistoryRetention(initialVoiceRetention) }
+            catch { voice.reportStorageError(error) }
+        }
     }
 
     init(
@@ -226,7 +230,8 @@ final class DictaFlowAppState: ObservableObject {
         textInsertionService: TextInsertionServiceProtocol,
         localNotificationService: LocalNotificationServiceProtocol,
         appUpdateService: AppUpdateChecking,
-        historyStore: HistoryStoreProtocol? = nil
+        historyStore: HistoryStoreProtocol? = nil,
+        agentVoice: AgentVoiceCoordinator? = nil
     ) {
         var initialRefinementConfiguration = settingsStore.refinementConfiguration
         if initialRefinementConfiguration.writingStyleVersion == 0 {
@@ -248,6 +253,7 @@ final class DictaFlowAppState: ObservableObject {
         let initialPromptText = refinementPromptStore.promptTemplate()
 
         self.historyStore = historyStore
+        self.agentVoice = agentVoice
         self.history = HistoryViewModel(store: historyStore)
         self.historyRetention = settingsStore.historyRetention
         self.voiceHistoryRetention = settingsStore.voiceHistoryRetention
@@ -1847,18 +1853,22 @@ final class DictaFlowAppState: ObservableObject {
     /// interaction count when shortening needs confirmation, leaving the
     /// setting and stored history unchanged until the user confirms.
     /// No recording-pipeline guard: voice pruning is independent of dictation
-    /// and never touches interactions with active attempts.
+    /// and defers pruning interactions with active attempts until they settle.
     @discardableResult
     func updateVoiceHistoryRetention(_ retention: VoiceHistoryRetention, confirmedDeletion: Bool = false) async -> Int? {
         guard let voice = agentVoice else { return nil }
-        if !confirmedDeletion {
-            let count = await voice.countVoiceInteractionsExpiring(retention)
-            if count > 0 { return count }
+        do {
+            if !confirmedDeletion {
+                let count = try await voice.countVoiceInteractionsExpiring(retention)
+                if count > 0 { return count }
+            }
+            try await voice.setVoiceHistoryRetention(retention)
+            voiceHistoryRetention = retention
+            settingsStore.saveVoiceHistoryRetention(retention)
+            await voice.pruneVoiceHistory()
+        } catch {
+            voice.reportStorageError(error)
         }
-        await voice.setVoiceHistoryRetention(retention)
-        voiceHistoryRetention = retention
-        settingsStore.saveVoiceHistoryRetention(retention)
-        await voice.pruneVoiceHistory()
         return nil
     }
 

@@ -410,15 +410,14 @@ public actor VoiceStore {
     }
 
     /// Counts interactions a proposed retention would delete, for the
-    /// shorten-retention confirm dialog. Like pruneHistory it only counts
-    /// interactions without active attempts; like HistoryStore it returns 0
-    /// for Off. Evaluated against creation dates because expiry is restamped
-    /// on apply, so the count matches the prune that follows confirmation.
+    /// shorten-retention confirm dialog, including active interactions that
+    /// will be pruned after playback settles. Returns 0 for Off. Evaluated
+    /// against creation dates because expiry is restamped on apply.
     public func countInteractionsExpiring(retention: TimeInterval?, now: Date = Date()) throws -> Int {
         guard let retention, retention > 0 else { return 0 }
         return try database.read { db in
             let cutoff = now.addingTimeInterval(-retention).timeIntervalSince1970
-            return try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM inputs WHERE created <= ? AND \(Self.inactiveInputs)",
+            return try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM inputs WHERE created <= ?",
                                     arguments: [cutoff]) ?? 0
         }
     }

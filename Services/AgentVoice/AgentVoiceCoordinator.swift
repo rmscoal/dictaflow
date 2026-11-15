@@ -271,6 +271,7 @@ final class AgentVoiceCoordinator: ObservableObject {
                 _ = try await store.deleteInteraction(inputID: id)
                 await self?.refresh()
             } catch { self?.reportPlaybackError(error) }
+            self?.pump()
         }
     }
 
@@ -285,30 +286,24 @@ final class AgentVoiceCoordinator: ObservableObject {
                 for id in ids { _ = try await store.deleteInteraction(inputID: id) }
                 await self?.refresh()
             } catch { self?.reportPlaybackError(error) }
+            self?.pump()
         }
     }
 
     /// Counts interactions a proposed voice retention would delete, for the
-    /// shorten-retention confirm dialog. Active playback is never counted.
-    func countVoiceInteractionsExpiring(_ retention: VoiceHistoryRetention) async -> Int {
-        guard let store else { return 0 }
-        do {
-            return try await store.countInteractionsExpiring(retention: retention.retentionInterval, now: Date())
-        } catch {
-            reportStorageError(error)
-            return 0
-        }
+    /// shorten-retention confirm dialog, including deferred deletion after playback.
+    func countVoiceInteractionsExpiring(_ retention: VoiceHistoryRetention) async throws -> Int {
+        guard let store else { throw VoiceError.unavailable("Agent Voice storage is unavailable.") }
+        return try await store.countInteractionsExpiring(retention: retention.retentionInterval, now: Date())
     }
 
     /// Applies a voice retention selection to the store and refreshes history.
     /// Retention changes never interrupt active speech: prune skips
     /// interactions with active attempts.
-    func setVoiceHistoryRetention(_ retention: VoiceHistoryRetention) async {
-        guard let store else { return }
-        do {
-            try await store.setHistoryRetentionInterval(retention.retentionInterval)
-            await refresh()
-        } catch { reportStorageError(error) }
+    func setVoiceHistoryRetention(_ retention: VoiceHistoryRetention) async throws {
+        guard let store else { throw VoiceError.unavailable("Agent Voice storage is unavailable.") }
+        try await store.setHistoryRetentionInterval(retention.retentionInterval)
+        await refresh()
     }
 
     /// Prunes expired voice history after a retention change and refreshes.
@@ -438,7 +433,7 @@ final class AgentVoiceCoordinator: ObservableObject {
     }
 
     /// Publishes a storage failure as the coordinator's setup error status.
-    private func reportStorageError(_ error: Error) {
+    func reportStorageError(_ error: Error) {
         status = "Agent Voice storage failed: \(error.localizedDescription)"
         activeError = AgentVoiceError(scope: .setup, message: status)
     }
