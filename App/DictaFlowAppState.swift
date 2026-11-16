@@ -111,6 +111,7 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var processingHistoryID: UUID?
     private var activeHistoryCapture: HistoryCapture?
     private var historyRetryTask: Task<Void, Never>?
+    private var voiceHistoryRetentionTask: Task<Int?, Never>?
 
     let launchExperience: AppLaunchExperience
     @Published private(set) var whisperConfiguration: WhisperConfiguration
@@ -206,14 +207,7 @@ final class DictaFlowAppState: ObservableObject {
             self.stopRefinement()
             await self.refinementShutdownTask?.value
         }
-        // The store defaults to 30 days until told otherwise; push the
-        // persisted selection so an injected settings store stays authoritative.
-        let initialVoiceRetention = voiceHistoryRetention
-        Task { [weak self] in
-            guard let voice = self?.agentVoice else { return }
-            do { try await voice.setVoiceHistoryRetention(initialVoiceRetention) }
-            catch { voice.reportStorageError(error) }
-        }
+        applyInitialVoiceHistoryRetention()
     }
 
     init(
@@ -323,6 +317,7 @@ final class DictaFlowAppState: ObservableObject {
         }
         configureWorkspaceObservers()
         updateStatusMessage()
+        applyInitialVoiceHistoryRetention()
     }
 
     var appVersionText: String {
@@ -1856,20 +1851,49 @@ final class DictaFlowAppState: ObservableObject {
     /// and defers pruning interactions with active attempts until they settle.
     @discardableResult
     func updateVoiceHistoryRetention(_ retention: VoiceHistoryRetention, confirmedDeletion: Bool = false) async -> Int? {
-        guard let voice = agentVoice else { return nil }
-        do {
-            if !confirmedDeletion {
-                let count = try await voice.countVoiceInteractionsExpiring(retention)
-                if count > 0 { return count }
+        let task = enqueueVoiceHistoryRetentionUpdate { state in
+            guard let voice = state.agentVoice else { return nil }
+            do {
+                if !confirmedDeletion {
+                    let count = try await voice.countVoiceInteractionsExpiring(retention)
+                    if count > 0 { return count }
+                }
+                try await voice.setVoiceHistoryRetention(retention)
+                state.voiceHistoryRetention = retention
+                state.settingsStore.saveVoiceHistoryRetention(retention)
+                await voice.pruneVoiceHistory()
+            } catch {
+                voice.reportStorageError(error)
             }
-            try await voice.setVoiceHistoryRetention(retention)
-            voiceHistoryRetention = retention
-            settingsStore.saveVoiceHistoryRetention(retention)
-            await voice.pruneVoiceHistory()
-        } catch {
-            voice.reportStorageError(error)
+            return nil
         }
-        return nil
+        return await task.value
+    }
+
+    private func applyInitialVoiceHistoryRetention() {
+        guard agentVoice != nil else { return }
+        let retention = voiceHistoryRetention
+        enqueueVoiceHistoryRetentionUpdate { state in
+            do { try await state.agentVoice?.setVoiceHistoryRetention(retention) }
+            catch { state.agentVoice?.reportStorageError(error) }
+            return nil
+        }
+    }
+
+    /// MainActor methods can interleave at awaits. Keep the database write,
+    /// history refresh, and preference publication in one ordered operation.
+    @discardableResult
+    private func enqueueVoiceHistoryRetentionUpdate(
+        _ operation: @escaping @MainActor (DictaFlowAppState) async -> Int?
+    ) -> Task<Int?, Never> {
+        let previous = voiceHistoryRetentionTask
+        let task = Task<Int?, Never> { [weak self] in
+            _ = await previous?.value
+            guard let self else { return nil }
+            return await operation(self)
+        }
+        voiceHistoryRetentionTask = task
+        return task
     }
 
     func retryHistoryTranscription(model: WhisperModelDescriptor? = nil) {

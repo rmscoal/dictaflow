@@ -60,6 +60,7 @@ final class AgentVoiceCoordinator: ObservableObject {
     private let defaults: UserDefaults
     private let player: AgentSpeechPlayerProtocol
     private let beforeIdleRefresh: (() async -> Void)?
+    private let beforeRetentionRefresh: ((VoiceHistoryRetention) async -> Void)?
     private let logger = Logger(subsystem: "com.dictaflow.agentvoice", category: "Coordinator")
     private var store: VoiceStore?
     private var bridge: LocalVoiceServer?
@@ -75,9 +76,11 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     init(defaults: UserDefaults = .standard, player: AgentSpeechPlayerProtocol? = nil,
          supportDirectory: URL? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil,
-         limits: VoiceLimits = VoiceLimits(), beforeIdleRefresh: (() async -> Void)? = nil) {
+         limits: VoiceLimits = VoiceLimits(), beforeIdleRefresh: (() async -> Void)? = nil,
+         beforeRetentionRefresh: ((VoiceHistoryRetention) async -> Void)? = nil) {
         self.defaults = defaults; self.player = player ?? AgentSpeechPlayer()
         self.beforeIdleRefresh = beforeIdleRefresh
+        self.beforeRetentionRefresh = beforeRetentionRefresh
         appID = appIdentity ?? (Bundle.main.bundleIdentifier == "com.dictaflow" ? "com.dictaflow" : "com.dictaflow.dev")
         let name = appID == "com.dictaflow" ? "DictaFlow" : "DictaFlow Dev"
         let support = supportDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(name)
@@ -303,6 +306,7 @@ final class AgentVoiceCoordinator: ObservableObject {
     func setVoiceHistoryRetention(_ retention: VoiceHistoryRetention) async throws {
         guard let store else { throw VoiceError.unavailable("Agent Voice storage is unavailable.") }
         try await store.setHistoryRetentionInterval(retention.retentionInterval)
+        await beforeRetentionRefresh?(retention)
         await refresh()
     }
 

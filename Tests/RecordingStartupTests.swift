@@ -583,6 +583,74 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(remaining.map(\.id), [ids[1]], "Confirmation only deletes recordings beyond the new retention")
     }
 
+    func testVoiceRetentionUpdatesWaitForEarlierRefreshAndPublication() async throws {
+        try await checkVoiceRetentionUpdateOrdering(duringStartup: false)
+    }
+
+    func testVoiceRetentionUpdateWaitsForInitialApplication() async throws {
+        try await checkVoiceRetentionUpdateOrdering(duringStartup: true)
+    }
+
+    private func checkVoiceRetentionUpdateOrdering(duringStartup: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("VoiceRetention-\(UUID())")
+        let suite = "DictaFlow.VoiceRetentionTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let paused = expectation(description: "Earlier retention write committed before refresh")
+        let blockedRetention: VoiceHistoryRetention = duringStartup ? .sevenDays : .off
+        var resumeRefresh: CheckedContinuation<Void, Never>?
+        var didPause = false
+        let voice = AgentVoiceCoordinator(
+            defaults: defaults, supportDirectory: root,
+            appIdentity: "df-test-\(UUID().uuidString.prefix(8))",
+            beforeRetentionRefresh: { retention in
+                guard retention == blockedRetention, !didPause else { return }
+                didPause = true
+                await withCheckedContinuation { continuation in
+                    resumeRefresh = continuation
+                    paused.fulfill()
+                }
+            }
+        )
+        let fixture = try RecordingStartupFixture(
+            agentVoice: voice, voiceHistoryRetention: duringStartup ? .sevenDays : .thirtyDays
+        )
+        defer {
+            resumeRefresh?.resume()
+            fixture.cleanup()
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let earlierUpdate: Task<Int?, Never>? = duringStartup ? nil : Task {
+            await fixture.state.updateVoiceHistoryRetention(.off)
+        }
+        await fulfillment(of: [paused], timeout: 2)
+
+        let laterFinished = expectation(description: "Later update waits for the complete earlier operation")
+        laterFinished.isInverted = true
+        let laterUpdate = Task {
+            let result = await fixture.state.updateVoiceHistoryRetention(.thirtyDays)
+            laterFinished.fulfill()
+            return result
+        }
+        await fulfillment(of: [laterFinished], timeout: 0.15)
+        resumeRefresh?.resume()
+        resumeRefresh = nil
+        _ = await earlierUpdate?.value
+        _ = await laterUpdate.value
+
+        let database = try DatabaseQueue(path: root.appendingPathComponent("AgentVoice/voice.sqlite").path)
+        let stored = try await database.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM settings WHERE key = 'historyRetentionInterval'")
+        }
+        XCTAssertEqual(stored.flatMap(Double.init), VoiceHistoryRetention.thirtyDays.retentionInterval)
+        XCTAssertEqual(fixture.state.voiceHistoryRetention, .thirtyDays)
+        let savedDefaults = try XCTUnwrap(UserDefaults(suiteName: fixture.suiteName))
+        XCTAssertEqual(VoiceHistoryRetention.load(from: savedDefaults), .thirtyDays)
+        XCTAssertNil(voice.activeError)
+        voice.shutdown()
+        await voice.waitForShutdown()
+    }
+
     func testVoiceRetentionFailuresPreserveSelectionAndAllowRetry() async throws {
         for failsCount in [true, false] {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("VoiceRetention-\(UUID())")
@@ -1323,6 +1391,7 @@ private final class RecordingStartupFixture {
         refinementModel: RefinementModelDescriptor = .recommendedDefault,
         historyStore: HistoryStoreProtocol? = nil,
         agentVoice: AgentVoiceCoordinator? = nil,
+        voiceHistoryRetention: VoiceHistoryRetention = .thirtyDays,
         promptStore: RefinementPromptStoreProtocol? = nil,
         allowsInsertion: Bool = false,
         hotkeyService: HotkeyServiceProtocol? = nil
@@ -1331,6 +1400,7 @@ private final class RecordingStartupFixture {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let settings = UserDefaultsSettingsStore(defaults: try XCTUnwrap(UserDefaults(suiteName: suiteName)))
         settings.saveAutomaticallyChecksForUpdates(false)
+        settings.saveVoiceHistoryRetention(voiceHistoryRetention)
         settings.saveRecordingPlaybackBehavior(.lowerSystemVolume)
         var refinementConfiguration = RefinementConfiguration.default
         refinementConfiguration.model = refinementModel
