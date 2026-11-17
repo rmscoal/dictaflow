@@ -23,6 +23,10 @@ enum AgentVoiceHostInstaller {
         var hooksEntryFound: Bool = false
         var hooksMatchCurrent: Bool = false
         var entryDisabled: Bool = false
+        /// The installed host CLI is below the version Agent Voice requires
+        /// (Codex 0.156.0 for caller identity). The helper rejects every call
+        /// from such a host, so no entry state may report it ready.
+        var versionUnsupported: Bool = false
 
         var hooksConfigured: Bool { hooksEntryFound && hooksMatchCurrent }
 
@@ -32,9 +36,11 @@ enum AgentVoiceHostInstaller {
             case foundNotConfigured
             case configured
             case disabled
+            case unsupportedVersion
         }
 
         var status: Status {
+            if versionUnsupported { return .unsupportedVersion }
             if entryDisabled { return .disabled }
             if configuredEntryFound, entryMatchesCurrent { return .configured }
             if cliPath != nil { return .foundNotConfigured }
@@ -211,6 +217,16 @@ enum AgentVoiceHostInstaller {
             return .manualOnly(cliPath: cliPath)
         case .codex:
             guard let cliPath else { return HostState(cliPath: nil, configuredEntryFound: false, entryMatchesCurrent: false) }
+            // Setup refuses Codex below 0.156.0 and the helper rejects every
+            // call from it, so an entry check must not report such an install
+            // ready. A failed probe is not version evidence: fall through to
+            // the entry check, which will fail on its own.
+            if let version = try? await withTimeout(seconds: 30, host: host.name, operation: {
+                try await runner.run(executablePath: cliPath, arguments: ["--version"])
+            }), version.exitCode != 0 || !supportsCodexIdentity(version.stdout) {
+                return HostState(cliPath: cliPath, configuredEntryFound: false,
+                                 entryMatchesCurrent: false, versionUnsupported: true)
+            }
             guard let output = try? await withTimeout(seconds: 30, host: host.name, operation: {
                 try await runner.run(executablePath: cliPath, arguments: ["mcp", "get", "--json", "dictaflow"])
             }) else { return HostState(cliPath: cliPath, configuredEntryFound: false, entryMatchesCurrent: false) }

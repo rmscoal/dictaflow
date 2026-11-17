@@ -9,6 +9,9 @@ enum AgentVoiceHostCardStatus: Equatable {
     case notFound
     case manualOnly
     case checking
+    /// The installed host is below the version Agent Voice requires; the
+    /// associated text names the update the user needs.
+    case unsupportedVersion(String)
 
     var accessibilityDescription: String {
         switch self {
@@ -16,6 +19,8 @@ enum AgentVoiceHostCardStatus: Equatable {
             hooksInstalled
                 ? "MCP and voice hooks are configured."
                 : "MCP is configured but voice hooks are missing."
+        case .unsupportedVersion(let requirement):
+            requirement
         case .needsSetup:
             "Found on this Mac. DictaFlow entry not configured."
         case .disabledInHost:
@@ -71,6 +76,8 @@ struct AgentVoiceHostCard: View {
             return nil
         case .disabledInHost:
             return "Enable DictaFlow in \(brand.displayName) settings."
+        case .unsupportedVersion(let requirement):
+            return requirement
         case .notFound:
             return canSetUp ? hint : "Install \(brand.displayName), then reopen this page."
         }

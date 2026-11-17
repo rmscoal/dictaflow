@@ -168,6 +168,8 @@ struct AgentVoiceConnectionsTab: View {
             switch state.status {
             case .configured:
                 return .ready(hooksInstalled: state.hooksConfigured)
+            case .unsupportedVersion:
+                return .unsupportedVersion("Update Codex to stable 0.156.0 or later, then run setup again. Agent Voice cannot work with this Codex version.")
             case .disabled:
                 return .disabledInHost
             case .foundNotConfigured:

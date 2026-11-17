@@ -230,6 +230,44 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: configURL), config)
     }
 
+    func testRefreshStateReportsUnsupportedCodexVersionWithoutCheckingEntry() async throws {
+        let executable = try makeExecutable()
+        let home = try makeHome()
+        let calls = CallLog()
+        let runner = StubRunner(handlers: [{ _, args in
+            calls.record(args)
+            if args == ["--version"] {
+                return .init(exitCode: 0, stdout: "codex-cli 0.155.0", stderr: "")
+            }
+            return .init(exitCode: 0, stdout: "configured", stderr: "")
+        }])
+        let state = await AgentVoiceHostInstaller.refreshState(
+            host: .codex, executable: executable, appID: "com.dictaflow.dev",
+            installationID: installation, runner: runner, homeDirectoryURL: home,
+            cliDiscovery: { _ in "/bin/codex" })
+        XCTAssertEqual(state.status, .unsupportedVersion,
+                       "Codex below 0.156.0 rejects every voice call, so refresh must not report it ready.")
+        XCTAssertEqual(calls.all, [["--version"]],
+                       "The version probe must decide before any entry check runs.")
+    }
+
+    func testRefreshStateReportsConfiguredCodexAtVersionFloor() async throws {
+        let executable = try makeExecutable()
+        let expectedArgs = arguments(host: .codex)
+        let payload: [String: Any] = ["transport": ["type": "stdio", "command": executable, "args": expectedArgs]]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+        let runner = StubRunner(handlers: [
+            { _, args in args == ["mcp", "get", "--json", "dictaflow"]
+                ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: json, stderr: "") : nil },
+        ])
+        let home = try makeHome()
+        let state = await AgentVoiceHostInstaller.refreshState(
+            host: .codex, executable: executable, appID: "com.dictaflow.dev",
+            installationID: installation, runner: runner, homeDirectoryURL: home,
+            cliDiscovery: { _ in "/bin/codex" })
+        XCTAssertEqual(state.status, .configured)
+    }
+
     private final class CallLog: Sendable {
         private let lock = NSLock()
         private var calls: [[String]] = []
@@ -880,5 +918,11 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         XCTAssertEqual(
             AgentVoiceHostInstaller.HostState(cliPath: nil, configuredEntryFound: false,
                                               entryMatchesCurrent: false).status, .notFound)
+        // An unsupported host version dominates even a matching entry: the
+        // helper would reject every call from that host.
+        XCTAssertEqual(
+            AgentVoiceHostInstaller.HostState(cliPath: "/bin/codex", configuredEntryFound: true,
+                                              entryMatchesCurrent: true,
+                                              versionUnsupported: true).status, .unsupportedVersion)
     }
 }
