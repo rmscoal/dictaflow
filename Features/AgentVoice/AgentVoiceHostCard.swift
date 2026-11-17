@@ -184,9 +184,8 @@ struct AgentVoiceHostCard: View {
                 Button(action: onCopy) {
                     Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
                 }
-                .buttonStyle(.plain).font(.system(size: 11))
+                .buttonStyle(EmberInlineActionButtonStyle()).font(.system(size: 11))
                 .foregroundStyle(copied ? AppTheme.modelActive : AppTheme.primaryText)
-                .padding(4)
                 .accessibilityLabel("Copy \(brand.displayName) \(title)")
             }
             .padding(.horizontal, 12).padding(.vertical, 6)

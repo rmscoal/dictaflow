@@ -112,7 +112,10 @@ struct AgentVoiceHistoryTab: View {
                     .textFieldStyle(.plain).font(.system(size: 12))
                     .accessibilityLabel("Search voice history")
                 if !searchQuery.isEmpty {
-                    Button { searchQuery = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    Button { searchQuery = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .frame(width: 22, height: 22).contentShape(Rectangle())
+                    }
                         .buttonStyle(.plain).foregroundStyle(AppTheme.secondaryText)
                         .accessibilityLabel("Clear search")
                 }
@@ -452,14 +455,14 @@ struct AgentVoiceHistoryTab: View {
             if let active {
                 if active.state == .playing || active.state == .synthesizing {
                     Button("Stop", systemImage: "stop.fill") { Task { await voice.stopPlayback(attemptID: active.id) } }
-                        .buttonStyle(.plain).font(.system(size: 11))
+                        .buttonStyle(EmberInlineActionButtonStyle()).font(.system(size: 11))
                         .accessibilityLabel("Stop this response")
                 } else {
                     ProgressView().controlSize(.small).accessibilityLabel("Speech queued")
                 }
             } else {
                 Button("Play", systemImage: "play.fill") { Task { await voice.playRendition(revision.id) } }
-                    .buttonStyle(.plain).font(.system(size: 11))
+                    .buttonStyle(EmberInlineActionButtonStyle()).font(.system(size: 11))
                     .foregroundStyle(AppTheme.accent)
                     .disabled(!voice.isEnabled || !voice.isModelReady)
                     .accessibilityLabel("Play this revision")
@@ -482,7 +485,7 @@ struct AgentVoiceHistoryTab: View {
                 Button(expanded ? "Show less" : "Show more") {
                     if expanded { expandedMessages.remove(key) } else { expandedMessages.insert(key) }
                 }
-                .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(AppTheme.accent)
+                .buttonStyle(EmberInlineActionButtonStyle()).font(.system(size: 11)).foregroundStyle(AppTheme.accent)
             }
         }
     }

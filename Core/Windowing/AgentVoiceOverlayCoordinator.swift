@@ -339,6 +339,7 @@ private struct AgentVoiceOverlayButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(Color(nsColor: .labelColor).opacity(isProminent ? 0 : 0.08))
             }
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }
