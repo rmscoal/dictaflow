@@ -192,10 +192,8 @@ final class DictaFlowAppState: ObservableObject {
         // or recover/cancel speech from a separately running installed Dev app.
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         agentVoice = AgentVoiceCoordinator()
+        observeAgentVoiceDownloads()
         if let agentVoice {
-            agentVoiceModelObservation = agentVoice.$isModelReady.combineLatest(agentVoice.$isDownloading)
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] _ in self?.objectWillChange.send() }
             agentVoiceOverlay = AgentVoiceOverlayCoordinator(voice: agentVoice) { [weak self] in
                 self?.toggleDictation()
             }
@@ -316,8 +314,25 @@ final class DictaFlowAppState: ObservableObject {
             refinementWritingError = "Could not load additional instructions. " + error.localizedDescription
         }
         configureWorkspaceObservers()
+        observeAgentVoiceDownloads()
         updateStatusMessage()
         applyInitialVoiceHistoryRetention()
+    }
+
+    private func observeAgentVoiceDownloads() {
+        guard let agentVoice else { return }
+        agentVoiceModelObservation = agentVoice.$isModelReady.combineLatest(agentVoice.$modelDownloadProgress, agentVoice.$activeError)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+        agentVoice.onModelDownloadFinished = { [weak self] result in
+            switch result {
+            case .success:
+                self?.recordDownloadCompletion(.liquid(), kind: .completed, message: "Liquid LFM3-Audio-2B is ready.")
+            case .failure(let error):
+                self?.recordDownloadCompletion(.liquid(hasFailed: true), kind: .failed,
+                                               message: "Could not download Liquid LFM3-Audio-2B. \(error.localizedDescription)")
+            }
+        }
     }
 
     var appVersionText: String {

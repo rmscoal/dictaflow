@@ -61,7 +61,11 @@ struct DownloadActivitiesPopover: View {
                 pendingCancellation = nil
             }
         } message: { activity in
-            Text("The partial download of \(activity.name) will be removed. Downloading again will start from the beginning.")
+            if activity.target == .liquid {
+                Text("The partial file will be removed. Any verified model files will be kept for retry.")
+            } else {
+                Text("The partial download of \(activity.name) will be removed. Downloading again will start from the beginning.")
+            }
         }
         .alert("Cancel all downloads?", isPresented: $confirmsCancelAll) {
             Button("Keep downloading", role: .cancel) { confirmsCancelAll = false }
@@ -70,7 +74,7 @@ struct DownloadActivitiesPopover: View {
                 confirmsCancelAll = false
             }
         } message: {
-            Text("The partial downloads will be removed. Downloading again will start from the beginning.")
+            Text("The partial downloads will be removed. Any verified model files will be kept for retry.")
         }
     }
 
@@ -89,7 +93,7 @@ struct DownloadActivitiesPopover: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Open \(activity.name) in the model picker")
+                .accessibilityLabel("Open \(activity.name) download")
 
                 if let progress = activity.progress {
                     Text("\(Int((progress * 100).rounded()))%")

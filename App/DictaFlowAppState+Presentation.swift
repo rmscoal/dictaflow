@@ -5,6 +5,7 @@ struct ModelDownloadActivity: Equatable {
         case speech(WhisperModelDescriptor)
         case encoder(WhisperModelDescriptor)
         case refinement(RefinementModelDescriptor)
+        case liquid
     }
     let target: Target
     /// Short model name for compact rows, without any status text.
@@ -19,7 +20,14 @@ struct ModelDownloadActivity: Equatable {
         case .speech(let model): model.modelIdentifier
         case .encoder(let model): model.encoderModelIdentifier
         case .refinement(let model): model.modelIdentifier
+        case .liquid: "liquid.lfm3-audio-2b"
         }
+    }
+
+    static func liquid(progress: ModelDownloadProgress? = nil, hasFailed: Bool = false) -> Self {
+        Self(target: .liquid, name: "Liquid LFM3-Audio-2B",
+             title: "Liquid LFM3-Audio-2B · \(progress?.statusText ?? (hasFailed ? "Download failed" : "Downloaded"))",
+             progress: progress?.progress, statusText: progress?.statusText ?? "", hasFailed: hasFailed)
     }
 }
 
@@ -78,6 +86,9 @@ extension DictaFlowAppState {
                 hasFailed: false
             ))
         }
+        if let progress = agentVoice?.modelDownloadProgress {
+            activities.append(.liquid(progress: progress))
+        }
         return activities
     }
 
@@ -93,6 +104,7 @@ extension DictaFlowAppState {
         for model in RefinementModelDescriptor.allCases where refinementDownloadError(for: model) != nil {
             return ModelDownloadActivity(target: .refinement(model), name: model.displayName, title: "\(model.displayName) download failed. Review download.", progress: nil, statusText: "", hasFailed: true)
         }
+        if agentVoice?.activeError?.scope == .models { return .liquid(hasFailed: true) }
         return activeDownloadActivities.first
     }
 
@@ -100,6 +112,9 @@ extension DictaFlowAppState {
         switch activity.target {
         case .speech(let model), .encoder(let model): showSpeechModels(focusing: model)
         case .refinement(let model): showRefinementModels(focusing: model)
+        case .liquid:
+            agentVoiceTab = .general
+            showMainWindowPage(.agentVoice)
         }
     }
 
@@ -108,6 +123,7 @@ extension DictaFlowAppState {
         case .speech(let model): cancelWhisperModelDownload(model)
         case .encoder(let model): cancelWhisperEncoderDownload(model)
         case .refinement(let model): cancelRefinementModelDownload(model)
+        case .liquid: agentVoice?.cancelModelDownload()
         }
     }
 

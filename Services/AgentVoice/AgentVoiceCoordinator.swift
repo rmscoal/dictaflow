@@ -40,7 +40,9 @@ final class AgentVoiceCoordinator: ObservableObject {
     @Published private(set) var isEnabled: Bool
     @Published private(set) var status = "Agent Voice is off."
     @Published private(set) var isModelReady = false
-    @Published private(set) var isDownloading = false
+    @Published private(set) var modelDownloadProgress: ModelDownloadProgress?
+    var isDownloading: Bool { modelDownloadProgress != nil }
+    var onModelDownloadFinished: ((Result<Void, Error>) -> Void)?
     @Published private(set) var drafts: [VoiceDraft] = []
     @Published private(set) var history: [VoiceHistoryRecord] = []
     @Published private(set) var admissionPolicy: VoiceAdmissionPolicy = .automatic
@@ -53,6 +55,9 @@ final class AgentVoiceCoordinator: ObservableObject {
     private var rejectedRenditionID: UUID?
 
     let assets: LiquidAssets
+    private let modelDownloader: any LiquidAssetDownloading
+    private var modelDownloadTask: Task<Void, Never>?
+    private var modelDownloadGeneration = UUID()
     let runtime: any LiquidRuntimeProtocol
     let installationID: UUID
     let appID: String
@@ -77,7 +82,8 @@ final class AgentVoiceCoordinator: ObservableObject {
     init(defaults: UserDefaults = .standard, player: AgentSpeechPlayerProtocol? = nil,
          supportDirectory: URL? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil,
          limits: VoiceLimits = VoiceLimits(), beforeIdleRefresh: (() async -> Void)? = nil,
-         beforeRetentionRefresh: ((VoiceHistoryRetention) async -> Void)? = nil) {
+         beforeRetentionRefresh: ((VoiceHistoryRetention) async -> Void)? = nil,
+         modelDownloader: (any LiquidAssetDownloading)? = nil) {
         self.defaults = defaults; self.player = player ?? AgentSpeechPlayer()
         self.beforeIdleRefresh = beforeIdleRefresh
         self.beforeRetentionRefresh = beforeRetentionRefresh
@@ -85,6 +91,7 @@ final class AgentVoiceCoordinator: ObservableObject {
         let name = appID == "com.dictaflow" ? "DictaFlow" : "DictaFlow Dev"
         let support = supportDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(name)
         assets = LiquidAssets(directory: support.appendingPathComponent("Models/Liquid/\(LiquidAssets.revision)"))
+        self.modelDownloader = modelDownloader ?? assets
         self.runtime = runtime ?? LiquidRuntime(executable: Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/AudioRuntime/llama-server"), assets: assets)
         let installation = defaults.string(forKey: "agentVoice.installationID").flatMap(UUID.init(uuidString:)) ?? UUID()
         installationID = installation; defaults.set(installation.uuidString, forKey: "agentVoice.installationID")
@@ -111,9 +118,11 @@ final class AgentVoiceCoordinator: ObservableObject {
                 }
             }
         }
-        Task { [weak self, assets] in
+        Task { [weak self, modelDownloader = self.modelDownloader, generation = modelDownloadGeneration] in
             await self?.refresh()
-            self?.isModelReady = (try? await assets.isReady()) == true
+            let ready = (try? await modelDownloader.isReady()) == true
+            guard self?.modelDownloadGeneration == generation else { return }
+            self?.isModelReady = ready
         }
     }
 
@@ -143,21 +152,69 @@ final class AgentVoiceCoordinator: ObservableObject {
     }
 
     func downloadModel() {
-        guard !isDownloading else { return }
+        guard !stopped, !isDownloading else { return }
         // An explicit retry supersedes a prior model error; other scopes stay.
         if activeError?.scope == .models { activeError = nil }
-        isDownloading = true; status = "Downloading and verifying Liquid audio (1.4 GB)…"
-        Task { [weak self, assets] in
-            do {
-                try await assets.download()
-                self?.isModelReady = true
-                self?.status = "Liquid audio is ready."
-            } catch {
-                let message = "Liquid download failed: \(error.localizedDescription)"
-                self?.status = message
-                self?.activeError = AgentVoiceError(scope: .models, message: message)
+        let generation = UUID()
+        modelDownloadGeneration = generation
+        modelDownloadProgress = ModelDownloadProgress(progress: nil, statusText: "Starting download")
+        status = "Downloading and verifying Liquid audio (1.4 GB)…"
+        modelDownloadTask = Task { [weak self, modelDownloader] in
+            // Consume callbacks in order, including verification, before publishing the outcome.
+            let (events, continuation) = AsyncStream.makeStream(of: LiquidDownloadEvent.self, bufferingPolicy: .bufferingNewest(1))
+            let updates = Task { @MainActor [weak self] in
+                for await event in events {
+                    guard let self, self.modelDownloadGeneration == generation else { continue }
+                    self.applyModelDownloadEvent(event)
+                }
             }
-            self?.isDownloading = false
+            var outcome: Result<Void, Error>?
+            do {
+                try await modelDownloader.download { continuation.yield($0) }
+                try Task.checkCancellation()
+                outcome = .success(())
+            } catch {
+                if !Task.isCancelled, !(error is CancellationError) {
+                    outcome = .failure(error)
+                }
+            }
+            continuation.finish()
+            await updates.value
+            if Task.isCancelled { outcome = nil }
+            guard let self else { return }
+            self.modelDownloadTask = nil
+            self.modelDownloadProgress = nil
+            switch outcome {
+            case .success:
+                self.isModelReady = true
+                self.status = "Liquid audio is ready."
+            case .failure(let error):
+                let message = "Liquid download failed: \(error.localizedDescription)"
+                self.status = message
+                self.activeError = AgentVoiceError(scope: .models, message: message)
+            case nil:
+                self.status = "Liquid download cancelled. Any verified files are kept for retry."
+            }
+            if let outcome, !self.stopped { self.onModelDownloadFinished?(outcome) }
+        }
+    }
+
+    func cancelModelDownload() {
+        modelDownloadTask?.cancel()
+    }
+
+    private func applyModelDownloadEvent(_ event: LiquidDownloadEvent) {
+        switch event {
+        case .downloading(let bytesWritten, let totalBytes):
+            let formatter = ByteCountFormatter()
+            formatter.allowedUnits = [.useMB, .useGB]
+            formatter.countStyle = .file
+            modelDownloadProgress = ModelDownloadProgress(
+                progress: totalBytes > 0 ? min(1, max(0, Double(bytesWritten) / Double(totalBytes))) : nil,
+                statusText: "\(formatter.string(fromByteCount: bytesWritten)) of \(formatter.string(fromByteCount: totalBytes))"
+            )
+        case .verifying:
+            modelDownloadProgress = ModelDownloadProgress(progress: nil, statusText: "Verifying speech model…")
         }
     }
 
@@ -379,11 +436,15 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func shutdown() {
         stopped = true; bridge?.stop(); bridge = nil
+        cancelModelDownload()
         maintenance?.cancel(); maintenance = nil
         interruptActiveSpeech(stopAllInference: true)
     }
 
-    func waitForShutdown() async { await resourceRelease?.value }
+    func waitForShutdown() async {
+        await modelDownloadTask?.value
+        await resourceRelease?.value
+    }
 
     private func startBridge() {
         guard bridge == nil, let store else { return }
