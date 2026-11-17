@@ -146,6 +146,9 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
             for handler in handlers {
                 if let result = handler(executablePath, arguments) { return result }
             }
+            if executablePath == "/bin/codex", arguments == ["--version"] {
+                return .init(exitCode: 0, stdout: "codex-cli 0.156.0", stderr: "")
+            }
             throw AgentVoiceHostInstaller.InstallerError.commandFailed(host: "stub", detail: "unexpected call \(arguments)")
         }
     }
@@ -187,6 +190,44 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         XCTAssertTrue(message.contains("/hooks"))
         let hooksData = try Data(contentsOf: AgentVoiceHostInstaller.codexHooksURL(homeDirectoryURL: home))
         XCTAssertTrue(AgentVoiceHostInstaller.hooksStatus(data: hooksData, host: .codex, executable: executable).matches)
+    }
+
+    func testCodexIdentityVersionFloor() {
+        for version in ["codex-cli 0.156.0", "codex-cli 0.169.0\n", "codex-cli 1.0.0"] {
+            XCTAssertTrue(AgentVoiceHostInstaller.supportsCodexIdentity(version), version)
+        }
+        for version in ["codex-cli 0.155.0", "codex-cli 0.156.0-alpha.1", "0.169.0", "unknown",
+                        "codex-cli 0.156", "codex-cli 0..156.0", "codex-cli 0.156.0 extra"] {
+            XCTAssertFalse(AgentVoiceHostInstaller.supportsCodexIdentity(version), version)
+        }
+    }
+
+    func testCodexUnsupportedVersionStopsBeforeAnyConfigurationChange() async throws {
+        let executable = try makeExecutable()
+        let home = try makeHome()
+        let hooksURL = AgentVoiceHostInstaller.codexHooksURL(homeDirectoryURL: home)
+        let configURL = AgentVoiceHostInstaller.codexConfigURL(homeDirectoryURL: home)
+        try FileManager.default.createDirectory(at: hooksURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let hooks = Data("{\"hooks\":{}}".utf8)
+        let config = Data("model = \"keep-me\"\n".utf8)
+        try hooks.write(to: hooksURL)
+        try config.write(to: configURL)
+        let calls = CallLog()
+        let runner = StubRunner(handlers: [{ _, args in
+            calls.record(args)
+            return .init(exitCode: 0, stdout: "codex-cli 0.155.0", stderr: "")
+        }])
+        do {
+            _ = try await AgentVoiceHostInstaller.setUp(host: .codex, executable: executable,
+                appID: "com.dictaflow.dev", installationID: installation, agentVoiceEnabled: true,
+                runner: runner, homeDirectoryURL: home, cliDiscovery: { _ in "/bin/codex" })
+            XCTFail("Unsupported Codex must not write configuration")
+        } catch let error as AgentVoiceHostInstaller.InstallerError {
+            XCTAssertTrue(error.localizedDescription.contains("0.156.0"))
+        }
+        XCTAssertEqual(calls.all, [["--version"]])
+        XCTAssertEqual(try Data(contentsOf: hooksURL), hooks)
+        XCTAssertEqual(try Data(contentsOf: configURL), config)
     }
 
     private final class CallLog: Sendable {
@@ -781,6 +822,9 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         struct FailingListRunner: AgentVoiceHostInstaller.CommandRunner {
             let json: String
             func run(executablePath: String, arguments: [String]) async throws -> AgentVoiceHostInstaller.CommandResult {
+                if arguments == ["--version"] {
+                    return .init(exitCode: 0, stdout: "codex-cli 0.156.0", stderr: "")
+                }
                 if arguments == ["mcp", "list"] {
                     throw AgentVoiceHostInstaller.InstallerError.commandFailed(host: "Codex", detail: "boom")
                 }

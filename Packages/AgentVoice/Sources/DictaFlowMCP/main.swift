@@ -80,7 +80,8 @@ do {
     }
     await server.withMethodHandler(CallTool.self) { params in
         do {
-            let reply = try await adapter.call(name: params.name, arguments: params.arguments ?? [:])
+            let reply = try await adapter.call(name: params.name, arguments: params.arguments ?? [:],
+                                               metadata: params._meta?.fields)
             try Task.checkCancellation()
             if params.name == "on_user_prompt_submit", reply.accepted {
                 let context: [String: Value] = ["hookSpecificOutput": .object([

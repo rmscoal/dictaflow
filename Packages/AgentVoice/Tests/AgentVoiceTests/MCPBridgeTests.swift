@@ -211,6 +211,79 @@ struct MCPBridgeTests {
         #expect(blockedStart.duration(to: .now) < .seconds(1.5))
     }
 
+    @Test func codexHelperFiltersTransportIdentityAndPreservesParentPlayback() async throws {
+        let root = URL(fileURLWithPath: "/tmp/df-test-\(UUID().uuidString.prefix(8))")
+        let socket = root.appendingPathComponent("voice.sock")
+        let store = try VoiceStore(url: root.appendingPathComponent("voice.sqlite"))
+        let server = LocalVoiceServer(socketURL: socket, handler: { request, connection in
+            (try? await store.handle(request, connectionID: connection)) ?? VoiceReply(accepted: false, code: "test_storage_failure")
+        }, onDisconnect: { connection in try? await store.disconnect(connectionID: connection) })
+        try server.start()
+        defer { server.stop(); try? FileManager.default.removeItem(at: root) }
+        let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let process = Process()
+        process.executableURL = package.appendingPathComponent(".build/debug/dictaflow-mcp")
+        process.arguments = ["--app-id", "com.dictaflow.dev", "--installation-id", UUID().uuidString,
+                             "--host", "codex", "--socket-path", socket.path]
+        let input = Pipe(); let output = Pipe()
+        process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
+        try process.run()
+        defer { if process.isRunning { process.terminate() } }
+        let transport = StdioTransport(input: .init(rawValue: output.fileHandleForReading.fileDescriptor),
+                                       output: .init(rawValue: input.fileHandleForWriting.fileDescriptor))
+        let client = Client(name: "Codex identity fixture", version: "1")
+        _ = try await client.connect(transport: transport)
+        let rootHook = Metadata(additionalFields: ["threadId": "root"])
+        let rootCall = Metadata(additionalFields: ["threadId": "root", "sessionId": "root", "callId": "main-call"])
+        let childCall = Metadata(additionalFields: ["threadId": "child", "sessionId": "root", "callId": "child-call"])
+        let prompt = try await client.callTool(name: "on_user_prompt_submit",
+            arguments: ["session_id": "root", "turn_id": "main-turn"], meta: rootHook)
+        #expect(prompt.isError != true)
+        let interaction = try #require(try await store.interactions().first)
+        let requestID = UUID().uuidString
+        let args: [String: Value] = ["session_id": "root", "input_id": .string(interaction.id.uuidString),
+                                    "request_id": .string(requestID), "text": "Main response."]
+        let prepared = try await client.callTool(name: "prepare_spoken_response", arguments: args, meta: rootCall)
+        #expect(prepared.isError != true)
+        let stop = try await client.callTool(name: "on_stop",
+            arguments: ["session_id": "root", "turn_id": "main-turn"], meta: rootHook)
+        #expect(stop.isError != true)
+        let before = try await store.drafts()
+        #expect(before.first?.state == .queued)
+
+        // Every child operation is rejected on the wire, even with parent IDs,
+        // a reused parent receipt, and model arguments claiming a main role.
+        for tool in ["on_user_prompt_submit", "prepare_spoken_response", "on_stop", "on_interrupt", "get_speech_status"] {
+            var spoofed = args
+            spoofed["agent_id"] = ""
+            spoofed["threadId"] = "root"
+            spoofed["sessionId"] = "root"
+            let denied = try await client.callTool(name: tool, arguments: spoofed, meta: childCall)
+            #expect(denied.isError == true)
+        }
+        let childHook = try await client.callTool(name: "on_user_prompt_submit",
+            arguments: ["session_id": "root", "turn_id": "child-turn"],
+            meta: Metadata(additionalFields: ["threadId": "child"]))
+        #expect(childHook.isError == true)
+        let unknown = try await client.callTool(name: "on_interrupt", arguments: ["session_id": "root"])
+        #expect(unknown.isError == true)
+        #expect(try await store.interactions().count == 1)
+        #expect(try await store.drafts() == before, "Child calls must not cancel or replace parent playback.")
+        let retry = try await client.callTool(name: "prepare_spoken_response", arguments: args, meta: rootCall)
+        func decodeReply(_ content: [Tool.Content]) throws -> VoiceReply {
+            let first = try #require(content.first)
+            guard case .text(let text, _, _) = first else { throw VoiceError.unavailable("Expected reply text") }
+            return try JSONDecoder().decode(VoiceReply.self, from: Data(text.utf8))
+        }
+        #expect(try decodeReply(retry.content) == decodeReply(prepared.content),
+                "Denied children cannot read or reserve the parent's receipt.")
+        let interrupted = try await client.callTool(name: "on_interrupt",
+            arguments: ["session_id": "root", "turn_id": "main-turn"], meta: rootHook)
+        #expect(interrupted.isError != true)
+        #expect(try await store.drafts().first?.state == .interrupted)
+        await client.disconnect()
+    }
+
     @Test func realHelperRoundTripPreparesThenStopAdmitsAndCorrectionNeedsFreshStop() async throws {
         let root = URL(fileURLWithPath: "/tmp/df-test-\(UUID().uuidString.prefix(8))")
         let socket = root.appendingPathComponent("voice.sock")

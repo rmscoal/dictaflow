@@ -94,17 +94,102 @@ struct MainAgentOnlyTests {
     }
 
     @Test func codexAndOtherHostsIgnoreAgentID() async throws {
-        // Codex behavior stays unchanged: it never sends agent_id, and a
-        // value there (or on unknown hosts) is not treated as child proof.
+        // Model arguments cannot claim a role; Codex uses transport metadata.
         for host in ["codex", "other", "fixture"] {
             let client = CountingBridge()
             let adapter = VoiceAdapter(client: client, installationID: UUID(), host: host)
             _ = try await adapter.call(name: "on_stop",
                                        arguments: ["session_id": "session",
-                                                   "agent_id": "agent-child-1"])
+                                                   "agent_id": "agent-child-1"],
+                                       metadata: ["threadId": "session", "sessionId": "session"])
             #expect(await client.sent.map(\.operation) == [.attach, .stop],
                     "Host \(host) must keep its existing behavior.")
         }
+    }
+
+    private let voiceTools = ["on_user_prompt_submit", "prepare_spoken_response", "on_stop",
+                              "on_interrupt", "get_speech_status"]
+
+    private func codexArguments(session: String = "root") -> [String: Value] {
+        ["session_id": .string(session), "turn_id": "turn", "agent_id": "",
+         "input_id": .string(UUID().uuidString), "request_id": .string(UUID().uuidString),
+         "text": "A response.", "threadId": .string(session), "sessionId": .string(session)]
+    }
+
+    @Test func codexChildCannotUseAnyToolOrSpoofSessionArguments() async throws {
+        for tool in voiceTools {
+            for session in ["root", "child", "unrelated"] {
+                let client = CountingBridge()
+                let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "codex")
+                let reply = try await adapter.call(name: tool, arguments: codexArguments(session: session),
+                                                  metadata: ["threadId": "child", "sessionId": "root", "callId": "call"])
+                #expect(reply.code == "child_agent_denied")
+                #expect(!reply.accepted)
+                #expect(await client.sent.isEmpty)
+            }
+        }
+    }
+
+    @Test func codexMissingMalformedAndOldDirectIdentityNeverContactsStore() async throws {
+        let identities: [[String: Value]?] = [
+            nil, [:], ["threadId": "root"], // hook-shaped metadata cannot prepare/status
+            ["threadId": "root", "callId": "old-call"],
+            ["threadId": "root", "sessionId": .null],
+            ["threadId": "root", "sessionId": ""],
+            ["threadId": .int(1), "sessionId": "root"],
+            ["threadId": "", "sessionId": "root"]
+        ]
+        for metadata in identities {
+            for tool in voiceTools {
+                if metadata == ["threadId": "root"],
+                   ["on_user_prompt_submit", "on_stop", "on_interrupt"].contains(tool) { continue }
+                let client = CountingBridge()
+                let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "codex")
+                let reply = try await adapter.call(name: tool, arguments: codexArguments(), metadata: metadata)
+                #expect(!reply.accepted)
+                #expect(reply.code == "caller_identity_missing")
+                #expect(await client.sent.isEmpty)
+            }
+        }
+    }
+
+    @Test func codexRootMetadataAllowsAllToolsAndIndependentSessions() async throws {
+        let client = CountingBridge()
+        let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "codex")
+        for session in ["root-a", "root-b"] {
+            for tool in voiceTools {
+                let reply = try await adapter.call(name: tool, arguments: codexArguments(session: session),
+                                                  metadata: ["threadId": .string(session), "sessionId": .string(session)])
+                #expect(reply.accepted)
+            }
+        }
+        let sent = await client.sent
+        #expect(sent.filter { $0.operation == .attach }.count == 2)
+        #expect(sent.filter { $0.operation != .attach }.count == 10)
+    }
+
+    @Test func codexLifecycleHooksUseOwningThreadBeforeAnyStoreContact() async throws {
+        for tool in ["on_user_prompt_submit", "on_stop", "on_interrupt"] {
+            let client = CountingBridge()
+            let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "codex")
+            let args = codexArguments()
+            let child = try await adapter.call(name: tool, arguments: args, metadata: ["threadId": "child"])
+            #expect(child.code == "child_agent_denied")
+            #expect(await client.sent.isEmpty)
+            // The same request remains usable: a child did not reserve a receipt.
+            let root = try await adapter.call(name: tool, arguments: args, metadata: ["threadId": "root"])
+            #expect(root.accepted)
+            #expect(await client.sent.count == 2)
+        }
+    }
+
+    @Test func codexRootCannotAddressAnotherSession() async throws {
+        let client = CountingBridge()
+        let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "codex")
+        let reply = try await adapter.call(name: "on_interrupt", arguments: codexArguments(session: "other"),
+                                          metadata: ["threadId": "root", "sessionId": "root"])
+        #expect(reply.code == "session_identity_mismatch")
+        #expect(await client.sent.isEmpty)
     }
 
     // MARK: - PreToolUse guard responses

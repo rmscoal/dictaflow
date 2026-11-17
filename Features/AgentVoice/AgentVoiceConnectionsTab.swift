@@ -274,7 +274,7 @@ struct AgentVoiceConnectionsTab: View {
     private static func hooksNote(for host: Host, hasHooks: Bool) -> String? {
         guard hasHooks else { return nil }
         if host == .codex {
-            return "Merge into \(AgentVoiceHostInstaller.codexHooksURL().path), then review the hooks in Codex with /hooks."
+            return "With Codex 0.156.0 or later, merge into \(AgentVoiceHostInstaller.codexHooksURL().path), then review the hooks in Codex with /hooks."
         }
         if host == .museCode {
             return "Merge the hooks into ~/.config/muse/settings.json."

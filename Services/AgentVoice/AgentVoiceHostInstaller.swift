@@ -264,6 +264,13 @@ enum AgentVoiceHostInstaller {
             throw InstallerError.commandFailed(host: host.name, detail: "Manual setup only.")
         case .codex:
             let cli = try requireCLI(for: host, discovery: cliDiscovery)
+            let version = try await withTimeout(seconds: 30, host: host.name, operation: {
+                try await runner.run(executablePath: cli, arguments: ["--version"])
+            })
+            guard version.exitCode == 0, supportsCodexIdentity(version.stdout) else {
+                throw InstallerError.commandFailed(host: host.name,
+                    detail: "Update to stable Codex 0.156.0 or later for main-agent-only Agent Voice.")
+            }
             _ = try mergedHooksData(existing: readIfPresent(codexHooks), host: host, path: codexHooks.path,
                                     executable: executable)
             let result = try await withTimeout(seconds: 60, host: host.name, operation: {
@@ -393,6 +400,18 @@ enum AgentVoiceHostInstaller {
     static func claudeOutputMatches(output: String, executable: String, arguments: [String]) -> Bool {
         let lines = Set(output.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) })
         return lines.contains("Command: \(executable)") && lines.contains("Args: \(arguments.joined(separator: " "))")
+    }
+
+    /// The direct MCP caller identity pair first shipped in stable Codex 0.156.
+    /// Reject unknown/prerelease formats rather than guessing their capabilities.
+    static func supportsCodexIdentity(_ output: String) -> Bool {
+        let words = output.split(whereSeparator: \.isWhitespace)
+        guard words.count == 2, words[0] == "codex-cli" else { return false }
+        let components = words[1].split(separator: ".", omittingEmptySubsequences: false)
+        guard components.count == 3,
+              components.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return false }
+        let fields = components.compactMap { Int($0) }
+        return fields.count == 3 && !fields.lexicographicallyPrecedes([0, 156, 0])
     }
 
     /// Reports whether a Claude Code version string supports hooks (2.1.118 or later).

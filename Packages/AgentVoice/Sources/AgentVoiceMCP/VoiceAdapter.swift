@@ -28,7 +28,8 @@ public actor VoiceAdapter {
         self.host = host
     }
 
-    public func call(name: String, arguments: [String: Value]) async throws -> VoiceReply {
+    /// `metadata` comes from the MCP request's `_meta`, never its tool arguments.
+    public func call(name: String, arguments: [String: Value], metadata: [String: Value]? = nil) async throws -> VoiceReply {
         try Task.checkCancellation()
         guard let nativeSession = arguments["session_id"]?.stringValue, !nativeSession.isEmpty else {
             throw VoiceError.unavailable("session_id is required. Use the host's stable session identity.")
@@ -41,6 +42,10 @@ public actor VoiceAdapter {
         case "on_interrupt": operation = .interrupt
         case "get_speech_status": operation = .status
         default: throw VoiceError.unavailable("Unknown tool.")
+        }
+        if host == "codex", let rejection = codexCallerRejection(operation: operation,
+                                                                session: nativeSession, metadata: metadata) {
+            return rejection
         }
         // Main-agent-only enforcement for hook-forwarded identity. Claude
         // lifecycle hooks substitute the host-supplied `${agent_id}` here; a
@@ -139,6 +144,45 @@ public actor VoiceAdapter {
             nativeInputs[nativeTurn] = input
         }
         return reply
+    }
+
+    /// Codex 0.156+ writes the calling thread and root session into direct
+    /// MCP requests. MCP lifecycle hooks use a different path: the host writes
+    /// only threadId, while session_id is substituted from the hook payload.
+    /// Keep both paths on the existing MCP connection so attachments retain
+    /// one owner. In particular, do not interpolate optional ${agent_id}:
+    /// Codex fails a hook when that field is absent in the root payload.
+    private func codexCallerRejection(operation: VoiceOperation, session: String,
+                                      metadata: [String: Value]?) -> VoiceReply? {
+        let unavailable = VoiceReply(accepted: false, code: "caller_identity_missing",
+                                    message: "DictaFlow could not verify the calling agent. Use Codex 0.156.0 or later and start a new session. Finish the written answer normally.")
+        guard let metadata, let thread = metadata["threadId"]?.stringValue, !thread.isEmpty else {
+            return unavailable
+        }
+        let root: String
+        if let rawSession = metadata["sessionId"] {
+            guard let value = rawSession.stringValue, !value.isEmpty else { return unavailable }
+            root = value
+        } else {
+            // Direct calls carry callId and require the full identity pair.
+            // Only the host's MCP hook path omits both sessionId and callId.
+            // Older direct callers must not gain hook privileges by supplying
+            // their own thread ID as the session argument.
+            guard metadata["callId"] == nil,
+                  operation == .prompt || operation == .stop || operation == .interrupt else {
+                return unavailable
+            }
+            root = session
+        }
+        guard thread == root else {
+            return VoiceReply(accepted: false, code: "child_agent_denied",
+                              message: "Only the main agent can use DictaFlow voice. Finish the written answer normally.")
+        }
+        guard session == root else {
+            return VoiceReply(accepted: false, code: "session_identity_mismatch",
+                              message: "Use the session identity supplied by the host. Finish the written answer normally.")
+        }
+        return nil
     }
 
     /// Resends the envelope reserved for `key` when another call already
