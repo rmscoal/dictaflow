@@ -201,11 +201,14 @@ private struct AgentVoiceOverlay: View {
 
     private var hostName: String { source.components(separatedBy: " · ").first ?? source }
 
-    private func waveform(size: CGFloat = 18) -> some View {
-        Image(systemName: "waveform")
-            .font(.system(size: size))
-            .frame(width: 22)
-            .accessibilityHidden(true)
+    /// Capitalized display name and vendor logo for the speaking host, shared
+    /// with setup cards and history so the panel never shows the raw
+    /// lowercase `--host` flag ("codex", "claude", "muse").
+    private var brand: AgentVoiceHostBrand { AgentVoiceHostBrand.brand(forHostName: hostName) }
+    private var displayHostName: String { brand.displayName }
+
+    private func hostIcon(size: CGFloat) -> some View {
+        AgentVoiceHostIcon(brand: brand, size: size)
     }
 
     private var content: some View {
@@ -218,8 +221,8 @@ private struct AgentVoiceOverlay: View {
                     .accessibilityHidden(!isExpanded)
                 Button(action: expand) {
                     HStack(spacing: 8) {
-                        waveform(size: 14)
-                        Text(hostName).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        hostIcon(size: 24)
+                        Text(displayHostName).font(.system(size: 12, weight: .medium)).lineLimit(1)
                         Spacer(minLength: 0)
                         Text(isReady ? "Ready" : status)
                             .font(.system(size: 11))
@@ -232,7 +235,7 @@ private struct AgentVoiceOverlay: View {
                 }
                 .buttonStyle(.plain)
                 .frame(width: geometry.size.width, height: geometry.size.height)
-                .accessibilityLabel("Show speech controls. \(hostName). \(status)")
+                .accessibilityLabel("Show speech controls. \(displayHostName). \(status)")
                 .accessibilityIdentifier("agent-voice-overlay-expand")
                 .opacity(isExpanded ? 0 : 1)
                 .allowsHitTesting(!isExpanded)
@@ -247,10 +250,10 @@ private struct AgentVoiceOverlay: View {
 
     private var expandedContent: some View {
         HStack(spacing: 12) {
-            waveform()
+            hostIcon(size: 32)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(hostName)
+                Text(displayHostName)
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
                 Text(status)
