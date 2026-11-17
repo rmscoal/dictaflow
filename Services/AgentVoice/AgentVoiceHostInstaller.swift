@@ -218,12 +218,15 @@ enum AgentVoiceHostInstaller {
         case .codex:
             guard let cliPath else { return HostState(cliPath: nil, configuredEntryFound: false, entryMatchesCurrent: false) }
             // Setup refuses Codex below 0.156.0 and the helper rejects every
-            // call from it, so an entry check must not report such an install
-            // ready. A failed probe is not version evidence: fall through to
-            // the entry check, which will fail on its own.
-            if let version = try? await withTimeout(seconds: 30, host: host.name, operation: {
+            // call from it, so readiness requires a successful version probe:
+            // a matching entry never proves version compatibility, and a
+            // failed probe is unverified rather than ready.
+            guard let version = try? await withTimeout(seconds: 30, host: host.name, operation: {
                 try await runner.run(executablePath: cliPath, arguments: ["--version"])
-            }), version.exitCode != 0 || !supportsCodexIdentity(version.stdout) {
+            }) else {
+                return HostState(cliPath: cliPath, configuredEntryFound: false, entryMatchesCurrent: false)
+            }
+            guard version.exitCode == 0, supportsCodexIdentity(version.stdout) else {
                 return HostState(cliPath: cliPath, configuredEntryFound: false,
                                  entryMatchesCurrent: false, versionUnsupported: true)
             }
@@ -711,18 +714,53 @@ enum AgentVoiceHostInstaller {
 
     private static func isDictaFlowHook(_ handler: [String: Any]) -> Bool {
         if (handler["type"] as? String) == "mcp_tool", (handler["server"] as? String) == "dictaflow" { return true }
-        // Our own PreToolUse guard: the shell-form `command` string carries
-        // both the helper name and the `--hook-event` marker. A previous
-        // revision installed Claude's guard in exec form (`command` naming
-        // the helper with `--hook-event` in `args`); those still match so
-        // setup replaces them with the current shell form. Stale paths
-        // still match; unrelated command hooks never carry this exact
-        // marker combination.
+        // Our own PreToolUse guard, recognized by invocation shape, not by
+        // substrings: the helper executable must be the invoked program and
+        // `--hook-event` a separate argument. Shell form quotes the helper
+        // path as the first token; a previous revision installed Claude's
+        // guard in exec form (`command` naming the helper with `--hook-event`
+        // in `args`), which still matches so setup replaces it. Stale paths
+        // still match; a command that only mentions both strings (for
+        // example a logger line) is not ours and is never stripped.
         guard (handler["type"] as? String) == "command",
               let command = handler["command"] as? String else { return false }
-        guard command.contains("dictaflow-mcp") else { return false }
-        if let args = handler["args"] as? [String] { return args.contains("--hook-event") }
-        return command.contains("--hook-event")
+        if let args = handler["args"] as? [String] {
+            return isHelperExecutable(command.trimmingCharacters(in: .whitespaces))
+                && args.contains("--hook-event")
+        }
+        let tokens = shellTokens(command)
+        guard let invoked = tokens.first, isHelperExecutable(invoked) else { return false }
+        return tokens.dropFirst().contains("--hook-event")
+    }
+
+    private static func isHelperExecutable(_ token: String) -> Bool {
+        token == "dictaflow-mcp" || token.hasSuffix("/dictaflow-mcp")
+    }
+
+    /// Splits a shell-form command into tokens, honoring single and double
+    /// quotes (including the `'"'"'` escape `shellQuoted` produces), so a
+    /// quoted helper path with spaces stays one token.
+    private static func shellTokens(_ command: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var hasCurrent = false
+        var quote: Character?
+        for character in command {
+            if let active = quote {
+                if character == active { quote = nil } else { current.append(character) }
+                hasCurrent = true
+            } else if character == "'" || character == "\"" {
+                quote = character
+                hasCurrent = true
+            } else if character.isWhitespace {
+                if hasCurrent { tokens.append(current); current = ""; hasCurrent = false }
+            } else {
+                current.append(character)
+                hasCurrent = true
+            }
+        }
+        if hasCurrent { tokens.append(current) }
+        return tokens
     }
 
     private static func canonicalJSON(_ value: [String: Any]) -> String {

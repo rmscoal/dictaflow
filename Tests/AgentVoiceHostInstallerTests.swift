@@ -251,6 +251,50 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
                        "The version probe must decide before any entry check runs.")
     }
 
+    func testRefreshStateReportsNotReadyWhenCodexVersionProbeFails() async throws {
+        let executable = try makeExecutable()
+        let home = try makeHome()
+        let calls = CallLog()
+        struct FailingVersionRunner: AgentVoiceHostInstaller.CommandRunner {
+            let calls: CallLog
+            func run(executablePath: String, arguments: [String]) async throws -> AgentVoiceHostInstaller.CommandResult {
+                calls.record(arguments)
+                throw AgentVoiceHostInstaller.InstallerError.commandFailed(host: "stub", detail: "version boom")
+            }
+        }
+        let state = await AgentVoiceHostInstaller.refreshState(
+            host: .codex, executable: executable, appID: "com.dictaflow.dev",
+            installationID: installation, runner: FailingVersionRunner(calls: calls),
+            homeDirectoryURL: home, cliDiscovery: { _ in "/bin/codex" })
+        XCTAssertEqual(state.status, .foundNotConfigured,
+                       "A failed version probe is unverified, never ready, even with a matching entry.")
+        XCTAssertEqual(calls.all, [["--version"]],
+                       "The failed probe must decide before any entry check runs.")
+    }
+
+    func testMergePreservesUnrelatedCommandMentioningGuardStrings() throws {
+        let unrelated: [String: Any] = ["type": "command",
+                                        "command": "logger 'dictaflow-mcp --hook-event guard ran'"]
+        let existing: [String: Any] = [
+            "hooks": ["PreToolUse": [["matcher": "Bash", "hooks": [unrelated]]]],
+        ]
+        let merged = try AgentVoiceHostInstaller.mergedClaudeSettings(
+            existing: JSONSerialization.data(withJSONObject: existing), executable: executable)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: merged) as? [String: Any])
+        let hooks = try XCTUnwrap(root["hooks"] as? [String: Any])
+        let bashGroups = ((hooks["PreToolUse"] as? [[String: Any]]) ?? [])
+            .filter { ($0["matcher"] as? String) == "Bash" }
+        let bashHandlers = (bashGroups.first?["hooks"] as? [[String: Any]]) ?? []
+        XCTAssertEqual(bashHandlers.count, 1,
+                       "A command that only mentions the helper and marker is not DictaFlow-owned.")
+        XCTAssertEqual(bashHandlers.first?["command"] as? String, unrelated["command"] as? String)
+        // The unrelated command alone must not count as a DictaFlow hook.
+        let alone = try JSONSerialization.data(withJSONObject: ["hooks":
+            ["PreToolUse": [["matcher": "Bash", "hooks": [unrelated]]]]])
+        XCTAssertFalse(AgentVoiceHostInstaller.hooksStatus(data: alone, host: .claudeCode,
+                                                           executable: executable).found)
+    }
+
     func testRefreshStateReportsConfiguredCodexAtVersionFloor() async throws {
         let executable = try makeExecutable()
         let expectedArgs = arguments(host: .codex)
