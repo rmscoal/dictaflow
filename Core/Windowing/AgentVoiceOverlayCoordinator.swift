@@ -15,6 +15,9 @@ final class AgentVoiceOverlayCoordinator {
     private var hostingView: AgentVoiceHostingView?
     private var hoverTask: Task<Void, Never>?
     private var targetSize = AgentVoiceOverlayLayout.collapsedSize
+    /// Collapsed width fitted to the current host name and status text, so
+    /// neither ever truncates; never narrower than the default pill.
+    private var currentCollapsedSize = AgentVoiceOverlayLayout.collapsedSize
     private(set) var isControlExpanded = false
 
     init(voice: AgentVoiceCoordinator, record: @escaping () -> Void) {
@@ -53,7 +56,7 @@ final class AgentVoiceOverlayCoordinator {
         }
         let size = expanded
             ? AgentVoiceOverlayLayout.expandedSize(isReady: hostingView?.rootView.isReady == true)
-            : AgentVoiceOverlayLayout.collapsedSize
+            : currentCollapsedSize
         // Speech updates must not restart an in-flight resize toward the same size.
         guard size != targetSize || !animated else { return }
         targetSize = size
@@ -108,16 +111,24 @@ final class AgentVoiceOverlayCoordinator {
         updateContent()
         // Ready mode has one extra action; resize without resetting the hover state.
         if isControlExpanded { setExpanded(true) }
+        else { setExpanded(false, animated: false) }
         panel?.orderFrontRegardless()
     }
 
     private func updateContent() {
         let ready = readyInteraction
         let readySource = ready.map { "\($0.interaction.session.host) · \($0.interaction.session.sessionID.prefix(8))" }
+        let source = voice.activeSource ?? readySource ?? "Agent Voice"
+        let status = voice.isSpeaking ? "Speaking" : voice.isGenerating ? "Generating…" : "Response ready"
+        let isReady = voice.admissionPolicy == .manualOnly && ready != nil && !voice.isSpeaking && !voice.isGenerating
+        let hostDisplayName = AgentVoiceHostBrand.brand(
+            forHostName: source.components(separatedBy: " · ").first ?? source).displayName
+        currentCollapsedSize = AgentVoiceOverlayLayout.collapsedSize(
+            hostName: hostDisplayName, status: isReady ? "Ready" : status)
         let view = AgentVoiceOverlay(
-            source: voice.activeSource ?? readySource ?? "Agent Voice",
-            status: voice.isSpeaking ? "Speaking" : voice.isGenerating ? "Generating…" : "Response ready",
-            isReady: voice.admissionPolicy == .manualOnly && ready != nil && !voice.isSpeaking && !voice.isGenerating,
+            source: source,
+            status: status,
+            isReady: isReady,
             isExpanded: isControlExpanded,
             expand: { [weak self] in
                 self?.hoverTask?.cancel()
@@ -173,6 +184,19 @@ private final class AgentVoicePanel: NSPanel {
 private enum AgentVoiceOverlayLayout {
     static let collapsedSize = NSSize(width: 176, height: 44)
 
+    /// Width that fits this host name and status in full: 14 pt padding on
+    /// each side, the 24 pt host icon, and the three 8 pt gaps around the
+    /// flexible spacer. The pill only ever grows from the default width, so
+    /// longer host names widen it instead of truncating either text.
+    static func collapsedSize(hostName: String, status: String) -> NSSize {
+        let nameWidth = (hostName as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium)]).width
+        let statusWidth = (status as NSString).size(withAttributes: [
+            .font: NSFont.systemFont(ofSize: 11)]).width
+        let width = ceil(28 + 24 + 24 + nameWidth + statusWidth) + 2
+        return NSSize(width: max(collapsedSize.width, width), height: collapsedSize.height)
+    }
+
     static func expandedSize(isReady: Bool) -> NSSize {
         NSSize(width: isReady ? 360 : 340, height: 68)
     }
@@ -222,12 +246,16 @@ private struct AgentVoiceOverlay: View {
                 Button(action: expand) {
                     HStack(spacing: 8) {
                         hostIcon(size: 24)
+                        // The host name never truncates: it is the panel's
+                        // identity. The status text yields first instead.
                         Text(displayHostName).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(1)
                         Spacer(minLength: 0)
                         Text(isReady ? "Ready" : status)
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
-                            .fixedSize()
+                            .lineLimit(1)
                     }
                     .padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
