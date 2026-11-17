@@ -1,5 +1,23 @@
 # DictaFlow verification
 
+Agent Voice contract/helper tests run with `swift test --package-path Packages/AgentVoice`.
+They also cover the benchmark medians and the production-default server invocation
+and TTS payload shape, so benchmark-only settings cannot leak into production.
+They cover unknown-outcome prompt retries returning `new_prompt_required` without
+resend, committed receipts with the original envelope, the 2-minute/8-MiB ASR input
+cap without model downloads, and retained terminal replays respecting the queue cap.
+Hosted `AgentVoiceTests` cover foreground leases, queue admission, immediate local
+silence, cancellation during synthesis with a late result, foreground inference
+waiting for confirmed process exit, and history/settings
+compatibility without microphone access or playback.
+They also verify generating-state cancellation, Liquid ASR missing/invalid/overlimit
+handling without downloads, playback-scoped queue-full errors with refreshed state,
+and expired Play refreshing eligibility with no audio attempt. `AgentVoiceHostSetupTests` checks
+Muse setup JSON and shell-safe setup for paths containing spaces, quotes, and
+shell metacharacters, using a local argv fixture without launching a host.
+The optional real Liquid check, pins, measured results, hook setup, and outstanding
+host qualification are documented in [Agent Voice](../Docs/AgentVoice.md).
+
 `DictaFlowTests` is hosted by the Dev app. It checks preference migration,
 startup failure, readiness retry pacing, shared preparation, shutdown during
 startup, waking a sleeping server, rejection of incomplete output, verified

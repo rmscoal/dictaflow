@@ -5,6 +5,8 @@ protocol SettingsStoreProtocol: AnyObject {
     func saveTextTone(_ tone: TextTone)
     var historyRetention: HistoryRetention { get }
     func saveHistoryRetention(_ retention: HistoryRetention)
+    var voiceHistoryRetention: VoiceHistoryRetention { get }
+    func saveVoiceHistoryRetention(_ retention: VoiceHistoryRetention)
     var appAppearance: AppAppearance { get }
     var shouldShowMainWindowOnLaunch: Bool { get }
     var hasRequestedAccessibilityPermission: Bool { get }
@@ -73,6 +75,14 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
 
     func saveHistoryRetention(_ retention: HistoryRetention) {
         defaults.set(retention.rawValue, forKey: Keys.historyRetention)
+    }
+
+    var voiceHistoryRetention: VoiceHistoryRetention {
+        VoiceHistoryRetention.load(from: defaults)
+    }
+
+    func saveVoiceHistoryRetention(_ retention: VoiceHistoryRetention) {
+        retention.save(to: defaults)
     }
 
     var appAppearance: AppAppearance {

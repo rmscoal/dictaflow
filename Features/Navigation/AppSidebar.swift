@@ -5,7 +5,7 @@ struct AppSidebar: View {
     let collapsed: Bool
     @FocusState private var focusedPage: MainWindowPage?
     @Environment(\.colorScheme) private var colorScheme
-    private let primaryPages: [MainWindowPage] = [.dictation, .history, .settings]
+    private let primaryPages: [MainWindowPage] = [.dictation, .agentVoice, .history, .settings]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

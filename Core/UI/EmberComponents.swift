@@ -31,7 +31,23 @@ struct EmberButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(primary ? AppTheme.actionFill : AppTheme.border, lineWidth: 1)
             }
+            // The whole rounded component is the button: padding, spacing
+            // between icon and text, and empty label areas all click.
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.45)
+    }
+}
+
+/// Inline icon-and-text action (Play, Stop, Show more). Plain SwiftUI labels
+/// only hit-test their drawn glyphs, so the gap between icon and text would
+/// be dead; this style pads the label and makes its full frame clickable.
+struct EmberInlineActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 4)
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+            .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }
 

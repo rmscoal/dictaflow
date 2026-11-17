@@ -21,6 +21,17 @@ It does not replace the upstream license texts.
   without requiring users to install Homebrew, Ollama, or a separate llama.cpp
   runtime.
 
+## Agent Voice
+
+- Audio runtime: llama.cpp `b11960`, MIT, isolated from refinement.
+- Model: [LiquidAI/LFM3-Audio-2B-GGUF](https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF),
+  revision `02355c1a141e464a064f2ab2c276638dbcb7f38a`, LFM Open License v1.0.
+- License: `Resources/ThirdParty/LiquidAI-LFM-Open-License.txt`. Revenue and redistribution terms apply.
+  Weights download separately after an explicit user action.
+- Swift MCP SDK `0.12.1` (MIT) and resolved dependencies are used by `dictaflow-mcp`.
+  Available dependency license texts are copied into app resources during the build.
+- GRDB remains `7.11.1` (MIT). Pins and verification: `Docs/AgentVoice.md`.
+
 ## Whisper Models
 
 - Referenced from: `Models/WhisperModelDescriptor.swift`

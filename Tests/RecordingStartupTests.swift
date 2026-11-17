@@ -1,3 +1,4 @@
+import AgentVoice
 import AppKit
 import Combine
 import Foundation
@@ -47,6 +48,85 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(state.recordingState, .idle)
         XCTAssertNil(state.lastCapture)
         XCTAssertEqual(state.interfaceIssue?.title, "Speech model is missing")
+    }
+
+    func testMissingLiquidModelOpensAgentVoiceGeneralWithoutStartingCapture() async throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        state.updateSpeechToLiquid()
+        state.showSettingsCategory(.appearance)
+        let routed = expectation(description: "Missing Liquid model recovery")
+        let observation = state.$mainWindowPage.first { $0 == .agentVoice }.sink { _ in routed.fulfill() }
+        state.toggleDictation()
+        await fulfillment(of: [routed], timeout: 2)
+        observation.cancel()
+        XCTAssertEqual(state.agentVoiceTab, .general)
+        XCTAssertEqual(state.recordingState, .idle)
+        XCTAssertNil(state.lastCapture)
+        XCTAssertEqual(state.interfaceIssue?.title, "Speech model is missing")
+    }
+
+    func testRetainedCapturesCanBeDiscardedOrRetriedAfterAnotherRecording() async throws {
+        let whisper = PipelineWhisperService(text: "Recovered speech.")
+        await whisper.setCaptureLimitFailure(true)
+        let fixture = try RecordingStartupFixture(whisper: whisper, usePipelineModels: true, refinementEnabled: false, allowsInsertion: true)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DictaFlowRecordings/\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            fixture.cleanup()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        fixture.volume.shouldWait = false
+        let state = fixture.state
+        for index in 1...2 {
+            fixture.recorder.fileURL = directory.appendingPathComponent("capture-\(index).m4a")
+            let recording = expectation(description: "Recording \(index) starts")
+            let recorded = state.$recordingState.first(where: \.isRecording).sink { _ in recording.fulfill() }
+            state.toggleDictation()
+            await fulfillment(of: [recording], timeout: 2)
+            recorded.cancel()
+
+            let retained = expectation(description: "Recording \(index) is retained")
+            let recovery = state.$retainedCaptures.first { $0.count == index }.sink { _ in retained.fulfill() }
+            state.toggleDictation()
+            await fulfillment(of: [retained], timeout: 2)
+            recovery.cancel()
+        }
+        let captures = state.retainedCaptures
+        XCTAssertEqual(captures.count, 2)
+        let first = try XCTUnwrap(captures.first)
+        let second = try XCTUnwrap(captures.last)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.fileURL.path))
+        state.discardRetainedCapture(first)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.fileURL.path))
+        XCTAssertEqual(state.retainedCaptures, [second])
+
+        await whisper.setCaptureLimitFailure(false)
+        await whisper.setText(" \n")
+        let empty = expectation(description: "An empty retry keeps the recording")
+        let noSpeech = state.$interfaceIssue.first { $0?.message.contains("Whisper did not detect speech") == true }
+            .sink { _ in empty.fulfill() }
+        state.retryRetainedCapture(second)
+        await fulfillment(of: [empty], timeout: 2)
+        noSpeech.cancel()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.fileURL.path))
+        XCTAssertEqual(state.retainedCaptures, [second])
+
+        await whisper.setText("Recovered speech.")
+        let retried = expectation(description: "Successful retry removes temporary audio")
+        let cleanup = state.$retainedCaptures.first(where: \.isEmpty).sink { _ in retried.fulfill() }
+        state.retryRetainedCapture(second)
+        await fulfillment(of: [retried], timeout: 2)
+        cleanup.cancel()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.fileURL.path))
+        XCTAssertEqual(state.lastTranscription?.insertionText, "Recovered speech.")
+        XCTAssertEqual(state.retainedCaptureRetryText, "Recovered speech.")
+        state.copyRetainedCaptureRetryResult()
+        XCTAssertEqual(fixture.insertion.copiedTexts, ["Recovered speech."])
+        XCTAssertTrue(fixture.insertion.insertedTexts.isEmpty)
+        XCTAssertNil(state.lastTextInsertion)
     }
 
     func testRetiredLlamaSelectionCannotBeEnabledAndRemainsRemovable() async throws {
@@ -501,6 +581,125 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(fixture.state.historyRetention, .sevenDays)
         let remaining = try await store.entries(search: "", limit: 50, offset: 0)
         XCTAssertEqual(remaining.map(\.id), [ids[1]], "Confirmation only deletes recordings beyond the new retention")
+    }
+
+    func testVoiceRetentionUpdatesWaitForEarlierRefreshAndPublication() async throws {
+        try await checkVoiceRetentionUpdateOrdering(duringStartup: false)
+    }
+
+    func testVoiceRetentionUpdateWaitsForInitialApplication() async throws {
+        try await checkVoiceRetentionUpdateOrdering(duringStartup: true)
+    }
+
+    private func checkVoiceRetentionUpdateOrdering(duringStartup: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("VoiceRetention-\(UUID())")
+        let suite = "DictaFlow.VoiceRetentionTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let paused = expectation(description: "Earlier retention write committed before refresh")
+        let blockedRetention: VoiceHistoryRetention = duringStartup ? .sevenDays : .off
+        var resumeRefresh: CheckedContinuation<Void, Never>?
+        var didPause = false
+        let voice = AgentVoiceCoordinator(
+            defaults: defaults, supportDirectory: root,
+            appIdentity: "df-test-\(UUID().uuidString.prefix(8))",
+            beforeRetentionRefresh: { retention in
+                guard retention == blockedRetention, !didPause else { return }
+                didPause = true
+                await withCheckedContinuation { continuation in
+                    resumeRefresh = continuation
+                    paused.fulfill()
+                }
+            }
+        )
+        let fixture = try RecordingStartupFixture(
+            agentVoice: voice, voiceHistoryRetention: duringStartup ? .sevenDays : .thirtyDays
+        )
+        defer {
+            resumeRefresh?.resume()
+            fixture.cleanup()
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let earlierUpdate: Task<Int?, Never>? = duringStartup ? nil : Task {
+            await fixture.state.updateVoiceHistoryRetention(.off)
+        }
+        await fulfillment(of: [paused], timeout: 2)
+
+        let laterFinished = expectation(description: "Later update waits for the complete earlier operation")
+        laterFinished.isInverted = true
+        let laterUpdate = Task {
+            let result = await fixture.state.updateVoiceHistoryRetention(.thirtyDays)
+            laterFinished.fulfill()
+            return result
+        }
+        await fulfillment(of: [laterFinished], timeout: 0.15)
+        resumeRefresh?.resume()
+        resumeRefresh = nil
+        _ = await earlierUpdate?.value
+        _ = await laterUpdate.value
+
+        let database = try DatabaseQueue(path: root.appendingPathComponent("AgentVoice/voice.sqlite").path)
+        let stored = try await database.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM settings WHERE key = 'historyRetentionInterval'")
+        }
+        XCTAssertEqual(stored.flatMap(Double.init), VoiceHistoryRetention.thirtyDays.retentionInterval)
+        XCTAssertEqual(fixture.state.voiceHistoryRetention, .thirtyDays)
+        let savedDefaults = try XCTUnwrap(UserDefaults(suiteName: fixture.suiteName))
+        XCTAssertEqual(VoiceHistoryRetention.load(from: savedDefaults), .thirtyDays)
+        XCTAssertNil(voice.activeError)
+        voice.shutdown()
+        await voice.waitForShutdown()
+    }
+
+    func testVoiceRetentionFailuresPreserveSelectionAndAllowRetry() async throws {
+        for failsCount in [true, false] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("VoiceRetention-\(UUID())")
+            let suite = "DictaFlow.VoiceRetentionTests.\(UUID())"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let voice = AgentVoiceCoordinator(defaults: defaults, supportDirectory: root,
+                                              appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
+            let fixture = try RecordingStartupFixture(agentVoice: voice)
+            defer {
+                fixture.cleanup()
+                defaults.removePersistentDomain(forName: suite)
+                try? FileManager.default.removeItem(at: root)
+            }
+            let database = try DatabaseQueue(path: root.appendingPathComponent("AgentVoice/voice.sqlite").path)
+            try await database.write { db in
+                if failsCount {
+                    try db.execute(sql: "ALTER TABLE inputs RENAME TO unavailable_inputs")
+                } else {
+                    try db.execute(sql: """
+                        CREATE TRIGGER fail_retention_write BEFORE INSERT ON settings
+                        WHEN NEW.key = 'historyRetentionInterval'
+                        BEGIN SELECT RAISE(ABORT, 'Injected retention write failure'); END
+                        """)
+                }
+            }
+
+            let selection: VoiceHistoryRetention = failsCount ? .sevenDays : .off
+            let confirmation = await fixture.state.updateVoiceHistoryRetention(selection)
+            XCTAssertNil(confirmation)
+            XCTAssertEqual(fixture.state.voiceHistoryRetention, .thirtyDays)
+            let savedDefaults = try XCTUnwrap(UserDefaults(suiteName: fixture.suiteName))
+            XCTAssertEqual(VoiceHistoryRetention.load(from: savedDefaults), .thirtyDays)
+            let stored = try await database.read { db in
+                try String.fetchOne(db, sql: "SELECT value FROM settings WHERE key = 'historyRetentionInterval'")
+            }
+            XCTAssertNil(stored, "A failed count or write must leave the database at its default")
+            XCTAssertEqual(voice.activeError?.scope, .setup)
+
+            try await database.write { db in
+                try db.execute(sql: failsCount
+                    ? "ALTER TABLE unavailable_inputs RENAME TO inputs"
+                    : "DROP TRIGGER fail_retention_write")
+            }
+            await fixture.state.updateVoiceHistoryRetention(selection)
+            XCTAssertEqual(fixture.state.voiceHistoryRetention, selection)
+            XCTAssertEqual(VoiceHistoryRetention.load(from: savedDefaults), selection)
+            voice.shutdown()
+            await voice.waitForShutdown()
+        }
     }
 
     func testHistoryRetryFailurePreservesOriginalAndShowsError() async throws {
@@ -1191,6 +1390,8 @@ private final class RecordingStartupFixture {
         refinementEnabled: Bool? = nil,
         refinementModel: RefinementModelDescriptor = .recommendedDefault,
         historyStore: HistoryStoreProtocol? = nil,
+        agentVoice: AgentVoiceCoordinator? = nil,
+        voiceHistoryRetention: VoiceHistoryRetention = .thirtyDays,
         promptStore: RefinementPromptStoreProtocol? = nil,
         allowsInsertion: Bool = false,
         hotkeyService: HotkeyServiceProtocol? = nil
@@ -1199,6 +1400,7 @@ private final class RecordingStartupFixture {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let settings = UserDefaultsSettingsStore(defaults: try XCTUnwrap(UserDefaults(suiteName: suiteName)))
         settings.saveAutomaticallyChecksForUpdates(false)
+        settings.saveVoiceHistoryRetention(voiceHistoryRetention)
         settings.saveRecordingPlaybackBehavior(.lowerSystemVolume)
         var refinementConfiguration = RefinementConfiguration.default
         refinementConfiguration.model = refinementModel
@@ -1222,7 +1424,8 @@ private final class RecordingStartupFixture {
             textInsertionService: insertion,
             localNotificationService: notifications,
             appUpdateService: GitHubReleaseUpdateService(),
-            historyStore: historyStore
+            historyStore: historyStore,
+            agentVoice: agentVoice
         )
         state.attach(recordingOverlayRouter: overlay)
     }
@@ -1395,9 +1598,12 @@ private final class StartupNotificationService: LocalNotificationServiceProtocol
 
 private actor PipelineWhisperService: WhisperServiceProtocol {
     var transcribeCalls = 0
+    private var failsWithCaptureLimit = false
+    func setCaptureLimitFailure(_ enabled: Bool) { failsWithCaptureLimit = enabled }
     let onWarmup: @Sendable () -> Void
     let failsTranscription: Bool
-    let text: String
+    private var text: String
+    func setText(_ text: String) { self.text = text }
     let languageCode: String?
     init(onWarmup: @escaping @Sendable () -> Void = {}, failsTranscription: Bool = false, text: String = " \n", languageCode: String? = nil) {
         self.onWarmup = onWarmup
@@ -1412,6 +1618,7 @@ private actor PipelineWhisperService: WhisperServiceProtocol {
     }
     func transcribe(audioFileURL: URL, modelURL: URL, configuration: WhisperConfiguration) async throws -> WhisperTranscriptionResult {
         transcribeCalls += 1
+        if failsWithCaptureLimit { throw VoiceError.inputTooLong("Synthetic capture exceeds the audio limit.") }
         if failsTranscription { throw NSError(domain: "com.apple.coreaudio.avfaudio", code: 1954115647) }
         return WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: languageCode,
             model: configuration.model, taskMode: configuration.taskMode, completedAt: Date())
