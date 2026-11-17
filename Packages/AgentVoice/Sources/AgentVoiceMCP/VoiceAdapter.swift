@@ -42,6 +42,32 @@ public actor VoiceAdapter {
         case "get_speech_status": operation = .status
         default: throw VoiceError.unavailable("Unknown tool.")
         }
+        // Main-agent-only enforcement for hook-forwarded identity. Claude
+        // lifecycle hooks substitute the host-supplied `${agent_id}` here; a
+        // non-empty value names a subagent or other non-root context and is
+        // rejected before any attachment, receipt, or store contact, so a
+        // child can neither mutate a parent draft nor admit/cancel playback.
+        // Direct child model calls are blocked earlier by the PreToolUse
+        // guard hook, which decides from host hook input rather than from
+        // these model-supplied arguments. Missing, empty, or literally
+        // unsubstituted values are the main session: hook-forwarded root
+        // calls arrive as an empty string (the host interpolates a
+        // missing path to ""), direct main-session model calls omit the
+        // field, and a host without interpolation would leave the
+        // placeholder untouched.
+        // `agent_type` is deliberately ignored: a root `--agent` session sets
+        // it, so it alone never proves a child. Other hosts are unaffected.
+        if host == "claude" || host == "muse" {
+            if let raw = arguments["agent_id"] {
+                guard let id = raw.stringValue else {
+                    throw VoiceError.unavailable("agent_id must be a string.")
+                }
+                if !id.isEmpty, id != "${agent_id}" {
+                    return VoiceReply(accepted: false, code: "child_agent_denied",
+                                      message: "Only the main agent can use DictaFlow voice. Finish the written answer normally.")
+                }
+            }
+        }
         let suppliedRequest = try uuid("request_id", in: arguments)
         if operation == .prepare || operation == .status {
             guard suppliedRequest != nil else { throw VoiceError.unavailable("request_id is required for this operation.") }

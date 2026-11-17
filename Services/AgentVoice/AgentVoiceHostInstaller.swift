@@ -3,8 +3,9 @@ import Foundation
 
 /// One-click host setup for Agent Voice. Registers the bundled dictaflow-mcp
 /// helper with Codex, Claude Code, or Muse Code, then verifies the entry.
-/// Codex and Claude also receive user-level lifecycle hook definitions.
-/// A configured entry means the
+/// Codex and Claude also receive user-level lifecycle hook definitions, and
+/// Claude and Muse receive a main-agent-only PreToolUse guard so child
+/// agents cannot use DictaFlow voice tools. A configured entry means the
 /// host can find the server, not that a live MCP connection exists: the
 /// connection happens inside a new host session.
 enum AgentVoiceHostInstaller {
@@ -16,8 +17,9 @@ enum AgentVoiceHostInstaller {
         var cliPath: String?
         var configuredEntryFound: Bool
         var entryMatchesCurrent: Bool
-        /// Native lifecycle hooks in the host's user-level hook file.
-        /// Always false for hosts with no documented hook support.
+        /// Native hooks in the host's user-level hook file: lifecycle hooks
+        /// for Codex and Claude, a main-agent-only tool guard for Claude and
+        /// Muse. Always false for hosts without hook support.
         var hooksEntryFound: Bool = false
         var hooksMatchCurrent: Bool = false
         var entryDisabled: Bool = false
@@ -217,7 +219,8 @@ enum AgentVoiceHostInstaller {
             }
             let matches = codexEntryMatches(json: Data(output.stdout.utf8), executable: executable, arguments: arguments)
             return withHookStatus(HostState(cliPath: cliPath, configuredEntryFound: true, entryMatchesCurrent: matches),
-                                  host: host, url: codexHooksURL(homeDirectoryURL: homeDirectoryURL))
+                                  host: host, url: codexHooksURL(homeDirectoryURL: homeDirectoryURL),
+                                  executable: executable)
         case .claudeCode:
             guard let cliPath else { return HostState(cliPath: nil, configuredEntryFound: false, entryMatchesCurrent: false) }
             guard let output = try? await withTimeout(seconds: 30, host: host.name, operation: {
@@ -228,12 +231,15 @@ enum AgentVoiceHostInstaller {
             }
             let matches = claudeOutputMatches(output: output.stdout, executable: executable, arguments: arguments)
             return withHookStatus(HostState(cliPath: cliPath, configuredEntryFound: true, entryMatchesCurrent: matches),
-                                  host: host, url: claudeSettingsURL(homeDirectoryURL: home))
+                                  host: host, url: claudeSettingsURL(homeDirectoryURL: home),
+                                  executable: executable)
         case .museCode:
             let url = museSettingsURL(homeDirectoryURL: home)
             let data = try? Data(contentsOf: url)
             let entry = museEntryStatus(data: data, executable: executable, arguments: arguments)
-            return HostState(cliPath: cliPath, configuredEntryFound: entry.found, entryMatchesCurrent: entry.matches, entryDisabled: entry.disabled)
+            return withHookStatus(HostState(cliPath: cliPath, configuredEntryFound: entry.found,
+                                            entryMatchesCurrent: entry.matches, entryDisabled: entry.disabled),
+                                  host: host, url: url, executable: executable)
         }
     }
 
@@ -258,7 +264,8 @@ enum AgentVoiceHostInstaller {
             throw InstallerError.commandFailed(host: host.name, detail: "Manual setup only.")
         case .codex:
             let cli = try requireCLI(for: host, discovery: cliDiscovery)
-            _ = try mergedHooksData(existing: readIfPresent(codexHooks), host: host, path: codexHooks.path)
+            _ = try mergedHooksData(existing: readIfPresent(codexHooks), host: host, path: codexHooks.path,
+                                    executable: executable)
             let result = try await withTimeout(seconds: 60, host: host.name, operation: {
                 try await runner.run(executablePath: cli, arguments: ["mcp", "add", "dictaflow", "--", executable] + arguments)
             })
@@ -268,8 +275,8 @@ enum AgentVoiceHostInstaller {
             guard await isCodexConfigured(executable: executable, arguments: arguments, cliPath: cli, runner: runner) else {
                 throw InstallerError.verificationFailed(host: host.name)
             }
-            try writeHooks(host: host, url: codexHooks)
-            guard hooksStatus(data: try Data(contentsOf: codexHooks), host: host).matches else {
+            try writeHooks(host: host, url: codexHooks, executable: executable)
+            guard hooksStatus(data: try Data(contentsOf: codexHooks), host: host, executable: executable).matches else {
                 throw InstallerError.verificationFailed(host: host.name)
             }
             let originalConfig = try readIfPresent(codexConfig)
@@ -306,7 +313,8 @@ enum AgentVoiceHostInstaller {
                 throw InstallerError.commandFailed(host: host.name, detail: "Update Claude Code to 2.1.118 or later to install Agent Voice hooks.")
             }
             let settingsURL = claudeSettingsURL(homeDirectoryURL: home)
-            _ = try mergedHooksData(existing: readIfPresent(settingsURL), host: host, path: settingsURL.path)
+            _ = try mergedHooksData(existing: readIfPresent(settingsURL), host: host, path: settingsURL.path,
+                                    executable: executable)
             // Remove-then-add: adding over an existing server reports "already exists".
             _ = try? await withTimeout(seconds: 60, host: host.name, operation: {
                 try await runner.run(executablePath: cli, arguments: ["mcp", "remove", "dictaflow", "-s", "user"])
@@ -326,15 +334,19 @@ enum AgentVoiceHostInstaller {
                                            cliPath: cli, runner: runner) else {
                 throw InstallerError.verificationFailed(host: host.name)
             }
-            try writeHooks(host: host, url: settingsURL)
-            guard hooksStatus(data: try Data(contentsOf: settingsURL), host: host).matches else {
+            try writeHooks(host: host, url: settingsURL, executable: executable)
+            guard hooksStatus(data: try Data(contentsOf: settingsURL), host: host, executable: executable).matches else {
                 throw InstallerError.verificationFailed(host: host.name)
             }
         case .museCode:
             try writeMuseSettings(executable: executable, arguments: arguments, homeDirectoryURL: home)
-            let data = try? Data(contentsOf: museSettingsURL(homeDirectoryURL: home))
+            let settingsURL = museSettingsURL(homeDirectoryURL: home)
+            let data = try? Data(contentsOf: settingsURL)
             let entry = museEntryStatus(data: data, executable: executable, arguments: arguments)
-            guard entry.matches else { throw InstallerError.verificationFailed(host: host.name) }
+            guard entry.matches,
+                  hooksStatus(data: data, host: host, executable: executable).matches else {
+                throw InstallerError.verificationFailed(host: host.name)
+            }
             museDisabled = entry.disabled
         }
         if museDisabled {
@@ -355,7 +367,9 @@ enum AgentVoiceHostInstaller {
                 break
             }
         case .claudeCode:
-            message += " DictaFlow hooks were added to ~/.claude/settings.json alongside your other settings. Start a new Claude Code session so it picks up the server and hooks."
+            message += " DictaFlow hooks were added to ~/.claude/settings.json alongside your other settings: voice lifecycle plus a main-agent-only tool guard. Start a new Claude Code session so it picks up the server and hooks."
+        case .museCode:
+            message += " DictaFlow's main-agent-only tool guard was added to ~/.config/muse/settings.json alongside the server. Start a new Muse Code session so it picks up the server and guard."
         default:
             message += " Start a new \(host.name) session so it picks up the server."
         }
@@ -400,6 +414,8 @@ enum AgentVoiceHostInstaller {
     }
 
     /// Merges the DictaFlow server into Muse settings, preserving the existing `enabled` flag.
+    /// The same write also merges the main-agent-only PreToolUse guard into
+    /// the file's `hooks` member, preserving every other hook.
     static func mergedMuseSettings(existing: Data?, executable: String, arguments: [String],
                                    path: String = museSettingsURL(homeDirectoryURL: defaultHomeDirectoryURL()).path) throws -> Data {
         var json: [String: Any]
@@ -422,6 +438,7 @@ enum AgentVoiceHostInstaller {
         servers["dictaflow"] = entry
         json[key] = servers
         if json["schema_version"] == nil { json["schema_version"] = 1 }
+        try applyHooksMerge(to: &json, host: .museCode, executable: executable, path: path)
         return try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     }
 
@@ -430,13 +447,30 @@ enum AgentVoiceHostInstaller {
     /// Events with a documented DictaFlow hook, per host. Codex documents
     /// UserPromptSubmit, Stop, and Interrupt with a Codex-specific turn_id.
     /// Claude Code documents UserPromptSubmit and Stop with session_id only
-    /// and has no Interrupt event, so none is invented for it. Muse Code
-    /// documents no lifecycle hooks; it stays MCP-only.
+    /// and has no Interrupt event, so none is invented for it. Both Claude
+    /// and Muse document PreToolUse, which carries the main-agent-only
+    /// voice guard. Muse documents command hooks only, so it receives the
+    /// guard but no lifecycle hooks; its lifecycle stays model-driven
+    /// through direct MCP calls, which the same guard filters.
     static func expectedHookEvents(for host: Host) -> [String] {
         switch host {
         case .codex: ["UserPromptSubmit", "Stop", "Interrupt"]
-        case .claudeCode: ["UserPromptSubmit", "Stop"]
-        case .museCode, .other: []
+        case .claudeCode: ["UserPromptSubmit", "Stop", "PreToolUse"]
+        case .museCode: ["PreToolUse"]
+        case .other: []
+        }
+    }
+
+    /// Matcher selecting every DictaFlow MCP tool for the PreToolUse guard.
+    /// Both hosts document the `mcp__<server>__.*` form for this.
+    static let dictaflowToolMatcher = "mcp__dictaflow__.*"
+
+    /// The matcher DictaFlow installs for one event, or nil for events whose
+    /// group carries no matcher. Lifecycle events match every occurrence.
+    static func expectedHookMatcher(for host: Host, event: String) -> String? {
+        switch (host, event) {
+        case (.claudeCode, "PreToolUse"), (.museCode, "PreToolUse"): dictaflowToolMatcher
+        default: nil
         }
     }
 
@@ -445,6 +479,9 @@ enum AgentVoiceHostInstaller {
     /// setup replaces those with this exact definition and keeps every
     /// other handler untouched. The prompt text is captured only from the
     /// hook's explicit `prompt` payload field, never from a transcript.
+    /// Claude inputs also substitute the host-supplied `${agent_id}` so the
+    /// helper can reject hook-forwarded child turns; the field is absent in
+    /// the main session.
     static func expectedHookHandler(for host: Host, event: String) -> [String: Any]? {
         let tool: String
         let input: [String: Any]
@@ -460,10 +497,10 @@ enum AgentVoiceHostInstaller {
             input = ["session_id": "${session_id}", "turn_id": "${turn_id}"]
         case (.claudeCode, "UserPromptSubmit"):
             tool = "on_user_prompt_submit"
-            input = ["session_id": "${session_id}", "prompt": "${prompt}"]
+            input = ["session_id": "${session_id}", "prompt": "${prompt}", "agent_id": "${agent_id}"]
         case (.claudeCode, "Stop"):
             tool = "on_stop"
-            input = ["session_id": "${session_id}"]
+            input = ["session_id": "${session_id}", "agent_id": "${agent_id}"]
         default: return nil
         }
         // `statusMessage` is the label Codex shows for the handler in /hooks
@@ -475,17 +512,70 @@ enum AgentVoiceHostInstaller {
                 "timeout": 2, "statusMessage": "DictaFlow: Agent Voice"]
     }
 
-    static func hooksStatus(data: Data?, host: Host) -> (found: Bool, matches: Bool) {
+    /// The exact PreToolUse guard handler for one host. The helper runs once
+    /// per DictaFlow tool call and denies child callers from host-supplied
+    /// identity; it prints nothing for the main session. Both hosts use
+    /// shell form with a quoted executable path: Claude Code added the
+    /// exec-form `args` array only in 2.1.139, while setup still supports
+    /// 2.1.118 and later, and Muse accepts shell form only. Identity of
+    /// our own guard in a file is a `command` handler invoking
+    /// `dictaflow-mcp --hook-event`; setup replaces those and keeps every
+    /// other handler untouched.
+    static func expectedCommandHookHandler(for host: Host, event: String, executable: String) -> [String: Any]? {
+        switch (host, event) {
+        case (.claudeCode, "PreToolUse"):
+            return ["type": "command", "command": claudeGuardCommand(executable: executable),
+                    "timeout": 5, "statusMessage": "DictaFlow: Agent Voice"]
+        case (.museCode, "PreToolUse"):
+            return ["type": "command", "command": museGuardCommand(executable: executable),
+                    "timeout": 5, "statusMessage": "DictaFlow: Agent Voice"]
+        default: return nil
+        }
+    }
+
+    /// Shell command running the Claude Code PreToolUse guard. Single
+    /// source for one-click setup and the manual snippet so the two cannot
+    /// drift. Shell form runs on every supported Claude Code release
+    /// (2.1.118 and later); the exec-form `args` array needs 2.1.139+.
+    static func claudeGuardCommand(executable: String) -> String {
+        "\(shellQuoted(executable)) --hook-event PreToolUse --host claude"
+    }
+
+    /// Shell command running the Muse PreToolUse guard. Single source for
+    /// one-click setup and the manual snippet so the two cannot drift.
+    static func museGuardCommand(executable: String) -> String {
+        "\(shellQuoted(executable)) --hook-event PreToolUse --host muse"
+    }
+
+    static func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    /// The exact handler DictaFlow installs for one event, either kind.
+    static func expectedAnyHookHandler(for host: Host, event: String, executable: String) -> [String: Any]? {
+        expectedHookHandler(for: host, event: event)
+            ?? expectedCommandHookHandler(for: host, event: event, executable: executable)
+    }
+
+    static func hooksStatus(data: Data?, host: Host, executable: String) -> (found: Bool, matches: Bool) {
         guard let data, !data.isEmpty,
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let hooks = root["hooks"] as? [String: Any] else { return (false, false) }
         var found = false
         var matches = !expectedHookEvents(for: host).isEmpty
         for event in expectedHookEvents(for: host) {
-            let handlers = hookHandlers(in: hooks[event])
-            let own = handlers.filter(isDictaFlowHook)
-            if !own.isEmpty { found = true }
-            guard let expected = expectedHookHandler(for: host, event: event),
+            let groups = (hooks[event] as? [[String: Any]]) ?? []
+            let expectedMatcher = expectedHookMatcher(for: host, event: event)
+            // Our handler counts only under the expected matcher. A copy
+            // under another matcher (for example a hand-edited group) is
+            // stale: it is found but never matches.
+            let own = groups.filter { ($0["matcher"] as? String) == expectedMatcher }
+                .flatMap { ($0["hooks"] as? [[String: Any]]) ?? [] }.filter(isDictaFlowHook)
+            let stray = groups.filter { ($0["matcher"] as? String) != expectedMatcher }
+                .flatMap { ($0["hooks"] as? [[String: Any]]) ?? [] }.filter(isDictaFlowHook)
+            if !own.isEmpty || !stray.isEmpty { found = true }
+            guard stray.isEmpty,
+                  let expected = expectedAnyHookHandler(for: host, event: event, executable: executable),
                   own.count == 1, canonicalJSON(own[0]) == canonicalJSON(expected) else {
                 matches = false
                 continue
@@ -502,18 +592,28 @@ enum AgentVoiceHostInstaller {
     /// Merges DictaFlow hooks into a Codex `hooks.json` root object,
     /// preserving other top-level keys, events, groups, and handlers.
     static func mergedCodexHooks(existing: Data?) throws -> Data {
+        // Codex installs no command hooks, so the executable is unused.
         try mergedHooksData(existing: existing, host: .codex,
-                            path: codexHooksURL().path)
+                            path: codexHooksURL().path, executable: "")
     }
 
     /// Merges DictaFlow hooks into Claude Code `settings.json`, preserving
     /// every other setting and hook.
-    static func mergedClaudeSettings(existing: Data?) throws -> Data {
+    static func mergedClaudeSettings(existing: Data?, executable: String) throws -> Data {
         try mergedHooksData(existing: existing, host: .claudeCode,
-                            path: claudeSettingsURL(homeDirectoryURL: defaultHomeDirectoryURL()).path)
+                            path: claudeSettingsURL(homeDirectoryURL: defaultHomeDirectoryURL()).path,
+                            executable: executable)
     }
 
-    private static func mergedHooksData(existing: Data?, host: Host, path: String) throws -> Data {
+    /// Merges DictaFlow hooks into a Muse `settings.json` root object that
+    /// already passed settings validation, preserving every other member.
+    static func mergedMuseHooks(root: [String: Any], executable: String, path: String) throws -> [String: Any] {
+        var root = root
+        try applyHooksMerge(to: &root, host: .museCode, executable: executable, path: path)
+        return root
+    }
+
+    private static func mergedHooksData(existing: Data?, host: Host, path: String, executable: String) throws -> Data {
         var root: [String: Any] = [:]
         if let existing {
             guard let parsed = try? JSONSerialization.jsonObject(with: existing) as? [String: Any] else {
@@ -521,6 +621,15 @@ enum AgentVoiceHostInstaller {
             }
             root = parsed
         }
+        try applyHooksMerge(to: &root, host: host, executable: executable, path: path)
+        return try JSONSerialization.data(withJSONObject: root,
+                                          options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+    }
+
+    /// Replaces our own handlers in a parsed hooks root with the exact
+    /// current definitions, preserving every other key, event, group, and
+    /// handler. Guard groups carry their matcher; lifecycle groups carry none.
+    private static func applyHooksMerge(to root: inout [String: Any], host: Host, executable: String, path: String) throws {
         guard root["hooks"] == nil || root["hooks"] is [String: Any] else {
             throw InstallerError.invalidHooksFile(path: path)
         }
@@ -535,14 +644,16 @@ enum AgentVoiceHostInstaller {
             hooks[event] = groupsWithoutDictaFlow(in: groups)
         }
         for event in expectedHookEvents(for: host) {
-            guard let handler = expectedHookHandler(for: host, event: event) else { continue }
+            guard let handler = expectedAnyHookHandler(for: host, event: event, executable: executable) else { continue }
             var groups = hooks[event] as? [[String: Any]] ?? []
-            groups.append(["hooks": [handler]])
+            if let matcher = expectedHookMatcher(for: host, event: event) {
+                groups.append(["matcher": matcher, "hooks": [handler]])
+            } else {
+                groups.append(["hooks": [handler]])
+            }
             hooks[event] = groups
         }
         root["hooks"] = hooks
-        return try JSONSerialization.data(withJSONObject: root,
-                                          options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     }
 
     private static func hookHandlers(in groupsValue: Any?) -> [[String: Any]] {
@@ -564,7 +675,19 @@ enum AgentVoiceHostInstaller {
     }
 
     private static func isDictaFlowHook(_ handler: [String: Any]) -> Bool {
-        (handler["type"] as? String) == "mcp_tool" && (handler["server"] as? String) == "dictaflow"
+        if (handler["type"] as? String) == "mcp_tool", (handler["server"] as? String) == "dictaflow" { return true }
+        // Our own PreToolUse guard: the shell-form `command` string carries
+        // both the helper name and the `--hook-event` marker. A previous
+        // revision installed Claude's guard in exec form (`command` naming
+        // the helper with `--hook-event` in `args`); those still match so
+        // setup replaces them with the current shell form. Stale paths
+        // still match; unrelated command hooks never carry this exact
+        // marker combination.
+        guard (handler["type"] as? String) == "command",
+              let command = handler["command"] as? String else { return false }
+        guard command.contains("dictaflow-mcp") else { return false }
+        if let args = handler["args"] as? [String] { return args.contains("--hook-event") }
+        return command.contains("--hook-event")
     }
 
     private static func canonicalJSON(_ value: [String: Any]) -> String {
@@ -573,17 +696,18 @@ enum AgentVoiceHostInstaller {
     }
 
     /// Attaches hook install status from a settings file to a host state.
-    private static func withHookStatus(_ state: HostState, host: Host, url: URL) -> HostState {
+    private static func withHookStatus(_ state: HostState, host: Host, url: URL, executable: String) -> HostState {
         var state = state
-        let status = hooksStatus(data: try? Data(contentsOf: url), host: host)
+        let status = hooksStatus(data: try? Data(contentsOf: url), host: host, executable: executable)
         state.hooksEntryFound = status.found
         state.hooksMatchCurrent = status.matches
         return state
     }
 
     /// Merges DictaFlow hooks into the host settings file at `url`.
-    private static func writeHooks(host: Host, url: URL) throws {
-        let merged = try mergedHooksData(existing: readIfPresent(url), host: host, path: url.path)
+    private static func writeHooks(host: Host, url: URL, executable: String) throws {
+        let merged = try mergedHooksData(existing: readIfPresent(url), host: host, path: url.path,
+                                         executable: executable)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
         try merged.write(to: url, options: .atomic)

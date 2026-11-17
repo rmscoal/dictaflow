@@ -41,6 +41,18 @@ Codex setup also pre-approves DictaFlow's own tools with `default_tools_approval
 
 Codex's hooks can supply native session and turn IDs. Claude Code has different event fields and requires its own configuration. Other MCP hosts need a lifecycle integration or manual playback; do not assume they implement Codex hooks. Lifecycle setup and supported versions must be checked using isolated host fixtures before claiming end-to-end support.
 
+### Main-agent-only voice (Claude Code, Muse Code)
+
+Only the user-facing coordinating agent may open voice interactions, submit renditions, admit playback, or interrupt speech. Child, nested, background, and custom agents must not speak, mutate parent drafts, or cancel parent playback. Independent top-level sessions are unaffected: each speaks for itself.
+
+Enforcement uses host-supplied identity only, never model-supplied arguments:
+
+- Claude Code lifecycle hooks substitute `${agent_id}` into `on_user_prompt_submit` and `on_stop`. The helper rejects a non-empty value before any attachment or store contact. Missing, empty, or literally unsubstituted values are the main session. `agent_type` alone never proves a child (a root `--agent` session sets it) and is ignored.
+- A PreToolUse command hook matching `mcp__dictaflow__.*` denies direct child model calls to every DictaFlow tool. The helper answers from the host's hook input (`agent_id` for Claude; `MUSE_SESSION_ID` versus `MUSE_THREAD_ID` for Muse) and exits 0 in all cases so the host always continues.
+- Muse documents command hooks only, so it receives the guard but no lifecycle hooks. Its lifecycle stays model-driven through direct MCP calls, which the same guard filters. A Muse hook without both session variables denies loudly with an update prompt instead of silently passing as root.
+
+Boundaries, not guarantees: external orchestrators that launch children as independent ordinary CLI sessions (for example T3) communicate no ancestry, so each looks top-level and filtering cannot apply; children spawned that way speak in their own sessions. Claude Code added `agent_id` to hook events in 2.1.69 and DictaFlow setup requires 2.1.118 or later, so every accepted release supplies child identity and no accepted release fails open for lack of it; a release predating 2.1.69 would fail open (voice works, filtering may not) but is below the minimum and setup refuses it. The PreToolUse guard uses shell form so it runs on every accepted release (the exec-form `args` array needs 2.1.139 or later). No live host sessions were used to qualify this; verification is isolated fixtures and deterministic tests only.
+
 Example Codex hooks for an MCP server named `dictaflow`:
 
 ```json

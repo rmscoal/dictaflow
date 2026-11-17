@@ -151,7 +151,11 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
     }
 
     private func makeExecutable() throws -> String {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        // The fixture keeps the real helper basename: guard identity in hook
+        // files recognizes our own handlers across stale install paths.
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("dictaflow-mcp")
         try Data("#!/bin/sh\nexit 0\n".utf8).write(to: url)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         return url.path
@@ -182,7 +186,7 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         XCTAssertTrue(message.contains("Start a new Codex session"))
         XCTAssertTrue(message.contains("/hooks"))
         let hooksData = try Data(contentsOf: AgentVoiceHostInstaller.codexHooksURL(homeDirectoryURL: home))
-        XCTAssertTrue(AgentVoiceHostInstaller.hooksStatus(data: hooksData, host: .codex).matches)
+        XCTAssertTrue(AgentVoiceHostInstaller.hooksStatus(data: hooksData, host: .codex, executable: executable).matches)
     }
 
     private final class CallLog: Sendable {
@@ -220,7 +224,8 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
             installationID: installation, agentVoiceEnabled: false,
             runner: runner, homeDirectoryURL: home, cliDiscovery: { _ in "/bin/claude" })
         let claudeHooks = try Data(contentsOf: AgentVoiceHostInstaller.claudeSettingsURL(homeDirectoryURL: home))
-        XCTAssertTrue(AgentVoiceHostInstaller.hooksStatus(data: claudeHooks, host: .claudeCode).matches)
+        XCTAssertTrue(AgentVoiceHostInstaller.hooksStatus(data: claudeHooks, host: .claudeCode, executable: executable).matches)
+        XCTAssertTrue(message.contains("main-agent-only tool guard"))
         XCTAssertTrue(message.contains("Turn Enable Agent Voice on"))
         XCTAssertEqual(log.all.count, 4)
         XCTAssertEqual(log.all.first, ["--version"])
@@ -259,11 +264,14 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
             installationID: installation, agentVoiceEnabled: true,
             runner: StubRunner(handlers: []), homeDirectoryURL: home)
         XCTAssertTrue(message.contains("Start a new Muse Code session"))
+        XCTAssertTrue(message.contains("tool guard"))
         let data = try Data(contentsOf: AgentVoiceHostInstaller.museSettingsURL(homeDirectoryURL: home))
         let (found, matches, _) = AgentVoiceHostInstaller.museEntryStatus(
             data: data, executable: executable, arguments: arguments(host: .museCode))
         XCTAssertTrue(found)
         XCTAssertTrue(matches)
+        XCTAssertTrue(AgentVoiceHostInstaller.hooksStatus(data: data, host: .museCode, executable: executable).matches,
+                      "Muse setup must install the PreToolUse guard alongside the server.")
     }
 
     func testSetUpFailsWhenHelperIsMissing() async {
@@ -286,16 +294,44 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         XCTAssertEqual(AgentVoiceHostInstaller.expectedHookEvents(for: .codex),
                        ["UserPromptSubmit", "Stop", "Interrupt"])
         XCTAssertEqual(AgentVoiceHostInstaller.expectedHookEvents(for: .claudeCode),
-                       ["UserPromptSubmit", "Stop"])
-        XCTAssertTrue(AgentVoiceHostInstaller.expectedHookEvents(for: .museCode).isEmpty)
+                       ["UserPromptSubmit", "Stop", "PreToolUse"])
+        XCTAssertEqual(AgentVoiceHostInstaller.expectedHookEvents(for: .museCode), ["PreToolUse"])
+        XCTAssertTrue(AgentVoiceHostInstaller.expectedHookEvents(for: .other).isEmpty)
         let codexPrompt = AgentVoiceHostInstaller.expectedHookHandler(for: .codex, event: "UserPromptSubmit")?["input"] as? [String: String]
         XCTAssertEqual(codexPrompt?["turn_id"], "${turn_id}")
         XCTAssertEqual(codexPrompt?["prompt"], "${prompt}")
+        XCTAssertNil(codexPrompt?["agent_id"], "Codex hooks stay unchanged.")
+        XCTAssertNil(AgentVoiceHostInstaller.expectedHookHandler(for: .codex, event: "PreToolUse"))
         let claudePrompt = AgentVoiceHostInstaller.expectedHookHandler(for: .claudeCode, event: "UserPromptSubmit")?["input"] as? [String: String]
         XCTAssertEqual(claudePrompt?["prompt"], "${prompt}")
+        XCTAssertEqual(claudePrompt?["agent_id"], "${agent_id}")
         XCTAssertNil(claudePrompt?["turn_id"], "Claude Code documents no turn_id; none is invented.")
         XCTAssertNil(AgentVoiceHostInstaller.expectedHookHandler(for: .claudeCode, event: "Interrupt"),
                      "Claude Code documents no Interrupt hook event.")
+        XCTAssertNil(AgentVoiceHostInstaller.expectedHookHandler(for: .museCode, event: "UserPromptSubmit"),
+                     "Muse Code documents command hooks only; no mcp_tool lifecycle is invented.")
+    }
+
+    func testPreToolUseGuardUsesDocumentedMatcherAndFormPerHost() {
+        XCTAssertEqual(AgentVoiceHostInstaller.expectedHookMatcher(for: .claudeCode, event: "PreToolUse"),
+                       "mcp__dictaflow__.*")
+        XCTAssertEqual(AgentVoiceHostInstaller.expectedHookMatcher(for: .museCode, event: "PreToolUse"),
+                       "mcp__dictaflow__.*")
+        XCTAssertNil(AgentVoiceHostInstaller.expectedHookMatcher(for: .claudeCode, event: "Stop"))
+        let claude = AgentVoiceHostInstaller.expectedCommandHookHandler(
+            for: .claudeCode, event: "PreToolUse", executable: executable)
+        XCTAssertEqual(claude?["type"] as? String, "command")
+        XCTAssertEqual(claude?["command"] as? String,
+                       "'\(executable)' --hook-event PreToolUse --host claude")
+        XCTAssertNil(claude?["args"], "Exec-form args need Claude Code 2.1.139+; setup supports 2.1.118+, so the guard uses shell form.")
+        let muse = AgentVoiceHostInstaller.expectedCommandHookHandler(
+            for: .museCode, event: "PreToolUse", executable: executable)
+        XCTAssertEqual(muse?["type"] as? String, "command")
+        XCTAssertEqual(muse?["command"] as? String,
+                       "'\(executable)' --hook-event PreToolUse --host muse")
+        XCTAssertNil(muse?["args"], "Muse skips handlers with args; the guard uses shell form only.")
+        XCTAssertNil(AgentVoiceHostInstaller.expectedCommandHookHandler(for: .codex, event: "PreToolUse", executable: executable),
+                     "Codex setup stays unchanged.")
     }
 
     func testHookHandlersCarryReviewDisplayNames() {
@@ -307,6 +343,11 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
             XCTAssertEqual(AgentVoiceHostInstaller.expectedHookHandler(for: host, event: event)?["statusMessage"] as? String,
                            "DictaFlow: Agent Voice",
                            "\(event) must show the DictaFlow label in host review, not \"Unnamed hook\".")
+        }
+        for host: AgentVoiceHostInstaller.Host in [.claudeCode, .museCode] {
+            XCTAssertEqual(AgentVoiceHostInstaller.expectedCommandHookHandler(
+                for: host, event: "PreToolUse", executable: executable)?["statusMessage"] as? String,
+                           "DictaFlow: Agent Voice")
         }
     }
 
@@ -326,7 +367,7 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         XCTAssertEqual(first, second, "Merging twice must not duplicate or reorder our hooks.")
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: first) as? [String: Any])
         XCTAssertEqual(root["description"] as? String, "keep me")
-        let status = AgentVoiceHostInstaller.hooksStatus(data: first, host: .codex)
+        let status = AgentVoiceHostInstaller.hooksStatus(data: first, host: .codex, executable: executable)
         XCTAssertTrue(status.found)
         XCTAssertTrue(status.matches)
         let hooks = try XCTUnwrap(root["hooks"] as? [String: Any])
@@ -345,20 +386,143 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
             "model": "keep-model",
             "hooks": ["Interrupt": [["hooks": [staleInterrupt]]]],
         ]
-        let merged = try AgentVoiceHostInstaller.mergedClaudeSettings(existing: JSONSerialization.data(withJSONObject: existing))
+        let merged = try AgentVoiceHostInstaller.mergedClaudeSettings(
+            existing: JSONSerialization.data(withJSONObject: existing), executable: executable)
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: merged) as? [String: Any])
         XCTAssertEqual(root["model"] as? String, "keep-model")
-        let status = AgentVoiceHostInstaller.hooksStatus(data: merged, host: .claudeCode)
+        let status = AgentVoiceHostInstaller.hooksStatus(data: merged, host: .claudeCode, executable: executable)
         XCTAssertTrue(status.matches, "Stale invented Interrupt hooks must not survive a merge.")
     }
 
+    func testClaudeMergeAddsGuardPreservesOthersAndIsIdempotent() throws {
+        let other: [String: Any] = ["type": "command", "command": "echo lint"]
+        // Previous revision installed the guard in exec form, which needs
+        // Claude Code 2.1.139+. It must be replaced with shell form.
+        let staleGuard: [String: Any] = ["type": "command", "command": "/old/dictaflow-mcp",
+                                         "args": ["--hook-event", "PreToolUse", "--host", "claude"]]
+        let staleLifecycle: [String: Any] = ["type": "mcp_tool", "server": "dictaflow", "tool": "on_stop",
+                                             "input": ["session_id": "${session_id}"]]
+        let existing: [String: Any] = [
+            "model": "keep-model",
+            "hooks": [
+                "Stop": [["hooks": [other, staleLifecycle]]],
+                "PreToolUse": [
+                    ["matcher": "Bash", "hooks": [other]],
+                    ["matcher": "mcp__dictaflow__.*", "hooks": [staleGuard]],
+                ],
+            ],
+        ]
+        let first = try AgentVoiceHostInstaller.mergedClaudeSettings(
+            existing: JSONSerialization.data(withJSONObject: existing), executable: executable)
+        let second = try AgentVoiceHostInstaller.mergedClaudeSettings(existing: first, executable: executable)
+        XCTAssertEqual(first, second, "Merging twice must not duplicate or reorder our hooks.")
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: first) as? [String: Any])
+        XCTAssertEqual(root["model"] as? String, "keep-model")
+        let status = AgentVoiceHostInstaller.hooksStatus(data: first, host: .claudeCode, executable: executable)
+        XCTAssertTrue(status.found)
+        XCTAssertTrue(status.matches)
+        let hooks = try XCTUnwrap(root["hooks"] as? [String: Any])
+        let stopHandlers = ((hooks["Stop"] as? [[String: Any]]) ?? []).flatMap { ($0["hooks"] as? [[String: Any]]) ?? [] }
+        XCTAssertTrue(stopHandlers.contains { ($0["command"] as? String) == "echo lint" },
+                      "Other handlers sharing an event are preserved.")
+        let guardGroups = ((hooks["PreToolUse"] as? [[String: Any]]) ?? [])
+            .filter { ($0["matcher"] as? String) == "mcp__dictaflow__.*" }
+        XCTAssertEqual(guardGroups.count, 1)
+        let guardHandlers = (guardGroups.first?["hooks"] as? [[String: Any]]) ?? []
+        XCTAssertEqual(guardHandlers.count, 1)
+        XCTAssertEqual(guardHandlers.first?["command"] as? String,
+                       "'\(executable)' --hook-event PreToolUse --host claude",
+                       "The stale exec-form guard is replaced with shell form.")
+        XCTAssertNil(guardHandlers.first?["args"], "The current guard carries no exec-form args.")
+        let stopInputs = stopHandlers.compactMap { $0["input"] as? [String: String] }
+        XCTAssertTrue(stopInputs.contains { $0["agent_id"] == "${agent_id}" },
+                      "Stale lifecycle handlers gain the agent_id substitution.")
+        let bashGroups = ((hooks["PreToolUse"] as? [[String: Any]]) ?? [])
+            .filter { ($0["matcher"] as? String) == "Bash" }
+        XCTAssertEqual(bashGroups.count, 1, "Unrelated matcher groups are preserved.")
+    }
+
+    func testClaudeStatusDetectsStaleLifecycleGuardPathAndMatcher() throws {
+        // Lifecycle without agent_id, a stale guard path, an exec-form
+        // guard with the current path, and our guard under the wrong
+        // matcher are all found but not current.
+        let staleLifecycle: [String: Any] = ["type": "mcp_tool", "server": "dictaflow",
+                                             "tool": "on_user_prompt_submit",
+                                             "input": ["session_id": "${session_id}",
+                                                       "prompt": "${prompt}"]]
+        let stalePath: [String: Any] = ["type": "command",
+                                        "command": "'/old/dictaflow-mcp' --hook-event PreToolUse --host claude"]
+        let staleExecForm: [String: Any] = ["type": "command", "command": executable,
+                                            "args": ["--hook-event", "PreToolUse", "--host", "claude"]]
+        let wrongMatcher = try XCTUnwrap(AgentVoiceHostInstaller.expectedCommandHookHandler(
+            for: .claudeCode, event: "PreToolUse", executable: executable))
+        for hooksValue: [String: Any] in [
+            ["UserPromptSubmit": [["hooks": [staleLifecycle]]]],
+            ["PreToolUse": [["matcher": "mcp__dictaflow__.*", "hooks": [stalePath]]]],
+            ["PreToolUse": [["matcher": "mcp__dictaflow__.*", "hooks": [staleExecForm]]]],
+            ["PreToolUse": [["matcher": "Bash", "hooks": [wrongMatcher]]]],
+        ] {
+            let data = try JSONSerialization.data(withJSONObject: ["hooks": hooksValue])
+            let status = AgentVoiceHostInstaller.hooksStatus(data: data, host: .claudeCode, executable: executable)
+            XCTAssertTrue(status.found)
+            XCTAssertFalse(status.matches)
+        }
+    }
+
+    func testMuseMergeAddsGuardPreservesServersAndOthers() throws {
+        let other: [String: Any] = ["type": "command", "command": "echo note"]
+        let staleGuard: [String: Any] = ["type": "command",
+                                         "command": "'/old/dictaflow-mcp' --hook-event PreToolUse --host muse"]
+        let existing: [String: Any] = [
+            "schema_version": 1,
+            "provider": "meta",
+            "mcp_servers": ["other": ["transport": "stdio", "command": "/bin/other"]],
+            "hooks": [
+                "UserPromptSubmit": [["hooks": [other]]],
+                "PreToolUse": [["matcher": "mcp__dictaflow__.*", "hooks": [staleGuard]]],
+            ],
+        ]
+        let first = try AgentVoiceHostInstaller.mergedMuseSettings(
+            existing: JSONSerialization.data(withJSONObject: existing),
+            executable: executable, arguments: arguments(host: .museCode))
+        let second = try AgentVoiceHostInstaller.mergedMuseSettings(
+            existing: first, executable: executable, arguments: arguments(host: .museCode))
+        XCTAssertEqual(first, second, "Merging twice must not duplicate or reorder our hooks.")
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: first) as? [String: Any])
+        XCTAssertEqual(root["provider"] as? String, "meta")
+        let (found, matches, _) = AgentVoiceHostInstaller.museEntryStatus(
+            data: first, executable: executable, arguments: arguments(host: .museCode))
+        XCTAssertTrue(found)
+        XCTAssertTrue(matches)
+        let status = AgentVoiceHostInstaller.hooksStatus(data: first, host: .museCode, executable: executable)
+        XCTAssertTrue(status.found)
+        XCTAssertTrue(status.matches)
+        let hooks = try XCTUnwrap(root["hooks"] as? [String: Any])
+        let promptHandlers = ((hooks["UserPromptSubmit"] as? [[String: Any]]) ?? [])
+            .flatMap { ($0["hooks"] as? [[String: Any]]) ?? [] }
+        XCTAssertTrue(promptHandlers.contains { ($0["command"] as? String) == "echo note" },
+                      "Unrelated hooks are preserved.")
+        XCTAssertNil(hooks["Stop"], "Muse receives the guard only; no lifecycle hooks are invented.")
+    }
+
+    func testMuseMergeRejectsInvalidHooksShape() throws {
+        let existing: [String: Any] = ["schema_version": 1, "hooks": ["PreToolUse": "not-groups"]]
+        XCTAssertThrowsError(try AgentVoiceHostInstaller.mergedMuseSettings(
+            existing: JSONSerialization.data(withJSONObject: existing),
+            executable: executable, arguments: arguments(host: .museCode))) { error in
+            guard case AgentVoiceHostInstaller.InstallerError.invalidHooksFile = error else {
+                return XCTFail("Expected invalidHooksFile, got \(error)")
+            }
+        }
+    }
+
     func testHooksStatusReportsMissingAndStale() throws {
-        XCTAssertFalse(AgentVoiceHostInstaller.hooksStatus(data: nil, host: .codex).found)
+        XCTAssertFalse(AgentVoiceHostInstaller.hooksStatus(data: nil, host: .codex, executable: executable).found)
         let staleHandler: [String: Any] = ["type": "mcp_tool", "server": "dictaflow",
                                            "tool": "on_stop", "input": ["session_id": "old"]]
         let stale: [String: Any] = ["hooks": ["Stop": [["hooks": [staleHandler]]]]]
         let data = try JSONSerialization.data(withJSONObject: stale)
-        let status = AgentVoiceHostInstaller.hooksStatus(data: data, host: .codex)
+        let status = AgentVoiceHostInstaller.hooksStatus(data: data, host: .codex, executable: executable)
         XCTAssertTrue(status.found)
         XCTAssertFalse(status.matches)
     }

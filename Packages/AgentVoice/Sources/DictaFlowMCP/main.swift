@@ -8,11 +8,36 @@ func argument(_ key: String) -> String? {
     return CommandLine.arguments[index + 1]
 }
 
+/// Bounded stdin read for hook-guard mode. Payloads are small (Muse caps
+/// them at 256 KiB); anything past the cap is treated as malformed input.
+func readHookStdin(limit: Int = 1024 * 1024) -> Data? {
+    let handle = FileHandle.standardInput
+    var data = Data()
+    while data.count <= limit {
+        guard let chunk = try? handle.read(upToCount: 64 * 1024), !chunk.isEmpty else { break }
+        data.append(chunk)
+    }
+    return data.count <= limit ? data : nil
+}
+
 do {
+    // Hook-guard mode: one PreToolUse decision per process, no bridge use.
+    // The host supplies identity on stdin and in the environment; model tool
+    // arguments are never trusted here. Always exits 0 so the host continues.
+    if let event = argument("--hook-event") {
+        guard !event.isEmpty, let host = argument("--host"), !host.isEmpty else {
+            FileHandle.standardError.write(Data("dictaflow-mcp --hook-event requires an event name and --host\n".utf8))
+            exit(0)
+        }
+        if let answer = HookGuard.response(event: event, host: host, stdin: readHookStdin() ?? Data()) {
+            print(answer)
+        }
+        exit(0)
+    }
     guard let appID = argument("--app-id"), ["com.dictaflow", "com.dictaflow.dev"].contains(appID),
           let installation = argument("--installation-id").flatMap(UUID.init(uuidString:)),
           let host = argument("--host"), !host.isEmpty else {
-        throw VoiceError.unavailable("Usage: dictaflow-mcp --app-id com.dictaflow[.dev] --installation-id UUID --host codex|claude")
+        throw VoiceError.unavailable("Usage: dictaflow-mcp --app-id com.dictaflow[.dev] --installation-id UUID --host codex|claude|muse")
     }
     let socketURL = argument("--socket-path").map { URL(fileURLWithPath: $0) } ?? VoicePaths.socketURL(appID: appID)
     let adapter = VoiceAdapter(client: LocalVoiceClient(socketURL: socketURL), installationID: installation, host: host)
@@ -21,6 +46,7 @@ do {
         let properties: Value = .object([
             "session_id": ["type": "string", "description": "Stable native host session ID."],
             "turn_id": ["type": "string", "description": "Native host turn ID for observation-only lifecycle callbacks. This does not authenticate a hook."],
+            "agent_id": ["type": "string", "description": "Host-supplied child-agent identity, substituted by lifecycle hooks. Main sessions omit it. A non-empty value is rejected; direct child calls are blocked earlier by the PreToolUse guard."],
             "request_id": ["type": "string", "description": "UUID. Reuse unchanged after an unknown-outcome timeout."],
             "input_id": ["type": "string", "description": "UUID returned by on_user_prompt_submit."],
             "text": ["type": "string", "maxLength": 8000],

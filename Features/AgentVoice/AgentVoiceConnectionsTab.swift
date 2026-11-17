@@ -133,7 +133,7 @@ struct AgentVoiceConnectionsTab: View {
 
     private func hostCard(for host: Host) -> some View {
         let status = cardStatus(for: host)
-        let hooksSnippet = try? AgentVoiceHostSetup.hooksSnippet(for: host)
+        let hooksSnippet = try? AgentVoiceHostSetup.hooksSnippet(for: host, executable: Self.executablePath)
         return AgentVoiceHostCard(
             brand: AgentVoiceHostBrand.brand(for: host),
             status: status,
@@ -155,7 +155,7 @@ struct AgentVoiceConnectionsTab: View {
             onSetUp: { setUp(host) },
             onCopySetup: { copy(setupSnippet(for: host), key: Self.setupCopyKey(host)) },
             onCopyHooks: {
-                if let hooks = try? AgentVoiceHostSetup.hooksSnippet(for: host) {
+                if let hooks = try? AgentVoiceHostSetup.hooksSnippet(for: host, executable: Self.executablePath) {
                     copy(hooks, key: Self.hooksCopyKey(host))
                 }
             }
@@ -265,7 +265,7 @@ struct AgentVoiceConnectionsTab: View {
         case .claudeCode:
             return "Adds DictaFlow and its voice hooks to Claude Code."
         case .museCode:
-            return "Adds DictaFlow to your Muse settings."
+            return "Adds DictaFlow and its voice guard to your Muse settings."
         case .other:
             return "Copy the command and register it as a stdio server named dictaflow."
         }
@@ -275,6 +275,9 @@ struct AgentVoiceConnectionsTab: View {
         guard hasHooks else { return nil }
         if host == .codex {
             return "Merge into \(AgentVoiceHostInstaller.codexHooksURL().path), then review the hooks in Codex with /hooks."
+        }
+        if host == .museCode {
+            return "Merge the hooks into ~/.config/muse/settings.json."
         }
         return "With Claude Code 2.1.118 or later, merge the hooks into ~/.claude/settings.json."
     }

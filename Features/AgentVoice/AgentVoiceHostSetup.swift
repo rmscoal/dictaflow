@@ -27,18 +27,24 @@ enum AgentVoiceHostSetup {
     }
 
     /// Manual equivalent of the hooks one-click setup installs, for hosts
-    /// with documented lifecycle hooks. Returns nil where no hook support is
-    /// documented (Muse Code, other hosts): nothing is invented for them.
+    /// with documented hooks. Returns nil where no hook support is
+    /// documented (other hosts): nothing is invented for them.
     /// Codex users merge this into ~/.codex/hooks.json and then review and
     /// trust the DictaFlow hooks with /hooks. Claude Code users merge the
-    /// `hooks` value into ~/.claude/settings.json.
-    static func hooksSnippet(for host: AgentVoiceHostAvailability.Host) throws -> String? {
+    /// `hooks` value into ~/.claude/settings.json. Muse Code users merge the
+    /// `hooks` value into ~/.config/muse/settings.json.
+    static func hooksSnippet(for host: AgentVoiceHostAvailability.Host, executable: String) throws -> String? {
         let events = AgentVoiceHostInstaller.expectedHookEvents(for: host)
         guard !events.isEmpty else { return nil }
         var hooks: [String: Any] = [:]
         for event in events {
-            if let handler = AgentVoiceHostInstaller.expectedHookHandler(for: host, event: event) {
-                hooks[event] = [["hooks": [handler]]]
+            if let handler = AgentVoiceHostInstaller.expectedAnyHookHandler(for: host, event: event,
+                                                                            executable: executable) {
+                if let matcher = AgentVoiceHostInstaller.expectedHookMatcher(for: host, event: event) {
+                    hooks[event] = [["matcher": matcher, "hooks": [handler]]]
+                } else {
+                    hooks[event] = [["hooks": [handler]]]
+                }
             }
         }
         let data = try JSONSerialization.data(withJSONObject: ["hooks": hooks],
