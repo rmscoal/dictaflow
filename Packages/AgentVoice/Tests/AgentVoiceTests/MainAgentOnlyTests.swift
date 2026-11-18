@@ -14,7 +14,7 @@ struct MainAgentOnlyTests {
 
     @Test func childIdentityIsDeniedOnEveryToolWithoutStoreContact() async throws {
         for host in ["claude", "muse"] {
-            for tool in ["on_user_prompt_submit", "prepare_spoken_response", "on_stop",
+            for tool in ["on_user_prompt_submit", "prepare_spoken_response", "skip_spoken_response", "on_stop",
                          "on_interrupt", "get_speech_status"] {
                 let client = CountingBridge()
                 let adapter = VoiceAdapter(client: client, installationID: UUID(), host: host)
@@ -107,7 +107,7 @@ struct MainAgentOnlyTests {
         }
     }
 
-    private let voiceTools = ["on_user_prompt_submit", "prepare_spoken_response", "on_stop",
+    private let voiceTools = ["on_user_prompt_submit", "prepare_spoken_response", "skip_spoken_response", "on_stop",
                               "on_interrupt", "get_speech_status"]
 
     private func codexArguments(session: String = "root") -> [String: Value] {
@@ -165,7 +165,7 @@ struct MainAgentOnlyTests {
         }
         let sent = await client.sent
         #expect(sent.filter { $0.operation == .attach }.count == 2)
-        #expect(sent.filter { $0.operation != .attach }.count == 10)
+        #expect(sent.filter { $0.operation != .attach }.count == 12)
     }
 
     @Test func codexLifecycleHooksUseOwningThreadBeforeAnyStoreContact() async throws {

@@ -657,6 +657,83 @@ final class AgentVoiceTests: XCTestCase {
         await voice.waitForShutdown()
     }
 
+    func testAgentSkipRejectsLateSynthesisResult() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let runtime = SuspendedVoiceRuntimeFixture()
+        let player = VoicePlayerFixture()
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
+                                          runtime: runtime, appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
+        defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        voice.setEnabled(true)
+        let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
+        let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "late-skip")
+        let attachment = try await client.send(.init(session: session, operation: .attach)).attachment
+        let input = try await client.send(.init(session: session, operation: .prompt, attachment: attachment)).inputID
+        let response = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
+                                                  inputID: input, text: "Never play this late result."))
+        _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !(await runtime.isSuspended), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let started = await runtime.isSuspended
+        XCTAssertTrue(started)
+        let skipped = try await client.send(.init(session: session, operation: .skip, attachment: attachment,
+                                                 inputID: input, replacesDraftID: response.draftID, expectedRevision: response.revision))
+        XCTAssertTrue(skipped.accepted)
+        XCTAssertFalse(voice.isGenerating)
+        await runtime.releaseLateResult()
+        try await voice.waitForForegroundResources()
+        XCTAssertEqual(player.playCount, 0)
+        XCTAssertFalse(voice.isSpeaking)
+        voice.shutdown(); await voice.waitForShutdown()
+    }
+
+    func testAgentSkipStopsOnlyTargetPlaybackAndKeepsManualReplay() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let player = VoicePlayerFixture()
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
+                                          runtime: VoiceRuntimeFixture(), appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
+        defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        voice.setEnabled(true)
+        let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
+        let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "skip-target")
+        let attachment = try await client.send(.init(session: session, operation: .attach)).attachment
+        let input = try await client.send(.init(session: session, operation: .prompt, attachment: attachment)).inputID
+        let response = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
+                                                  inputID: input, text: "Target speech."))
+        _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
+        try await waitUntil { player.playCount == 1 }
+        let other = VoiceSession(installationID: session.installationID, host: "fixture", sessionID: "other")
+        let otherAttachment = try await client.send(.init(session: other, operation: .attach)).attachment
+        let otherInput = try await client.send(.init(session: other, operation: .prompt, attachment: otherAttachment)).inputID
+        _ = try await client.send(.init(session: other, operation: .prepare, attachment: otherAttachment,
+                                       inputID: otherInput, text: "Other queued speech."))
+        _ = try await client.send(.init(session: other, operation: .stop, attachment: otherAttachment, inputID: otherInput))
+        let skip = VoiceRequest(session: session, operation: .skip, attachment: attachment, inputID: input,
+                                replacesDraftID: response.draftID, expectedRevision: response.revision)
+        let result = try await client.send(skip)
+        XCTAssertTrue(result.accepted)
+        try await waitUntil { player.playCount == 2 }
+        XCTAssertTrue(voice.history.contains { $0.id == input && $0.interaction.skipToken == result.skipToken })
+        let target = try XCTUnwrap(voice.history.first { $0.id == input })
+        XCTAssertEqual(AgentVoiceSpeechStatus.headline(for: target), "Speech skipped by agent")
+        XCTAssertEqual(target.attempts.first?.state, .cancelled)
+        await voice.stopPlayback(attemptID: try XCTUnwrap(voice.history.first { $0.id == otherInput }?.attempts.first?.id))
+        await voice.playRendition(try XCTUnwrap(response.renditionID))
+        try await waitUntil { player.playCount == 3 }
+        var repeatSkip = skip
+        repeatSkip.requestID = UUID()
+        let repeated = try await client.send(repeatSkip)
+        XCTAssertEqual(repeated.skipToken, result.skipToken)
+        XCTAssertTrue(voice.isSpeaking)
+        voice.shutdown(); await voice.waitForShutdown()
+    }
+
     func testManualModeRetainsResponseAndDeletionStopsPlayback() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"

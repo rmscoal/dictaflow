@@ -5,6 +5,28 @@ import MCP
 import Testing
 
 struct VoiceAdapterTests {
+    @Test func skipRequiresExplicitInputRequestAndValidRevisionBeforeAttachment() async throws {
+        let client = BridgeFixture(actions: [])
+        let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "fixture")
+        let valid: [String: Value] = ["session_id": "session", "input_id": .string(UUID().uuidString),
+                                      "request_id": .string(UUID().uuidString)]
+        for key in ["input_id", "request_id"] {
+            var missing = valid
+            missing.removeValue(forKey: key)
+            do {
+                _ = try await adapter.call(name: "skip_spoken_response", arguments: missing)
+                Issue.record("Skip requires explicit input and request identities.")
+            } catch {}
+        }
+        var malformed = valid
+        malformed["expected_revision"] = "not-an-integer"
+        do {
+            _ = try await adapter.call(name: "skip_spoken_response", arguments: malformed)
+            Issue.record("Malformed revision must not become an absence assertion.")
+        } catch {}
+        #expect(await client.sent.isEmpty)
+    }
+
     @Test func invalidExplicitIdentityNeverFallsBackOrCreatesWork() async throws {
         let client = BridgeFixture(actions: [])
         let adapter = VoiceAdapter(client: client, installationID: UUID(), host: "fixture")

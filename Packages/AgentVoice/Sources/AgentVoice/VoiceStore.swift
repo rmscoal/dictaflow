@@ -17,6 +17,8 @@ import GRDB
 /// - `inputs.expires_at` (migration v5) stamps each interaction with its
 ///   history expiry. A NULL stamp means history is off for that turn: the
 ///   live pipeline still runs, but the row is dropped once settled.
+/// - `inputs.skip_token` (migration v6) records an explicit agent skip,
+///   independently of retained renditions, playback attempts, and host closure.
 public actor VoiceStore {
     private let database: DatabaseQueue
     private let limits: VoiceLimits
@@ -86,6 +88,9 @@ public actor VoiceStore {
         migrator.registerMigration("agentVoice-v5-interaction-expiry") { db in
             try db.execute(sql: "ALTER TABLE inputs ADD COLUMN expires_at REAL")
             try db.execute(sql: "UPDATE inputs SET expires_at = created + ?", arguments: [limits.historyRetention])
+        }
+        migrator.registerMigration("agentVoice-v6-agent-skip") { db in
+            try db.execute(sql: "ALTER TABLE inputs ADD COLUMN skip_token TEXT")
         }
         try migrator.migrate(database)
         try backfillLegacyDrafts()
@@ -530,7 +535,7 @@ public actor VoiceStore {
 
     public func cancelAll(now: Date = Date()) throws {
         try database.write { db in
-            for interaction in try allInteractions(db) where !interaction.state.isTerminal {
+            for interaction in try allInteractions(db) where !interaction.state.isTerminal || interaction.skipToken != nil {
                 for attempt in try attemptsFor(interaction.id, db: db) where [.queued, .synthesizing, .playing].contains(attempt.state) {
                     try setAttemptState(attempt, to: .cancelled, db: db)
                     try insertEvent(inputID: interaction.id, kind: .playbackCancelled, at: now,
@@ -622,13 +627,14 @@ public actor VoiceStore {
             let attempt = try latestAttempt(inputID, db: db)
             return VoiceReply(accepted: true, code: "status", inputID: inputID, draftID: rendition?.id,
                               revision: rendition?.revision, state: interaction.state,
-                              attemptID: attempt?.id, renditionID: rendition?.id)
+                              attemptID: attempt?.id, renditionID: rendition?.id, skipToken: interaction.skipToken)
         }
         guard !interaction.state.isTerminal || interaction.state == .completed || interaction.state == .failed
-                || interaction.state == .cancelled || interaction.state == .expired else {
+                || interaction.state == .cancelled || interaction.state == .expired || interaction.skipToken != nil else {
             return reject("input_closed")
         }
         switch request.operation {
+        case .skip: return try skip(request, interaction: interaction, now: now, db: db)
         case .prepare: return try prepare(request, interaction: interaction, now: now, db: db)
         case .stop: return try stop(request, interaction: interaction, now: now, db: db)
         case .interrupt:
@@ -656,20 +662,23 @@ public actor VoiceStore {
         // itself stays as history and remains manually replayable.
         guard now.timeIntervalSince(interaction.createdAt) < limits.retryRetention else { return reject("input_closed") }
         guard [.open, .prepared, .awaitingCompletion, .queued, .synthesizing, .playing,
-               .completed, .failed, .cancelled, .expired].contains(interaction.state),
+               .completed, .failed, .cancelled, .expired, .skippedByAgent].contains(interaction.state),
               let text = request.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty,
               text.count <= limits.maxCharacters else { return reject("invalid_or_frozen_rendition") }
+        if let token = interaction.skipToken {
+            guard request.skipToken == token else { return reject("skip_conflict") }
+        } else if request.skipToken != nil { return reject("skip_conflict") }
         let current = try currentRendition(inputID, db: db)
         if let current {
             guard request.replacesDraftID == current.id, request.expectedRevision == current.revision else {
                 return reject("replacement_conflict")
             }
         } else if request.replacesDraftID != nil || request.expectedRevision != nil { return reject("replacement_conflict") }
-        if current == nil {
+        if current == nil || interaction.skipToken != nil {
             // Capacity counts other interactions that already hold a pending
             // rendition; retained terminal history never blocks new work.
             let pending = try allInteractions(db).filter {
-                $0.id != inputID && !$0.state.isTerminal
+                $0.id != inputID && $0.skipToken == nil && !$0.state.isTerminal
                     && (try? currentRendition($0.id, db: db)) != nil
             }
             guard pending.count < limits.maxPending,
@@ -690,7 +699,7 @@ public actor VoiceStore {
         try db.execute(sql: "INSERT INTO renditions VALUES (?, ?, ?, ?, ?)",
                        arguments: [rendition.id.uuidString, inputID.uuidString, rendition.revision,
                                    rendition.text, rendition.createdAt.timeIntervalSince1970])
-        try db.execute(sql: "UPDATE inputs SET eligible_revision = NULL WHERE id = ?", arguments: [inputID.uuidString])
+        try db.execute(sql: "UPDATE inputs SET eligible_revision = NULL, skip_token = NULL WHERE id = ?", arguments: [inputID.uuidString])
         try insertEvent(inputID: inputID, kind: .renditionPrepared, at: now,
                         renditionID: rendition.id, revision: rendition.revision, db: db)
         try syncInteractionState(inputID, db: db)
@@ -703,12 +712,42 @@ public actor VoiceStore {
                           renditionID: rendition.id)
     }
 
+    /// A skip is a speech decision, not host closure or user suppression.
+    nonisolated private func skip(_ request: VoiceRequest, interaction: InteractionRow, now: Date, db: Database) throws -> VoiceReply {
+        guard !interaction.hostClosed,
+              now.timeIntervalSince(interaction.createdAt) < limits.retryRetention else { return reject("input_closed") }
+        let inputID = interaction.id
+        let current = try currentRendition(inputID, db: db)
+        guard request.replacesDraftID == current?.id, request.expectedRevision == current?.revision else {
+            return reject("replacement_conflict")
+        }
+        if let token = interaction.skipToken {
+            // Even a different request ID must not interrupt a later manual replay.
+            return VoiceReply(accepted: true, code: "already_skipped", inputID: inputID,
+                              draftID: current?.id, revision: current?.revision,
+                              state: interaction.state, skipToken: token)
+        }
+        for attempt in try attemptsFor(inputID, db: db) where [.queued, .synthesizing, .playing].contains(attempt.state) {
+            try setAttemptState(attempt, to: .cancelled, db: db)
+            try insertEvent(inputID: inputID, kind: .playbackCancelled, at: now,
+                            renditionID: attempt.renditionID, attemptID: attempt.id, revision: attempt.revision, db: db)
+        }
+        try db.execute(sql: "UPDATE inputs SET skip_token = ?, eligible_revision = NULL WHERE id = ?",
+                       arguments: [request.requestID.uuidString, inputID.uuidString])
+        try insertEvent(inputID: inputID, kind: .speechSkipped, at: now,
+                        renditionID: current?.id, revision: current?.revision, db: db)
+        try syncInteractionState(inputID, db: db)
+        return VoiceReply(accepted: true, code: "speech_skipped", inputID: inputID,
+                          draftID: current?.id, revision: current?.revision,
+                          state: .skippedByAgent, skipToken: request.requestID)
+    }
+
     nonisolated private func stop(_ request: VoiceRequest, interaction: InteractionRow, now: Date, db: Database) throws -> VoiceReply {
         let inputID = interaction.id
         guard !interaction.hostClosed else { return reject("input_closed") }
         guard now.timeIntervalSince(interaction.createdAt) < limits.retryRetention else { return reject("input_closed") }
         guard [.open, .prepared, .awaitingCompletion, .queued, .synthesizing, .playing,
-               .completed, .failed, .cancelled, .expired].contains(interaction.state) else {
+               .completed, .failed, .cancelled, .expired, .skippedByAgent].contains(interaction.state) else {
             return reject("input_frozen")
         }
         try db.execute(sql: "UPDATE inputs SET stop_observed_at = ? WHERE id = ?",
@@ -716,6 +755,12 @@ public actor VoiceStore {
         let rendition = try currentRendition(inputID, db: db)
         try insertEvent(inputID: inputID, kind: .stopObserved, at: now,
                         renditionID: rendition?.id, revision: rendition?.revision, db: db)
+        if let token = interaction.skipToken {
+            try syncInteractionState(inputID, db: db)
+            return VoiceReply(accepted: true, code: "stop_observed_skipped", inputID: inputID,
+                              draftID: rendition?.id, revision: rendition?.revision,
+                              state: try rowFor(inputID, db: db)?.state, skipToken: token)
+        }
         guard let rendition else {
             // Stop before any rendition: the observation is recorded, but it
             // makes nothing eligible. A later rendition awaits a fresh Stop.
@@ -774,11 +819,12 @@ public actor VoiceStore {
         var id: UUID; var session: VoiceSession; var sessionKey: String; var state: VoiceState
         var createdAt: Date; var hostClosed: Bool; var nativeTurnID: String?; var promptText: String?
         var suppressed: Bool; var suppressedAt: Date?; var stopObservedAt: Date?; var eligibleRevision: Int?
+        var skipToken: UUID?
         var record: VoiceInteractionRecord {
             VoiceInteractionRecord(id: id, session: session, nativeTurnID: nativeTurnID, createdAt: createdAt,
                                    promptText: promptText, isSuppressed: suppressed, suppressedAt: suppressedAt,
                                    stopObservedAt: stopObservedAt, stopEligibleRevision: eligibleRevision,
-                                   state: state, currentRenditionID: nil, currentRevision: nil, hostClosed: hostClosed)
+                                   state: state, currentRenditionID: nil, currentRevision: nil, hostClosed: hostClosed, skipToken: skipToken)
         }
     }
 
@@ -811,7 +857,8 @@ public actor VoiceStore {
                               suppressed: (row["suppressed"] as Int? ?? 0) != 0,
                               suppressedAt: (row["suppressed_at"] as Double?).map(Date.init(timeIntervalSince1970:)),
                               stopObservedAt: (row["stop_observed_at"] as Double?).map(Date.init(timeIntervalSince1970:)),
-                              eligibleRevision: row["eligible_revision"])
+                              eligibleRevision: row["eligible_revision"],
+                              skipToken: (row["skip_token"] as String?).flatMap(UUID.init(uuidString:)))
     }
 
     nonisolated private func currentRendition(_ inputID: UUID, db: Database) throws -> VoiceRendition? {
@@ -929,6 +976,8 @@ public actor VoiceStore {
         let state: VoiceState
         if let active = attempts.last(where: { [.queued, .synthesizing, .playing].contains($0.state) }) {
             state = active.state
+        } else if interaction.skipToken != nil {
+            state = .skippedByAgent
         } else if interaction.hostClosed, [.superseded, .interrupted, .cancelled].contains(interaction.state) {
             state = interaction.state
         } else if let rendition, !attempts.contains(where: { $0.renditionID == rendition.id }) {
@@ -998,8 +1047,8 @@ public actor VoiceStore {
 
     /// Interactions with an active attempt are never pruned, whatever pass selects them.
     private static let inactiveInputs = "NOT EXISTS (SELECT 1 FROM attempts WHERE input = inputs.id AND state IN ('queued', 'synthesizing', 'playing'))"
-    /// Settled turns the host can no longer mutate.
-    private static let settledInputs = "(host_closed = 1 OR state IN ('completed', 'skippedMissingDraft', 'interrupted', 'cancelled', 'expired', 'superseded', 'failed'))"
+    /// Settled speech decisions, including skips whose host rights may still be open.
+    private static let settledInputs = "(host_closed = 1 OR skip_token IS NOT NULL OR state IN ('completed', 'skippedMissingDraft', 'interrupted', 'cancelled', 'expired', 'superseded', 'failed'))"
 
     /// Reads the app-set age limit in seconds, or nil when history is Off.
     /// Absent means the app never chose: fall back to the configured limits.

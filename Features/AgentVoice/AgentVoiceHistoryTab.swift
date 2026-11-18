@@ -376,7 +376,28 @@ struct AgentVoiceHistoryTab: View {
         let matching = trimmedQuery.isEmpty ? nil : revisions.last { textMatchesSearch($0.text) }
         let displayed = selectedRenditions[record.id].flatMap { id in revisions.first { $0.id == id } } ?? matching ?? fallback
         HStack(spacing: 0) {
-            if let displayed {
+            if record.interaction.skipToken != nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Speech skipped by agent")
+                        .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+                    if let displayed {
+                        Text("Earlier spoken response")
+                            .font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+                        messageText(displayed.text, key: "response-\(record.id)-\(displayed.revision)")
+                        if revisions.count > 1 {
+                            revisionPicker(revisions, index: revisions.firstIndex { $0.id == displayed.id } ?? 0, recordID: record.id)
+                        }
+                        if let caption = revisionCaption(record: record, revision: displayed) {
+                            Text(caption).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
+                        }
+                        revisionActions(record: record, revision: displayed)
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 13))
+                .contextMenu { exchangeMenu(record) }
+                .frame(maxWidth: 560, alignment: .leading)
+            } else if let displayed {
                 let index = revisions.firstIndex { $0.id == displayed.id } ?? 0
                 Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 8) {
                     messageText(displayed.text, key: "response-\(record.id)-\(displayed.revision)")
@@ -575,6 +596,7 @@ struct AgentVoiceHistoryTab: View {
         switch kind {
         case .promptOpened: "Interaction started"
         case .renditionPrepared: "Spoken response prepared"
+        case .speechSkipped: "Speech skipped by agent"
         case .stopObserved: "Host completion observed"
         case .autoAdmitted: "Automatic speech queued"
         case .manualAdmitted: "Replay requested"

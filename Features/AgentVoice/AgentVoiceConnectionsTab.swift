@@ -315,6 +315,7 @@ struct AgentVoiceConnectionsTab: View {
     private static let tools: [(name: String, blurb: String)] = [
         ("on_user_prompt_submit", "Notices a new prompt and returns an input identity with spoken-response instructions."),
         ("prepare_spoken_response", "Prepares a spoken response before the written answer. It never plays audio."),
+        ("skip_spoken_response", "Skips routine speech while keeping the written answer."),
         ("on_stop", "Makes the current response eligible for automatic speech, following your playback setting."),
         ("on_interrupt", "Cancels speech for an interrupted input. It does not cancel the agent."),
         ("get_speech_status", "Reads an input's current speech state."),

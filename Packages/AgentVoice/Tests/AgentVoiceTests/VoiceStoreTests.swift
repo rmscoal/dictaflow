@@ -28,6 +28,174 @@ struct VoiceStoreTests {
         #expect(try await store.renditions(inputID: input).first?.text == text)
     }
 
+    @Test(arguments: [false, true])
+    func skipFencesDelayedPreparationAndAllowsExplicitContinuation(withDraft: Bool) async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        var prior: VoiceReply?
+        if withDraft {
+            prior = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                inputID: input, text: "Earlier result."), connectionID: connection)
+        }
+        let delayed = VoiceRequest(session: session, operation: .prepare, attachment: attachment,
+                                   inputID: input, text: "Important continuation.",
+                                   replacesDraftID: prior?.draftID, expectedRevision: prior?.revision)
+        let skip = VoiceRequest(session: session, operation: .skip, attachment: attachment, inputID: input,
+                                replacesDraftID: prior?.draftID, expectedRevision: prior?.revision)
+        let skipped = try await store.handle(skip, connectionID: connection)
+        #expect(skipped.accepted && skipped.state == .skippedByAgent && skipped.skipToken == skip.requestID)
+        #expect(try await store.handle(delayed, connectionID: connection).code == "skip_conflict")
+        let stopped = try await store.handle(.init(session: session, operation: .stop, attachment: attachment,
+                                                   inputID: input), connectionID: connection)
+        #expect(stopped.code == "stop_observed_skipped")
+        #expect(try await store.nextJob() == nil)
+        var resumed = delayed
+        resumed.requestID = UUID()
+        resumed.skipToken = UUID()
+        #expect(try await store.handle(resumed, connectionID: connection).code == "skip_conflict")
+        resumed.requestID = UUID()
+        resumed.skipToken = skipped.skipToken
+        #expect(try await store.handle(resumed, connectionID: connection).accepted)
+        #expect(try await store.nextJob() == nil, "Earlier Stop cannot admit resumed speech.")
+        _ = try await store.handle(.init(session: session, operation: .stop, attachment: attachment,
+                                         inputID: input), connectionID: connection)
+        #expect(try await store.nextJob()?.text == "Important continuation.")
+        #expect(try await store.historyRecords().first?.interaction.skipToken == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func preparationWinsAgainstStaleSkip(withDraft: Bool) async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        var prior: VoiceReply?
+        if withDraft {
+            prior = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                inputID: input, text: "Earlier."), connectionID: connection)
+        }
+        _ = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                         inputID: input, text: "New result.", replacesDraftID: prior?.draftID,
+                                         expectedRevision: prior?.revision), connectionID: connection)
+        let stale = try await store.handle(.init(session: session, operation: .skip, attachment: attachment,
+                                                 inputID: input, replacesDraftID: prior?.draftID,
+                                                 expectedRevision: prior?.revision), connectionID: connection)
+        #expect(stale.code == "replacement_conflict")
+        #expect(try await store.historyRecords().first?.interaction.skipToken == nil)
+    }
+
+    @Test func repeatedSkipsNeverCancelLaterManualReplay() async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        let prepared = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                    inputID: input, text: "Retained speech."), connectionID: connection)
+        let old = try await store.requestManualPlayback(renditionID: prepared.draftID!)
+        _ = try await store.nextJob()
+        let skip = VoiceRequest(session: session, operation: .skip, attachment: attachment, inputID: input,
+                                replacesDraftID: prepared.draftID, expectedRevision: prepared.revision)
+        let result = try await store.handle(skip, connectionID: connection)
+        #expect(!(try await store.transition(old.id, from: .synthesizing, to: .playing)))
+        let replay = try await store.requestManualPlayback(renditionID: prepared.draftID!)
+        #expect(try await store.nextJob()?.id == replay.id)
+        #expect(try await store.handle(skip, connectionID: connection) == result)
+        var another = skip
+        another.requestID = UUID()
+        let again = try await store.handle(another, connectionID: connection)
+        #expect(again.code == "already_skipped" && again.skipToken == result.skipToken)
+        _ = try await store.handle(.init(session: session, operation: .stop, attachment: attachment,
+                                         inputID: input), connectionID: connection)
+        #expect(try await store.transition(replay.id, from: .synthesizing, to: .playing))
+        #expect(try await store.transition(replay.id, from: .playing, to: .completed))
+        let record = try #require(try await store.historyRecords().first)
+        #expect(record.interaction.skipToken == result.skipToken)
+        #expect(record.interaction.state == .skippedByAgent)
+        #expect(record.renditions.count == 1)
+        #expect(record.attempts.filter { $0.kind == .automatic }.isEmpty)
+    }
+
+    @Test func resumingSkippedSpeechNeverClearsUserSuppression() async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        _ = try await store.suppressInteraction(inputID: input)
+        let skipped = try await store.handle(.init(session: session, operation: .skip, attachment: attachment,
+                                                   inputID: input), connectionID: connection)
+        let resumed = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                  inputID: input, text: "Important continuation.", skipToken: skipped.skipToken), connectionID: connection)
+        #expect(resumed.accepted)
+        let stop = try await store.handle(.init(session: session, operation: .stop, attachment: attachment,
+                                               inputID: input), connectionID: connection)
+        #expect(stop.code == "stop_suppressed")
+        #expect(try await store.nextJob() == nil)
+        #expect(try await store.historyRecords().first?.interaction.isSuppressed == true)
+        #expect(try await store.requestManualPlayback(renditionID: resumed.draftID!).kind == .manual)
+    }
+
+    @Test func skipSurvivesRecoveryButCannotReopenClosedInput() async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        let request = VoiceRequest(session: session, operation: .skip, attachment: attachment, inputID: input)
+        let result = try await store.handle(request, connectionID: connection)
+        let recovered = try VoiceStore(url: root.appendingPathComponent("voice.sqlite"))
+        let record = try #require(try await recovered.historyRecords().first)
+        #expect(record.interaction.skipToken == result.skipToken && record.interaction.hostClosed)
+        #expect(try await recovered.handle(request, connectionID: connection) == result)
+        let freshAttachment = try await attach(recovered, session, connection)
+        let resumed = try await recovered.handle(.init(session: session, operation: .prepare, attachment: freshAttachment,
+                                                      inputID: input, text: "Late continuation.", skipToken: result.skipToken), connectionID: connection)
+        #expect(resumed.code == "input_closed")
+    }
+
+    @Test func skippedDraftDoesNotConsumeCapacityAndResumeChecksCapacity() async throws {
+        var limits = VoiceLimits()
+        limits.maxPending = 1
+        let (store, root, session, connection) = try fixture(limits: limits)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        let prepared = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                    inputID: input, text: "Retained."), connectionID: connection)
+        let skipped = try await store.handle(.init(session: session, operation: .skip, attachment: attachment,
+                                                   inputID: input, replacesDraftID: prepared.draftID,
+                                                   expectedRevision: prepared.revision), connectionID: connection)
+        let other = VoiceSession(installationID: session.installationID, host: session.host, sessionID: "other")
+        let otherAttachment = try await attach(store, other, connection)
+        let otherInput = try await prompt(store, other, otherAttachment, connection)
+        let accepted = try await store.handle(.init(session: other, operation: .prepare, attachment: otherAttachment,
+                                                    inputID: otherInput, text: "Other pending response."), connectionID: connection)
+        #expect(accepted.accepted)
+        let manual = try await store.requestManualPlayback(renditionID: prepared.draftID!)
+        let resumed = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                  inputID: input, text: "Resume.", replacesDraftID: prepared.draftID,
+                                                  expectedRevision: prepared.revision, skipToken: skipped.skipToken), connectionID: connection)
+        #expect(resumed.code == "queue_full")
+        #expect(try await store.nextJob()?.id == manual.id, "Rejected continuation preserves manual playback.")
+        #expect(try await store.historyRecords().first(where: { $0.id == input })?.interaction.skipToken == skipped.skipToken)
+    }
+
+    @Test func historyOffPrunesInactiveSkipButKeepsItsReceipt() async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await store.setHistoryRetentionInterval(nil)
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        let skip = VoiceRequest(session: session, operation: .skip, attachment: attachment, inputID: input)
+        let result = try await store.handle(skip, connectionID: connection)
+        _ = try await store.pruneHistory()
+        #expect(try await store.historyRecords().isEmpty)
+        #expect(try await store.handle(skip, connectionID: connection) == result)
+        let resumed = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                  inputID: input, text: "Late.", skipToken: result.skipToken), connectionID: connection)
+        #expect(resumed.code == "unknown_input")
+    }
+
     func fixture(limits: VoiceLimits = .init()) throws -> (VoiceStore, URL, VoiceSession, UUID) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         return (try VoiceStore(url: root.appendingPathComponent("voice.sqlite"), limits: limits), root,
@@ -485,7 +653,7 @@ struct VoiceStoreTests {
             return String(decoding: try JSONEncoder().encode(draft), as: UTF8.self)
         }
         // Build a v2-shaped database with the system sqlite3, including
-        // GRDB's migration registry so only v3 runs on open.
+        // GRDB's migration registry so later migrations run on open.
         let retainedID = UUID(); let expiredID = UUID()
         var retained = try legacyDraft(text: "Legacy retained answer.", state: .prepared)
         var expired = try legacyDraft(text: "Legacy expired answer.", state: .expired)
@@ -523,6 +691,7 @@ struct VoiceStoreTests {
         #expect(process.terminationStatus == 0)
         let store = try VoiceStore(url: url)
         let drafts = try await store.drafts()
+        #expect(try await store.historyRecords().allSatisfy { $0.interaction.skipToken == nil })
         #expect(drafts.map(\.text) == ["Legacy retained answer."], "Expired legacy text must not be resurrected.")
         #expect(try await store.nextJob() == nil, "Legacy rows never auto-admit.")
         let manual = try await store.requestManualPlayback(renditionID: drafts[0].id)
