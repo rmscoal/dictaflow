@@ -125,8 +125,10 @@ struct VoiceStoreTests {
         _ = try await store.suppressInteraction(inputID: input)
         let skipped = try await store.handle(.init(session: session, operation: .skip, attachment: attachment,
                                                    inputID: input), connectionID: connection)
+        try #require(skipped.accepted)
+        let token = try #require(skipped.skipToken)
         let resumed = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
-                                                  inputID: input, text: "Important continuation.", skipToken: skipped.skipToken), connectionID: connection)
+                                                  inputID: input, text: "Important continuation.", skipToken: token), connectionID: connection)
         #expect(resumed.accepted)
         let stop = try await store.handle(.init(session: session, operation: .stop, attachment: attachment,
                                                inputID: input), connectionID: connection)
@@ -143,13 +145,15 @@ struct VoiceStoreTests {
         let input = try await prompt(store, session, attachment, connection)
         let request = VoiceRequest(session: session, operation: .skip, attachment: attachment, inputID: input)
         let result = try await store.handle(request, connectionID: connection)
+        try #require(result.accepted)
+        let token = try #require(result.skipToken)
         let recovered = try VoiceStore(url: root.appendingPathComponent("voice.sqlite"))
         let record = try #require(try await recovered.historyRecords().first)
-        #expect(record.interaction.skipToken == result.skipToken && record.interaction.hostClosed)
+        #expect(record.interaction.skipToken == token && record.interaction.hostClosed)
         #expect(try await recovered.handle(request, connectionID: connection) == result)
         let freshAttachment = try await attach(recovered, session, connection)
         let resumed = try await recovered.handle(.init(session: session, operation: .prepare, attachment: freshAttachment,
-                                                      inputID: input, text: "Late continuation.", skipToken: result.skipToken), connectionID: connection)
+                                                      inputID: input, text: "Late continuation.", skipToken: token), connectionID: connection)
         #expect(resumed.code == "input_closed")
     }
 
@@ -180,20 +184,153 @@ struct VoiceStoreTests {
         #expect(try await store.historyRecords().first(where: { $0.id == input })?.interaction.skipToken == skipped.skipToken)
     }
 
-    @Test func historyOffPrunesInactiveSkipButKeepsItsReceipt() async throws {
+    @Test(arguments: ["input", "turn", "session"])
+    func historyOffAcknowledgesPrunedSkipWithoutRestoringHistory(identity: String) async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await store.setHistoryRetentionInterval(nil)
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection, nativeTurn: "skipped-turn")
+        let prepared = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                    inputID: input, text: "Text that must be pruned."), connectionID: connection)
+        let rendition = try #require(prepared.draftID)
+        let skip = VoiceRequest(session: session, operation: .skip, attachment: attachment, inputID: input,
+                                replacesDraftID: rendition, expectedRevision: prepared.revision)
+        let result = try await store.handle(skip, connectionID: connection)
+        try #require(result.accepted)
+        let token = try #require(result.skipToken)
+        _ = try await store.pruneHistory()
+        #expect(try await store.historyRecords().isEmpty)
+        #expect(try await store.renditions(inputID: input).isEmpty)
+        #expect(try await store.events(inputID: input).isEmpty)
+        #expect(try await store.handle(skip, connectionID: connection) == result)
+        let stop = try await store.handle(.init(session: session, operation: .stop, attachment: attachment,
+                                               inputID: identity == "input" ? input : nil,
+                                               nativeTurnID: identity == "turn" ? "skipped-turn" : nil), connectionID: connection)
+        #expect(stop.accepted && stop.code == "stop_observed_skipped" && stop.inputID == input)
+        #expect(try await store.nextJob() == nil)
+        #expect(try await store.historyRecords().isEmpty, "Acknowledgement must not recreate history.")
+        for operation in [VoiceOperation.prepare, .status, .interrupt, .skip] {
+            let rejected = try await store.handle(.init(session: session, operation: operation, attachment: attachment,
+                                                       inputID: input, text: "Late.", skipToken: token), connectionID: connection)
+            #expect(rejected.code == "unknown_input")
+        }
+        let latePreparation = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                          text: "Late.", nativeTurnID: "skipped-turn", skipToken: token), connectionID: connection)
+        #expect(latePreparation.code == "unknown_input")
+        for request in [
+            VoiceRequest(session: session, operation: .stop, attachment: attachment, inputID: UUID(), nativeTurnID: "skipped-turn"),
+            VoiceRequest(session: session, operation: .stop, attachment: attachment, nativeTurnID: "unknown-turn")
+        ] {
+            #expect(try await store.handle(request, connectionID: connection).code == "unknown_input")
+        }
+        let other = VoiceSession(installationID: session.installationID, host: session.host, sessionID: "other")
+        let otherAttachment = try await attach(store, other, connection)
+        #expect(try await store.handle(.init(session: other, operation: .stop, attachment: otherAttachment,
+                                            inputID: input), connectionID: connection).code == "unknown_input")
+    }
+
+    @Test func stopItselfCanPruneAndAcknowledgeHistoryOffSkip() async throws {
         let (store, root, session, connection) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         try await store.setHistoryRetentionInterval(nil)
         let attachment = try await attach(store, session, connection)
         let input = try await prompt(store, session, attachment, connection)
-        let skip = VoiceRequest(session: session, operation: .skip, attachment: attachment, inputID: input)
-        let result = try await store.handle(skip, connectionID: connection)
-        _ = try await store.pruneHistory()
+        let skipped = try await store.handle(.init(session: session, operation: .skip, attachment: attachment,
+                                                   inputID: input), connectionID: connection)
+        try #require(skipped.accepted)
+        // handle expires/prunes before applying Stop, without a maintenance tick.
+        let stop = try await store.handle(.init(session: session, operation: .stop, attachment: attachment,
+                                               inputID: input), connectionID: connection)
+        #expect(stop.accepted && stop.inputID == input)
         #expect(try await store.historyRecords().isEmpty)
-        #expect(try await store.handle(skip, connectionID: connection) == result)
-        let resumed = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
-                                                  inputID: input, text: "Late.", skipToken: result.skipToken), connectionID: connection)
-        #expect(resumed.code == "unknown_input")
+    }
+
+    @Test func emptyNativeTurnDoesNotResolveOrAdmitSpeech() async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection, nativeTurn: "")
+        let prepared = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                    inputID: input, text: "Requires a valid completion identity."), connectionID: connection)
+        try #require(prepared.accepted)
+        let rejected = try await store.handle(.init(session: session, operation: .stop, attachment: attachment,
+                                                   nativeTurnID: ""), connectionID: connection)
+        #expect(!rejected.accepted && rejected.code == "unknown_input")
+        #expect(try await store.historyRecords().first?.interaction.stopEligibleRevision == nil)
+        #expect(try await store.nextJob() == nil)
+        let sessionStop = try await store.handle(.init(session: session, operation: .stop, attachment: attachment), connectionID: connection)
+        #expect(sessionStop.accepted && sessionStop.inputID == input, "Nil remains the supported session-only fallback.")
+    }
+
+    @Test func sessionOnlyStopChoosesLatestInputAcrossPrunedSkipsAndRetainedHistory() async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date()
+        let attachment = try await attach(store, session, connection)
+        _ = try await prompt(store, session, attachment, connection, now: now)
+        try await store.setHistoryRetentionInterval(nil)
+        let skippedInput = try await prompt(store, session, attachment, connection, now: now.addingTimeInterval(1))
+        let skipped = try await store.handle(.init(session: session, operation: .skip, attachment: attachment,
+                                                   inputID: skippedInput), connectionID: connection)
+        try #require(skipped.accepted)
+        _ = try await store.pruneHistory()
+        let prunedStop = try await store.handle(.init(session: session, operation: .stop, attachment: attachment), connectionID: connection)
+        #expect(prunedStop.accepted && prunedStop.inputID == skippedInput)
+        let latest = try await prompt(store, session, attachment, connection, now: now.addingTimeInterval(2))
+        let latestStop = try await store.handle(.init(session: session, operation: .stop, attachment: attachment), connectionID: connection)
+        #expect(latestStop.accepted && latestStop.inputID == latest && latestStop.code == "stop_observed_no_rendition")
+    }
+
+    @Test func prunedSkipIdentitySurvivesRecoveryAndExpiresWithOriginalMutationWindow() async throws {
+        var limits = VoiceLimits()
+        limits.retryRetention = 120
+        let (store, root, session, connection) = try fixture(limits: limits)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await store.setHistoryRetentionInterval(nil)
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        let skipped = try await store.handle(.init(session: session, operation: .skip, attachment: attachment,
+                                                   inputID: input), connectionID: connection)
+        try #require(skipped.accepted)
+        _ = try await store.pruneHistory()
+        let recovered = try VoiceStore(url: root.appendingPathComponent("voice.sqlite"), limits: limits)
+        let fresh = try await attach(recovered, session, connection)
+        let stop = try await recovered.handle(.init(session: session, operation: .stop, attachment: fresh,
+                                                   inputID: input), connectionID: connection)
+        #expect(stop.accepted && stop.inputID == input)
+        let future = Date().addingTimeInterval(121)
+        _ = try await recovered.pruneHistory(now: future)
+        var reattach = VoiceRequest(session: session, operation: .attach)
+        reattach.issuedAt = future
+        let laterAttachment = try await recovered.handle(reattach, connectionID: connection, now: future).attachment
+        var expiredStop = VoiceRequest(session: session, operation: .stop, attachment: laterAttachment, inputID: input)
+        expiredStop.issuedAt = future
+        #expect(try await recovered.handle(expiredStop, connectionID: connection, now: future).code == "unknown_input")
+        #expect(try await recovered.historyRecords().isEmpty)
+    }
+
+    @Test func skipClearsManualStopEligibilityAndLaterStopCannotRestoreIt() async throws {
+        let (store, root, session, connection) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await store.setAdmissionPolicy(.manualOnly)
+        let attachment = try await attach(store, session, connection)
+        let input = try await prompt(store, session, attachment, connection)
+        let prepared = try await store.handle(.init(session: session, operation: .prepare, attachment: attachment,
+                                                    inputID: input, text: "Previously ready for Play."), connectionID: connection)
+        let rendition = try #require(prepared.draftID)
+        _ = try await store.handle(.init(session: session, operation: .stop, attachment: attachment,
+                                         inputID: input), connectionID: connection)
+        #expect(try await store.historyRecords().first?.interaction.stopEligibleRevision == prepared.revision)
+        let skipped = try await store.handle(.init(session: session, operation: .skip, attachment: attachment,
+                                                   inputID: input, replacesDraftID: rendition, expectedRevision: prepared.revision), connectionID: connection)
+        try #require(skipped.accepted)
+        #expect(try await store.historyRecords().first?.interaction.stopEligibleRevision == nil)
+        let stopped = try await store.handle(.init(session: session, operation: .stop, attachment: attachment,
+                                                  inputID: input), connectionID: connection)
+        #expect(stopped.accepted && stopped.code == "stop_observed_skipped")
+        #expect(try await store.historyRecords().first?.interaction.stopEligibleRevision == nil)
+        #expect(try await store.nextJob() == nil)
     }
 
     func fixture(limits: VoiceLimits = .init()) throws -> (VoiceStore, URL, VoiceSession, UUID) {

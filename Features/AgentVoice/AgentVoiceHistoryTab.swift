@@ -390,7 +390,7 @@ struct AgentVoiceHistoryTab: View {
                         if let caption = revisionCaption(record: record, revision: displayed) {
                             Text(caption).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
                         }
-                        revisionActions(record: record, revision: displayed)
+                        renditionFooter(record: record, revision: displayed)
                     }
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
@@ -406,12 +406,8 @@ struct AgentVoiceHistoryTab: View {
                         Text(caption).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    HStack(spacing: 12) {
-                        revisionActions(record: record, revision: displayed)
-                        Spacer(minLength: 16)
-                        timestamp(displayed.createdAt)
-                    }
-                    .gridCellUnsizedAxes(.horizontal)
+                    renditionFooter(record: record, revision: displayed)
+                        .gridCellUnsizedAxes(.horizontal)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 13))
@@ -427,6 +423,14 @@ struct AgentVoiceHistoryTab: View {
                     .frame(maxWidth: 560, alignment: .leading)
             }
             Spacer(minLength: 32)
+        }
+    }
+
+    private func renditionFooter(record: VoiceHistoryRecord, revision: VoiceRendition) -> some View {
+        HStack(spacing: 12) {
+            revisionActions(record: record, revision: revision)
+            Spacer(minLength: 16)
+            timestamp(revision.createdAt)
         }
     }
 

@@ -92,6 +92,14 @@ public actor VoiceStore {
         migrator.registerMigration("agentVoice-v6-agent-skip") { db in
             try db.execute(sql: "ALTER TABLE inputs ADD COLUMN skip_token TEXT")
         }
+        migrator.registerMigration("agentVoice-v7-pruned-skips") { db in
+            try db.execute(sql: """
+                CREATE TABLE pruned_skips (id TEXT PRIMARY KEY, session TEXT NOT NULL,
+                    native_turn TEXT, created REAL NOT NULL, expires_at REAL NOT NULL);
+                CREATE INDEX pruned_skips_session ON pruned_skips(session, native_turn, created);
+                CREATE INDEX pruned_skips_expiry ON pruned_skips(expires_at);
+                """)
+        }
         try migrator.migrate(database)
         try backfillLegacyDrafts()
         // Recovery never restarts speech: active attempts are interrupted,
@@ -599,27 +607,16 @@ public actor VoiceStore {
             return VoiceReply(accepted: true, code: "input_opened", inputID: inputID, state: .open,
                               message: VoiceInstructions.prompt(inputID: inputID))
         }
-        // Resolve identity: explicit input ID wins; otherwise the persisted
-        // native turn mapping for this session. Resolution is not permission:
-        // closed inputs below still reject mutation.
-        var resolvedInput = request.inputID
-        if resolvedInput == nil, let turn = request.nativeTurnID, !turn.isEmpty {
-            resolvedInput = try String.fetchOne(db, sql: """
-                SELECT id FROM inputs WHERE session = ? AND native_turn = ? ORDER BY created DESC LIMIT 1
-                """, arguments: [key, turn]).flatMap(UUID.init(uuidString:))
+        // Identity resolution never recreates pruned history or mutation rights.
+        guard let inputID = try resolveInputID(request, key: key, now: now, db: db) else {
+            return reject("unknown_input")
         }
-        if resolvedInput == nil, request.nativeTurnID == nil, request.operation == .stop || request.operation == .interrupt
-            || request.operation == .status {
-            // Hosts without a native turn identity (documented for Claude
-            // Code) address the session's current interaction. This is a
-            // resolution rule, not ordering proof: it names the latest input
-            // in the same validated session, and closure checks still apply.
-            resolvedInput = try String.fetchOne(db, sql: """
-                SELECT id FROM inputs WHERE session = ? ORDER BY created DESC LIMIT 1
-                """, arguments: [key]).flatMap(UUID.init(uuidString:))
-        }
-        guard let inputID = resolvedInput,
-              let interaction = try rowFor(inputID, db: db), interaction.sessionKey == key else {
+        guard let interaction = try rowFor(inputID, db: db), interaction.sessionKey == key else {
+            if request.operation == .stop,
+               try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM pruned_skips WHERE id = ? AND session = ? AND expires_at > ?)",
+                                 arguments: [inputID.uuidString, key, now.timeIntervalSince1970]) == true {
+                return VoiceReply(accepted: true, code: "stop_observed_skipped", inputID: inputID, state: .skippedByAgent)
+            }
             return reject("unknown_input")
         }
         if request.operation == .status {
@@ -653,6 +650,32 @@ public actor VoiceStore {
                               revision: rendition?.revision, state: .interrupted, renditionID: rendition?.id)
         default: return reject("invalid_operation")
         }
+    }
+
+    /// Only Stop may resolve a content-free identity retained after pruning.
+    /// Explicit input and native turn IDs never fall back to a different turn.
+    nonisolated private func resolveInputID(_ request: VoiceRequest, key: String, now: Date, db: Database) throws -> UUID? {
+        if let inputID = request.inputID { return inputID }
+        guard request.nativeTurnID != nil || [.stop, .interrupt, .status].contains(request.operation) else { return nil }
+        let candidates = """
+            SELECT id, native_turn, created FROM inputs WHERE session = ?
+            UNION ALL
+            SELECT id, native_turn, created FROM pruned_skips
+            WHERE session = ? AND expires_at > ? AND ? = 'stop'
+            """
+        var arguments: StatementArguments = [key, key, now.timeIntervalSince1970, request.operation.rawValue]
+        let turnFilter: String
+        if let turn = request.nativeTurnID {
+            guard !turn.isEmpty else { return nil }
+            turnFilter = "WHERE native_turn = ?"
+            arguments += [turn]
+        } else {
+            // Hosts without native turn IDs address the latest known input,
+            // including a newer pruned skip rather than an older retained input.
+            turnFilter = ""
+        }
+        return try String.fetchOne(db, sql: "SELECT id FROM (\(candidates)) \(turnFilter) ORDER BY created DESC LIMIT 1",
+                                   arguments: arguments).flatMap(UUID.init(uuidString:))
     }
 
     nonisolated private func prepare(_ request: VoiceRequest, interaction: InteractionRow, now: Date, db: Database) throws -> VoiceReply {
@@ -1062,6 +1085,14 @@ public actor VoiceStore {
     nonisolated private func pruneHistory(_ db: Database, now: Date) throws -> Int {
         var deleted = 0
         func delete(_ id: String) throws {
+            // Retain identity only through the original host mutation window.
+            // It can acknowledge a late Stop, but contains no text or skip token
+            // and cannot be used for status, preparation, or playback.
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO pruned_skips (id, session, native_turn, created, expires_at)
+                SELECT id, session, native_turn, created, created + ? FROM inputs
+                WHERE id = ? AND skip_token IS NOT NULL AND created + ? > ?
+                """, arguments: [limits.retryRetention, id, limits.retryRetention, now.timeIntervalSince1970])
             try db.execute(sql: "DELETE FROM events WHERE input = ?", arguments: [id])
             try db.execute(sql: "DELETE FROM attempts WHERE input = ?", arguments: [id])
             try db.execute(sql: "DELETE FROM renditions WHERE input = ?", arguments: [id])
@@ -1069,6 +1100,7 @@ public actor VoiceStore {
             deleted += 1
         }
         let nowEpoch = now.timeIntervalSince1970
+        try db.execute(sql: "DELETE FROM pruned_skips WHERE expires_at <= ?", arguments: [nowEpoch])
         for id in try String.fetchAll(db, sql: "SELECT id FROM inputs WHERE expires_at IS NOT NULL AND expires_at <= ? AND \(Self.inactiveInputs)", arguments: [nowEpoch]) {
             try delete(id)
         }

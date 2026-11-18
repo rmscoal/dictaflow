@@ -347,7 +347,8 @@ struct MCPBridgeTests {
         let reply = try JSONDecoder().decode(VoiceReply.self, from: Data(skippedText.utf8))
         let token = try #require(reply.skipToken)
         #expect(reply.state == .skippedByAgent)
-        _ = try await client.callTool(name: "on_stop", arguments: ["session_id": "session", "turn_id": "native-turn"])
+        let skippedStop = try await client.callTool(name: "on_stop", arguments: ["session_id": "session", "turn_id": "native-turn"])
+        #expect(skippedStop.isError != true)
         #expect(try await store.nextJob() == nil)
         let resumed = try await client.callTool(name: "prepare_spoken_response", arguments: [
             "session_id": "session", "input_id": .string(inputID.uuidString), "request_id": .string(UUID().uuidString),

@@ -666,28 +666,35 @@ final class AgentVoiceTests: XCTestCase {
         let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
                                           runtime: runtime, appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
         defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
-        voice.setEnabled(true)
-        let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
-        let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "late-skip")
-        let attachment = try await client.send(.init(session: session, operation: .attach)).attachment
-        let input = try await client.send(.init(session: session, operation: .prompt, attachment: attachment)).inputID
-        let response = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
-                                                  inputID: input, text: "Never play this late result."))
-        _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while !(await runtime.isSuspended), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        do {
+            voice.setEnabled(true)
+            let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
+            let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "late-skip")
+            let attachment = try await client.send(.init(session: session, operation: .attach)).attachment
+            let input = try await client.send(.init(session: session, operation: .prompt, attachment: attachment)).inputID
+            let response = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
+                                                      inputID: input, text: "Never play this late result."))
+            _ = try await client.send(.init(session: session, operation: .stop, attachment: attachment, inputID: input))
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while !(await runtime.isSuspended), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let started = await runtime.isSuspended
+            XCTAssertTrue(started)
+            let skipped = try await client.send(.init(session: session, operation: .skip, attachment: attachment,
+                                                     inputID: input, replacesDraftID: response.draftID, expectedRevision: response.revision))
+            XCTAssertTrue(skipped.accepted)
+            XCTAssertFalse(voice.isGenerating)
+            await runtime.releaseLateResult()
+            try await voice.waitForForegroundResources()
+            XCTAssertEqual(player.playCount, 0)
+            XCTAssertFalse(voice.isSpeaking)
+        } catch {
+            voice.shutdown()
+            await runtime.releaseLateResult()
+            await voice.waitForShutdown()
+            throw error
         }
-        let started = await runtime.isSuspended
-        XCTAssertTrue(started)
-        let skipped = try await client.send(.init(session: session, operation: .skip, attachment: attachment,
-                                                 inputID: input, replacesDraftID: response.draftID, expectedRevision: response.revision))
-        XCTAssertTrue(skipped.accepted)
-        XCTAssertFalse(voice.isGenerating)
-        await runtime.releaseLateResult()
-        try await voice.waitForForegroundResources()
-        XCTAssertEqual(player.playCount, 0)
-        XCTAssertFalse(voice.isSpeaking)
         voice.shutdown(); await voice.waitForShutdown()
     }
 
