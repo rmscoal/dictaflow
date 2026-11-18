@@ -253,7 +253,7 @@ struct MCPBridgeTests {
 
         // Every child operation is rejected on the wire, even with parent IDs,
         // a reused parent receipt, and model arguments claiming a main role.
-        for tool in ["on_user_prompt_submit", "prepare_spoken_response", "on_stop", "on_interrupt", "get_speech_status"] {
+        for tool in ["on_user_prompt_submit", "prepare_spoken_response", "skip_spoken_response", "on_stop", "on_interrupt", "get_speech_status"] {
             var spoofed = args
             spoofed["agent_id"] = ""
             spoofed["threadId"] = "root"
@@ -305,7 +305,7 @@ struct MCPBridgeTests {
         let client = Client(name: "DictaFlow fixture", version: "1")
         _ = try await client.connect(transport: transport)
         let tools = try await client.listTools().tools
-        #expect(tools.count == 5)
+        #expect(tools.count == 6)
         let prompt = try await client.callTool(name: "on_user_prompt_submit", arguments: ["session_id": "session", "turn_id": "native-turn"])
         let block = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(prompt.content[0])) as? [String: Any])
         let text = try #require(block["text"] as? String)
@@ -336,6 +336,29 @@ struct MCPBridgeTests {
         #expect(rejectedStop.isError == true)
         _ = try await client.callTool(name: "on_stop", arguments: ["session_id": "session", "turn_id": "native-turn"])
         #expect(try await store.nextJob()?.text == "The tests pass, but deployment still needs a manual approval.")
+        let latest = try #require(try await store.renditions(inputID: inputID).last)
+        let skipped = try await client.callTool(name: "skip_spoken_response", arguments: [
+            "session_id": "session", "input_id": .string(inputID.uuidString), "request_id": .string(UUID().uuidString),
+            "replaces_draft_id": .string(latest.id.uuidString), "expected_revision": .int(latest.revision)
+        ])
+        #expect(skipped.isError != true)
+        let skippedBlock = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(skipped.content[0])) as? [String: Any])
+        let skippedText = try #require(skippedBlock["text"] as? String)
+        let reply = try JSONDecoder().decode(VoiceReply.self, from: Data(skippedText.utf8))
+        let token = try #require(reply.skipToken)
+        #expect(reply.state == .skippedByAgent)
+        let skippedStop = try await client.callTool(name: "on_stop", arguments: ["session_id": "session", "turn_id": "native-turn"])
+        #expect(skippedStop.isError != true)
+        #expect(try await store.nextJob() == nil)
+        let resumed = try await client.callTool(name: "prepare_spoken_response", arguments: [
+            "session_id": "session", "input_id": .string(inputID.uuidString), "request_id": .string(UUID().uuidString),
+            "replaces_draft_id": .string(latest.id.uuidString), "expected_revision": .int(latest.revision),
+            "skip_token": .string(token.uuidString), "text": "Important continuation after silence."
+        ])
+        #expect(resumed.isError != true)
+        #expect(try await store.nextJob() == nil)
+        _ = try await client.callTool(name: "on_stop", arguments: ["session_id": "session", "turn_id": "native-turn"])
+        #expect(try await store.nextJob()?.text == "Important continuation after silence.")
         await client.disconnect()
     }
 }

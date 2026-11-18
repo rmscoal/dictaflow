@@ -23,15 +23,33 @@ Search matches session identities, prompts, and all spoken revisions. It keeps t
 ## Lifecycle contract
 
 1. `on_user_prompt_submit` creates an interaction and returns its internal input ID plus spoken-rendition instructions.
-2. The model calls `prepare_spoken_response` with conversational text. This never starts speech by itself.
+2. The model either explicitly skips routine speech with `skip_spoken_response`, or calls `prepare_spoken_response` with conversational text. This never starts speech by itself.
 3. The model produces its written answer.
-4. `on_stop` makes the current rendition eligible. DictaFlow applies the app's playback preference, suppression, freshness, and queue limits.
+4. `on_stop` records the observation and makes the current rendition eligible unless the input was explicitly skipped or suppressed. DictaFlow applies the app's playback preference, suppression, freshness, and queue limits.
 5. An automatic attempt is created at most once for that rendition. Duplicate Stop delivery does not replay it.
 6. A corrected preparation creates a new immutable revision and supersedes active speech for older revisions. The new revision waits for a fresh Stop. Stop-before-preparation does not authorize a later rendition.
 
 The [Codex hook contract](https://learn.chatgpt.com/docs/hooks) allows another Stop hook to request continuation. Therefore this feature provides interruptible, best-effort playback of a completion candidate, not proof that every host check has accepted a final answer. A revision may have been partly heard before a correction arrives. IDs and local timestamps do not prove source ordering. Native event/turn identities are used when available; a host without a turn identity can address its current session input, with correspondingly weaker late-event correlation.
 
+### Intentional silence
+
+The main agent may skip speech for acknowledgments and routine success confirmations with no substantive result, important caveat, or required next action. It still speaks substantive answers, unexpected outcomes, failures, blockers, and questions requiring a decision, even if only one sentence. Explicit requests for spoken confirmation take priority. The choice depends on the response and context, not prompt length or a word-count threshold. Speech must not be padded to meet a paragraph target.
+
+For example, after “stage and commit,” “Committed as abc123” can remain written only. “The commit failed because a check found a possible secret” should be spoken. The written answer is always produced normally, without announcing a speech skip.
+
+`skip_spoken_response` requires `session_id`, `input_id`, and a UUID `request_id`. Supply the current `replaces_draft_id` and `expected_revision` if a rendition exists. Omitting both asserts that no rendition exists, rather than allowing any revision. The helper applies the same main-agent identity checks as preparation. Missing or failed skip support must not cause repair loops or prevent the written response.
+
+An accepted skip persists a separate `skipToken`, clears automatic eligibility, and cancels active or queued attempts only for that input, including manual playback already in progress. Retained renditions remain available as earlier responses with explicit Play and Copy actions. History shows “Speech skipped by agent” as the current decision, with no fabricated empty rendition. A later explicit manual replay does not clear the skip. Duplicate skip receipts and additional skips with distinct request IDs return the original token without cancelling that later replay.
+
+To resume after a continuation, read the current token from the skip reply or `get_speech_status`, and pass it as `skip_token` to preparation along with any existing rendition replacement fields. Token and revision checks are atomic. A delayed tokenless preparation cannot undo a skip. Only successful preparation clears the marker; capacity rejection leaves the skip, retained text, and manual playback unchanged. Skipped inputs do not consume pending rendition capacity. Resumed preparation requires a Stop received afterward. Host callback identities cannot prove the source ordering of every independently delayed Stop; receipt deduplication is a separate guarantee.
+
+Stop while skipped admits no audio, even when an earlier rendition exists. Stop without any rendition or explicit skip remains `awaitingCompletion`, so missed preparation is distinguishable from intentional silence. The skip decision survives playback, disconnect, and recovery, without reopening host mutation rights or clearing user suppression. Continuation remains subject to attachment, host closure, and the existing mutation window. With history Off, an inactive skipped input is settled and may be pruned; a receipt can still be retrievable, but a pruned input cannot resume. Pruning retains only its input, session, native turn identity, and timestamps until the original input’s retry window ends (24 hours by default). A matching Stop is acknowledged during that window without restoring prompt text, renditions, events, or playback rights. Explicit input and native turn IDs remain authoritative; unknown or expired identities are rejected. A session-only Stop addresses the latest known input, including a pruned skip.
+
 The bridge authenticates the local OS user, not whether a tool invocation originated from a model or a host hook. Playback consent is the app setting; MCP callers cannot change it. Lifecycle messages still require a valid session attachment. No timer is presented as proof of finality.
+
+Intentional-silence verification on 2026-11-18: all 123 package tests passed, including both arrival orders of skip/preparation, explicit continuation tokens, repeated skips during manual replay, receipt recovery, migration, retention Off, capacity rejection, user suppression, and child-agent rejection. The selected hosted Agent Voice, session history, and host setup suites passed 48 tests. A strengthened late-synthesis test also passed after waiting for resource retirement before asserting that no audio reached the player. The Dev build and strict deep signature verification passed.
+
+The updated Dev app was installed under `/Applications`, with the previous app preserved under `.build/installed-app-backups/20261118-165313-agent-skip`. Its bundled helper listed six tools. A synthetic local rendition reached `playing`, an explicit skip stopped its attempt, and a following Stop preserved `skippedByAgent`. Native history showed the skip decision and earlier retained response; explicit Play reached the playing UI, and Stop returned it to an inactive state. Existing enable/playback settings and host configurations were preserved. These checks establish state transitions and installed UI behavior, not subjective audio quality or live host compliance with the revised instructions.
 
 ## Setup and host boundaries
 

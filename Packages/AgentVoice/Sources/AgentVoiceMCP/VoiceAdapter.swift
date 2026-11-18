@@ -38,6 +38,7 @@ public actor VoiceAdapter {
         switch name {
         case "on_user_prompt_submit": operation = .prompt
         case "prepare_spoken_response": operation = .prepare
+        case "skip_spoken_response": operation = .skip
         case "on_stop": operation = .stop
         case "on_interrupt": operation = .interrupt
         case "get_speech_status": operation = .status
@@ -74,7 +75,7 @@ public actor VoiceAdapter {
             }
         }
         let suppliedRequest = try uuid("request_id", in: arguments)
-        if operation == .prepare || operation == .status {
+        if operation == .prepare || operation == .skip || operation == .status {
             guard suppliedRequest != nil else { throw VoiceError.unavailable("request_id is required for this operation.") }
         }
         let nativeTurn: NativeTurn?
@@ -88,6 +89,13 @@ public actor VoiceAdapter {
         }
         let requestID = suppliedRequest ?? UUID()
         let explicitInput = try uuid("input_id", in: arguments)
+        if operation == .skip && explicitInput == nil {
+            throw VoiceError.unavailable("input_id is required for this operation.")
+        }
+        if let revision = arguments["expected_revision"], revision.intValue == nil {
+            throw VoiceError.unavailable("expected_revision must be an integer.")
+        }
+        let skipToken = try uuid("skip_token", in: arguments)
         let replacesDraft = try uuid("replaces_draft_id", in: arguments)
 
         requests = requests.filter { Date().timeIntervalSince($0.value.request.issuedAt) < 24 * 60 * 60 }
@@ -118,7 +126,7 @@ public actor VoiceAdapter {
                                    replacesDraftID: replacesDraft,
                                    expectedRevision: arguments["expected_revision"]?.intValue,
                                    nativeTurnID: nativeTurn?.turn,
-                                   promptText: operation == .prompt ? arguments["prompt"]?.stringValue : nil)
+                                   promptText: operation == .prompt ? arguments["prompt"]?.stringValue : nil, skipToken: skipToken)
         requests[key] = CachedRequest(tool: name, arguments: arguments, request: request)
         var reply: VoiceReply
         do { reply = try await send(request) }

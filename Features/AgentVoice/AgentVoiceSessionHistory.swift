@@ -54,6 +54,7 @@ enum AgentVoiceSpeechStatus {
             default: return "In progress"
             }
         }
+        if record.interaction.skipToken != nil { return "Speech skipped by agent" }
         if record.interaction.isSuppressed { return "Suppressed" }
         if record.interaction.currentRenditionID != nil ||
             !record.renditions.isEmpty { return "Ready to play" }
