@@ -6,7 +6,7 @@ Agent Voice provides automatic, interruptible local speech for connected agent s
 
 Under **Agent Voice > General**, enable Agent Voice and download the verified Liquid model. Choose **Speak automatically** or **Play on request**. Automatic mode admits the current eligible rendition when the host reports Stop. Manual mode retains the response for explicit playback. General also contains host connections, manual configuration with a Copy action in each code block, and a collapsed MCP tool reference.
 
-Liquid downloads use the shared progress bar and toolbar Downloads list, with combined byte progress across both model files, a separate verification state, cancellation, and completion or failure notices. Opening the download returns to Agent Voice > General. Cancelling removes the partial transfer; fully downloaded, checksum-verified files remain available for retry. The model becomes ready only after both files pass verification and installation.
+Liquid downloads use the shared progress bar and toolbar Downloads list, with combined byte progress across both model files, a separate verification state, cancellation, and completion or failure notices. Opening the download returns to Agent Voice > General. Cancelling removes the partial transfer and any uninstalled temporary files. Previously checksum-verified and installed files remain available for retry. The model becomes ready only after both files pass verification and installation.
 
 The floating control identifies the speaking session and provides Stop and Dictate. It does not take keyboard focus from the target app. The existing dictation shortcut also interrupts speech. Interruption is a deliberate button or shortcut action; DictaFlow does not listen continuously for speech over the agent.
 
