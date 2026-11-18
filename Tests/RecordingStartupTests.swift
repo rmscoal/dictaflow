@@ -1367,6 +1367,172 @@ final class RecordingStartupTests: XCTestCase {
     }
 }
 
+@MainActor
+final class AgentVoiceDownloadTests: XCTestCase {
+    func testLateStartupReadinessCheckCannotUndoSuccessfulDownload() async throws {
+        let fixture = try VoiceDownloadTestFixture(pausesReadiness: true)
+        defer { fixture.cleanup() }
+        try await waitUntil { fixture.downloader.isCheckingReadiness }
+        fixture.voice.downloadModel()
+        try await waitUntil { fixture.downloader.requestCount == 1 }
+        fixture.downloader.finish(.success(()))
+        try await waitUntil { !fixture.voice.isDownloading }
+        XCTAssertTrue(fixture.voice.isModelReady)
+        fixture.downloader.finishReadiness()
+        // Let the startup task consume its stale result.
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(fixture.voice.isModelReady)
+    }
+
+    func testProgressVerificationNavigationAndCompletionUseSharedDownloads() async throws {
+        let fixture = try VoiceDownloadTestFixture()
+        defer { fixture.cleanup() }
+        let voice = fixture.voice
+        let state = fixture.app.state
+        voice.downloadModel()
+        voice.downloadModel()
+        try await waitUntil { fixture.downloader.requestCount == 1 }
+        let changed = expectation(description: "Shared download observers receive byte progress")
+        let observation = state.objectWillChange.sink {
+            if state.activeDownloadActivities.first?.progress == 0.25 { changed.fulfill() }
+        }
+        fixture.downloader.send(.downloading(bytesWritten: 250, totalBytes: 1_000))
+        await fulfillment(of: [changed], timeout: 3)
+        observation.cancel()
+        let activity = try XCTUnwrap(state.activeDownloadActivities.first)
+        XCTAssertEqual(activity.target, .liquid)
+        XCTAssertEqual(activity.progress, 0.25)
+        XCTAssertFalse(activity.statusText.isEmpty)
+        state.openDownloadActivity(activity)
+        XCTAssertEqual(state.mainWindowPage, .agentVoice)
+        XCTAssertEqual(state.agentVoiceTab, .general)
+
+        fixture.downloader.send(.verifying)
+        try await waitUntil { voice.modelDownloadProgress?.statusText == "Verifying speech model…" }
+        XCTAssertNil(voice.modelDownloadProgress?.progress)
+        XCTAssertFalse(voice.isModelReady)
+        fixture.downloader.finish(.success(()))
+        try await waitUntil { !voice.isDownloading }
+        XCTAssertTrue(voice.isModelReady)
+        XCTAssertTrue(state.activeDownloadActivities.isEmpty)
+        XCTAssertEqual(state.downloadCompletionNotice?.kind, .completed)
+        XCTAssertEqual(state.downloadCompletionNotice?.activity.target, .liquid)
+    }
+
+    func testSharedCancellationIgnoresLateSuccessAndAllowsRetry() async throws {
+        let fixture = try VoiceDownloadTestFixture()
+        defer { fixture.cleanup() }
+        let voice = fixture.voice
+        let state = fixture.app.state
+        voice.downloadModel()
+        try await waitUntil { fixture.downloader.requestCount == 1 }
+        state.cancelAllDownloadActivities()
+        // The fixture deliberately returns success after cancellation.
+        fixture.downloader.finish(.success(()))
+        try await waitUntil { !voice.isDownloading }
+        XCTAssertFalse(voice.isModelReady)
+        XCTAssertNil(voice.activeError)
+        XCTAssertNil(state.downloadCompletionNotice)
+        XCTAssertTrue(state.activeDownloadActivities.isEmpty)
+
+        voice.downloadModel()
+        try await waitUntil { fixture.downloader.requestCount == 2 }
+        fixture.downloader.send(.downloading(bytesWritten: 750, totalBytes: 1_000))
+        try await waitUntil { voice.modelDownloadProgress?.progress == 0.75 }
+        state.cancelDownloadActivity(try XCTUnwrap(state.activeDownloadActivities.first))
+        fixture.downloader.finish(.failure(CancellationError()))
+        try await waitUntil { !voice.isDownloading }
+        XCTAssertNil(state.downloadCompletionNotice)
+    }
+
+    func testFailureNoticeRoutesToModelAndSuccessfulRetryClearsError() async throws {
+        let fixture = try VoiceDownloadTestFixture()
+        defer { fixture.cleanup() }
+        let voice = fixture.voice
+        let state = fixture.app.state
+        voice.downloadModel()
+        try await waitUntil { fixture.downloader.requestCount == 1 }
+        fixture.downloader.finish(.failure(VoiceError.unavailable("Checksum mismatch")))
+        try await waitUntil { !voice.isDownloading }
+        XCTAssertFalse(voice.isModelReady)
+        XCTAssertEqual(voice.activeError?.scope, .models)
+        XCTAssertTrue(state.activeDownloadActivities.isEmpty)
+        XCTAssertEqual(state.downloadCompletionNotice?.kind, .failed)
+        XCTAssertTrue(state.downloadCompletionNotice?.message.contains("Checksum mismatch") == true)
+        XCTAssertEqual(state.modelDownloadActivity?.target, .liquid)
+
+        state.dismissDownloadCompletionNotice()
+        voice.downloadModel()
+        XCTAssertNil(voice.activeError)
+        try await waitUntil { fixture.downloader.requestCount == 2 }
+        fixture.downloader.finish(.success(()))
+        try await waitUntil { !voice.isDownloading }
+        XCTAssertTrue(voice.isModelReady)
+        XCTAssertNil(voice.activeError)
+        XCTAssertEqual(state.downloadCompletionNotice?.kind, .completed)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(condition())
+    }
+}
+
+@MainActor
+private final class VoiceDownloadTestFixture {
+    let downloader = VoiceModelDownloadFixture()
+    let voice: AgentVoiceCoordinator
+    let app: RecordingStartupFixture
+    private let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    private let suite = "DictaFlow.DownloadTests.\(UUID().uuidString)"
+
+    init(pausesReadiness: Bool = false) throws {
+        downloader.pausesReadiness = pausesReadiness
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        voice = AgentVoiceCoordinator(defaults: defaults, supportDirectory: directory,
+                                      appIdentity: "df-download-test-\(UUID().uuidString.prefix(8))", modelDownloader: downloader)
+        app = try RecordingStartupFixture(agentVoice: voice)
+    }
+
+    func cleanup() {
+        app.cleanup()
+        downloader.finishReadiness()
+        downloader.finish(.failure(CancellationError()))
+        UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: directory)
+    }
+}
+
+@MainActor
+private final class VoiceModelDownloadFixture: LiquidAssetDownloading {
+    private(set) var requestCount = 0
+    private var progressHandler: (@Sendable (LiquidDownloadEvent) -> Void)?
+    private var continuation: CheckedContinuation<Void, Error>?
+    var pausesReadiness = false
+    private var readinessContinuation: CheckedContinuation<Bool, Never>?
+    var isCheckingReadiness: Bool { readinessContinuation != nil }
+
+    func isReady() async throws -> Bool {
+        if pausesReadiness { return await withCheckedContinuation { readinessContinuation = $0 } }
+        return false
+    }
+    func finishReadiness() {
+        readinessContinuation?.resume(returning: false)
+        readinessContinuation = nil
+    }
+    func download(progressHandler: @escaping @Sendable (LiquidDownloadEvent) -> Void) async throws {
+        requestCount += 1
+        self.progressHandler = progressHandler
+        try await withCheckedThrowingContinuation { continuation = $0 }
+    }
+    func send(_ event: LiquidDownloadEvent) { progressHandler?(event) }
+    func finish(_ result: Result<Void, Error>) {
+        continuation?.resume(with: result)
+        continuation = nil
+    }
+}
+
 /// Uses the real coordinator with isolated settings and synthetic recording files.
 @MainActor
 private final class RecordingStartupFixture {
