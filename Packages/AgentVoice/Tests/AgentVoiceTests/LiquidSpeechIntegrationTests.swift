@@ -7,6 +7,29 @@ import Testing
 struct LiquidSpeechIntegrationTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["DICTAFLOW_RUN_LIQUID_SPEECH_CHECKS"] == "1",
                    "Requires explicit opt-in and existing pinned Liquid fixtures."))
+    func verifiedModelSwitchesVoicePresets() async throws {
+        let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let root = package.deletingLastPathComponent().deletingLastPathComponent()
+        let assets = LiquidAssets(directory: root.appendingPathComponent(".build/agentvoice-fixtures/models"))
+        let runtime = LiquidRuntime(executable: root.appendingPathComponent(".build/liquid-runtime/bin/llama-server"),
+                                    assets: assets, configuration: LiquidRuntimeConfiguration(ttsSeed: 42))
+        let text = "This is how your agent will sound when it reads a reply."
+        do {
+            let female = try await runtime.synthesize(text, voice: .female)
+            await runtime.stop()
+            let male = try await runtime.synthesize(text, voice: .male)
+            await runtime.stop()
+            #expect(female.duration > 0 && male.duration > 0)
+            #expect(female.wav != male.wav)
+            #expect(await runtime.hasExited())
+        } catch {
+            await runtime.stop()
+            throw error
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["DICTAFLOW_RUN_LIQUID_SPEECH_CHECKS"] == "1",
+                   "Requires explicit opt-in and existing pinned Liquid fixtures."))
     func translationReturnsEnglishForFrenchSpeech() async throws {
         let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let root = package.deletingLastPathComponent().deletingLastPathComponent()

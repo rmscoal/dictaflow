@@ -29,9 +29,18 @@ struct LiquidBenchmarkTests {
         let legacy = LiquidRuntime.ttsPayload(text: "fixture", seed: nil)
         #expect(Set(legacy.keys) == ["input", "lang", "voice", "stream",
                                      "response_format", "n_predict", "repeat_penalty"])
+        #expect(legacy["voice"] as? String == "female")
         let seeded = LiquidRuntime.ttsPayload(text: "fixture", seed: 20261102)
         #expect(seeded["seed"] as? UInt32 == 20261102)
         #expect(Set(seeded.keys) == Set(legacy.keys).union(["seed"]))
+    }
+
+    @Test func ttsPresetDoesNotChangeLanguageOrSampling() {
+        let male = LiquidRuntime.ttsPayload(text: "Bonjour.", seed: nil, language: "fr", voice: .male)
+        #expect(male["voice"] as? String == "male")
+        #expect(male["lang"] as? String == "fr")
+        #expect(male["repeat_penalty"] as? Double == 1.1)
+        #expect(male["seed"] == nil)
     }
 
     @Test func medianCoversOddEvenAndEmpty() {
