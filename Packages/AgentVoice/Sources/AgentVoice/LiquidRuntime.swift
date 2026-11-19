@@ -23,8 +23,13 @@ public enum LiquidVoice: String, CaseIterable, Sendable {
     case male
 }
 
+public enum LiquidEnglishAccent: String, Sendable {
+    case american = "en"
+    case british = "en-gb"
+}
+
 public protocol LiquidRuntimeProtocol: Sendable {
-    func synthesize(_ text: String, voice: LiquidVoice) async throws -> LiquidSpeech
+    func synthesize(_ text: String, voice: LiquidVoice, englishAccent: LiquidEnglishAccent) async throws -> LiquidSpeech
     /// Transcribes Liquid audio, translating the speech to English when requested.
     func transcribe(wav: Data, translateToEnglish: Bool) async throws -> String
     func stop() async
@@ -81,7 +86,8 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
         http = URLSession(configuration: configuration)
     }
 
-    public func synthesize(_ text: String, voice: LiquidVoice = .female) async throws -> LiquidSpeech {
+    public func synthesize(_ text: String, voice: LiquidVoice = .female,
+                           englishAccent: LiquidEnglishAccent = .american) async throws -> LiquidSpeech {
         guard !busy else { throw VoiceError.unavailable("Liquid audio is busy.") }
         busy = true; defer { busy = false }
         lastSynthesisTimings = nil
@@ -94,7 +100,8 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
             let endpoint = try await start(token: token)
             let startupSeconds = Self.seconds(since: startupStarted)
             let rendered = try await LiquidSpeechRenderer.render(plan, deadline: deadline) { chunk in
-                try await self.synthesizeChunk(chunk, voice: voice, endpoint: endpoint, token: token, deadline: deadline)
+                try await self.synthesizeChunk(chunk, voice: voice, englishAccent: englishAccent,
+                                               endpoint: endpoint, token: token, deadline: deadline)
             }
             try check(token)
             lastSynthesisTimings = LiquidSynthesisTimings(startupSeconds: startupSeconds, requestSeconds: synthesisRequests.seconds,
@@ -111,10 +118,12 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
         }
     }
 
-    private func synthesizeChunk(_ chunk: LiquidSpeechChunk, voice: LiquidVoice, endpoint: URL, token: UUID,
+    private func synthesizeChunk(_ chunk: LiquidSpeechChunk, voice: LiquidVoice, englishAccent: LiquidEnglishAccent,
+                                 endpoint: URL, token: UUID,
                                  deadline: ContinuousClock.Instant) async throws -> Data {
         try check(token)
-        let payload = Self.ttsPayload(text: chunk.text, seed: configuration.ttsSeed, language: chunk.language, voice: voice)
+        let payload = Self.ttsPayload(text: chunk.text, seed: configuration.ttsSeed, language: chunk.language,
+                                      voice: voice, englishAccent: englishAccent)
         let started = ContinuousClock.now
         let response = try await post(endpoint.appendingPathComponent("tts"), payload: payload,
                                       maxBytes: LiquidSpeechAudio.maxBytes - synthesisRequests.bytes, deadline: deadline)
@@ -194,8 +203,9 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
     /// A configured seed is passed through to `/tts`, which reproduces
     /// byte-identical audio for the same text and seed.
     public static func ttsPayload(text: String, seed: UInt32?, language: String = "en",
-                                  voice: LiquidVoice = .female) -> [String: Any] {
-        var payload: [String: Any] = ["input": text, "lang": language, "voice": voice.rawValue, "stream": false,
+                                  voice: LiquidVoice = .female, englishAccent: LiquidEnglishAccent = .american) -> [String: Any] {
+        let synthesisLanguage = language == "en" ? englishAccent.rawValue : language
+        var payload: [String: Any] = ["input": text, "lang": synthesisLanguage, "voice": voice.rawValue, "stream": false,
                                        "response_format": "wav", "n_predict": 2048, "repeat_penalty": 1.1]
         if let seed { payload["seed"] = seed }
         return payload

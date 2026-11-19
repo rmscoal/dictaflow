@@ -36,11 +36,19 @@ struct LiquidBenchmarkTests {
     }
 
     @Test func ttsPresetDoesNotChangeLanguageOrSampling() {
-        let male = LiquidRuntime.ttsPayload(text: "Bonjour.", seed: nil, language: "fr", voice: .male)
+        let male = LiquidRuntime.ttsPayload(text: "Bonjour.", seed: nil, language: "fr", voice: .male, englishAccent: .british)
         #expect(male["voice"] as? String == "male")
         #expect(male["lang"] as? String == "fr")
         #expect(male["repeat_penalty"] as? Double == 1.1)
         #expect(male["seed"] == nil)
+    }
+
+    @Test func ttsPayloadSelectsEnglishAccent() {
+        let american = LiquidRuntime.ttsPayload(text: "Hello.", seed: nil)
+        let british = LiquidRuntime.ttsPayload(text: "Hello.", seed: nil, englishAccent: .british)
+        #expect(american["lang"] as? String == "en")
+        #expect(british["lang"] as? String == "en-gb")
+        #expect(british["voice"] as? String == american["voice"] as? String)
     }
 
     @Test func medianCoversOddEvenAndEmpty() {

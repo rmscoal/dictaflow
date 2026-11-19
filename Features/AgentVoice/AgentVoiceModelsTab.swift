@@ -41,6 +41,8 @@ struct AgentVoiceModelsTab: View {
                 EmberDivider()
                 voicePicker
                 EmberDivider()
+                accentPicker
+                EmberDivider()
                 speedSlider
                 EmberDivider()
                 previewRow
@@ -70,6 +72,19 @@ struct AgentVoiceModelsTab: View {
             .frame(width: 144)
             .accessibilityLabel("Voice")
             .accessibilityIdentifier("agent-voice-preset")
+        }
+    }
+
+    private var accentPicker: some View {
+        EmberRow(title: "English accent") {
+            Picker("English accent", selection: Binding(get: { voice.englishAccent }, set: { voice.setEnglishAccent($0) })) {
+                Text("American").tag(LiquidEnglishAccent.american)
+                Text("British").tag(LiquidEnglishAccent.british)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 164)
+            .accessibilityIdentifier("agent-voice-english-accent")
         }
     }
 
@@ -111,7 +126,7 @@ struct AgentVoiceModelsTab: View {
 
     private var previewRow: some View {
         HStack(spacing: 12) {
-            Button(isPreviewActive ? "Stop preview" : "Preview voice", systemImage: isPreviewActive ? "stop.fill" : "play.fill") {
+            Button(isPreviewActive ? "Stop test" : "Test speech", systemImage: isPreviewActive ? "stop.fill" : "play.fill") {
                 if isPreviewActive { voice.stopVoicePreview() }
                 else { voice.previewVoice() }
             }
@@ -143,15 +158,15 @@ struct AgentVoiceModelsTab: View {
 
     private var previewStatus: String {
         switch voice.previewState {
-        case .generating: return "Generating preview…"
-        case .playing: return "Playing preview…"
-        case .stopping: return "Stopping preview…"
+        case .generating: return "Generating test speech…"
+        case .playing: return "Playing test speech…"
+        case .stopping: return "Stopping test…"
         case .failed(let message): return message
         case .idle:
             if !voice.isEnabled { return "Enable Agent Voice to play a sample." }
             if !voice.isModelReady { return "Download the speech model to play a sample." }
-            if !voice.canPreviewVoice { return "Preview is available when dictation and agent speech are idle." }
-            return "Applies to automatic replies and History replay."
+            if !voice.canPreviewVoice { return "Test speech is available when dictation and agent speech are idle." }
+            return "Hear a sample with the current speech settings."
         }
     }
 }

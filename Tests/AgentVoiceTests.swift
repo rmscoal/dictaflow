@@ -17,6 +17,7 @@ final class AgentVoiceTests: XCTestCase {
         let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root, runtime: runtime, appIdentity: appID)
         defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
         XCTAssertEqual(voice.speechVoice, .female)
+        XCTAssertEqual(voice.englishAccent, .american)
         XCTAssertEqual(voice.playbackRate, 1)
         voice.setEnabled(true)
         let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: appID))
@@ -25,6 +26,7 @@ final class AgentVoiceTests: XCTestCase {
         try await waitForSynthesis(runtime, count: 1)
 
         voice.setSpeechVoice(.male)
+        voice.setEnglishAccent(.british)
         voice.setPlaybackRate(0.75)
         await runtime.releaseLateResult()
         try await waitForSynthesis(runtime, count: 2)
@@ -51,6 +53,7 @@ final class AgentVoiceTests: XCTestCase {
         let relaunched = AgentVoiceCoordinator(defaults: defaults, player: VoicePlayerFixture(), supportDirectory: root,
                                               runtime: VoiceRuntimeFixture(), appIdentity: appID)
         XCTAssertEqual(relaunched.speechVoice, .male)
+        XCTAssertEqual(relaunched.englishAccent, .british)
         XCTAssertEqual(relaunched.playbackRate, 1.5)
         relaunched.shutdown(); await relaunched.waitForShutdown()
     }
@@ -79,6 +82,14 @@ final class AgentVoiceTests: XCTestCase {
         let presets = await runtime.voices
         XCTAssertEqual(presets, [.female, .male])
 
+        voice.setEnglishAccent(.british)
+        XCTAssertEqual(voice.previewState, .generating)
+        XCTAssertFalse(player.isPlaying)
+        try await waitUntil { voice.previewState == .playing && player.playCount == 3 }
+        let accents = await runtime.accents
+        XCTAssertEqual(accents, [.american, .american, .british])
+        XCTAssertEqual(player.rate, 1.25)
+
         let lease = voice.acquireForeground()
         XCTAssertFalse(player.isPlaying)
         XCTAssertFalse(voice.canPreviewVoice)
@@ -87,6 +98,33 @@ final class AgentVoiceTests: XCTestCase {
         XCTAssertTrue(voice.history.isEmpty)
         XCTAssertTrue(voice.drafts.isEmpty)
         voice.releaseForeground(lease)
+        voice.shutdown(); await voice.waitForShutdown()
+    }
+
+    func testPreviewCompletionPreservesPendingVoiceChange() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let runtime = VoiceRuntimeFixture()
+        let player = VoicePlayerFixture()
+        var changeVoiceOnCompletion: (() -> Void)?
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root, runtime: runtime,
+                                          appIdentity: "df-test-\(UUID().uuidString.prefix(8))", modelDownloader: ReadyVoiceModelFixture(),
+                                          beforePreviewCompletion: { changeVoiceOnCompletion?() })
+        defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        voice.setEnabled(true)
+        try await waitUntil { voice.canPreviewVoice }
+        voice.previewVoice()
+        try await waitUntil { voice.previewState == .playing }
+
+        changeVoiceOnCompletion = { [weak voice] in voice?.setSpeechVoice(.male) }
+        player.finish()
+        try await waitUntil { voice.previewState == .playing && player.playCount == 2 }
+        let presets = await runtime.voices
+        XCTAssertEqual(presets, [.female, .male])
+
+        player.finish()
+        try await waitUntil { voice.previewState == .idle }
         voice.shutdown(); await voice.waitForShutdown()
     }
 
@@ -1010,7 +1048,7 @@ private final class IdleRefreshGate {
 
 private actor FailingOnceVoiceRuntimeFixture: LiquidRuntimeProtocol {
     var synthesisCount = 0
-    func synthesize(_ text: String, voice: LiquidVoice) async throws -> LiquidSpeech {
+    func synthesize(_ text: String, voice: LiquidVoice, englishAccent: LiquidEnglishAccent) async throws -> LiquidSpeech {
         synthesisCount += 1
         if synthesisCount == 1 { throw VoiceError.unavailable("Injected synthesis failure") }
         return LiquidSpeech(wav: Data(), duration: 60)
@@ -1022,11 +1060,13 @@ private actor FailingOnceVoiceRuntimeFixture: LiquidRuntimeProtocol {
 
 private actor VoiceRuntimeFixture: LiquidRuntimeProtocol {
     private(set) var voices: [LiquidVoice] = []
+    private(set) var accents: [LiquidEnglishAccent] = []
     var synthesisCount: Int { voices.count }
     var stopCount = 0
     var transcribeCount = 0
-    func synthesize(_ text: String, voice: LiquidVoice) async throws -> LiquidSpeech {
+    func synthesize(_ text: String, voice: LiquidVoice, englishAccent: LiquidEnglishAccent) async throws -> LiquidSpeech {
         voices.append(voice)
+        accents.append(englishAccent)
         return LiquidSpeech(wav: Data(), duration: 60)
     }
     func transcribe(wav: Data, translateToEnglish: Bool) async throws -> String {
@@ -1041,7 +1081,9 @@ private actor VoiceRuntimeFixture: LiquidRuntimeProtocol {
 private actor GatedVoiceRuntimeFixture: LiquidRuntimeProtocol {
     private var exited = true
     func setExited(_ value: Bool) { exited = value }
-    func synthesize(_ text: String, voice: LiquidVoice) async throws -> LiquidSpeech { LiquidSpeech(wav: Data(), duration: 60) }
+    func synthesize(_ text: String, voice: LiquidVoice, englishAccent: LiquidEnglishAccent) async throws -> LiquidSpeech {
+        LiquidSpeech(wav: Data(), duration: 60)
+    }
     func transcribe(wav: Data, translateToEnglish: Bool) async throws -> String { "Fixture transcription" }
     func stop() async {}
     func hasExited() async -> Bool { exited }
@@ -1051,7 +1093,7 @@ private actor SuspendedVoiceRuntimeFixture: LiquidRuntimeProtocol {
     private var result: CheckedContinuation<LiquidSpeech, Never>?
     private(set) var voices: [LiquidVoice] = []
     var isSuspended: Bool { result != nil }
-    func synthesize(_ text: String, voice: LiquidVoice) async throws -> LiquidSpeech {
+    func synthesize(_ text: String, voice: LiquidVoice, englishAccent: LiquidEnglishAccent) async throws -> LiquidSpeech {
         voices.append(voice)
         return await withCheckedContinuation { result = $0 }
     }

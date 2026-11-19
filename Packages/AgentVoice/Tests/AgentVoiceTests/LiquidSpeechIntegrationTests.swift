@@ -7,7 +7,7 @@ import Testing
 struct LiquidSpeechIntegrationTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["DICTAFLOW_RUN_LIQUID_SPEECH_CHECKS"] == "1",
                    "Requires explicit opt-in and existing pinned Liquid fixtures."))
-    func verifiedModelSwitchesVoicePresets() async throws {
+    func verifiedModelSwitchesVoiceAndAccentPresets() async throws {
         let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let root = package.deletingLastPathComponent().deletingLastPathComponent()
         let assets = LiquidAssets(directory: root.appendingPathComponent(".build/agentvoice-fixtures/models"))
@@ -19,8 +19,11 @@ struct LiquidSpeechIntegrationTests {
             await runtime.stop()
             let male = try await runtime.synthesize(text, voice: .male)
             await runtime.stop()
-            #expect(female.duration > 0 && male.duration > 0)
+            let british = try await runtime.synthesize(text, voice: .female, englishAccent: .british)
+            await runtime.stop()
+            #expect(female.duration > 0 && male.duration > 0 && british.duration > 0)
             #expect(female.wav != male.wav)
+            #expect(female.wav != british.wav)
             #expect(await runtime.hasExited())
         } catch {
             await runtime.stop()
