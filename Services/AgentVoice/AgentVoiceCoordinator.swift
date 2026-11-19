@@ -6,8 +6,14 @@ import OSLog
 
 @MainActor
 protocol AgentSpeechPlayerProtocol: AnyObject {
-    func play(_ wav: Data) throws -> TimeInterval
+    func play(_ wav: Data, rate: Double, onStart: () -> Void) async throws
+    func setRate(_ rate: Double)
     func stop()
+}
+
+enum AgentVoicePreviewState: Equatable, Sendable {
+    case idle, generating, playing, stopping
+    case failed(String)
 }
 
 /// Explicit actionable Agent Voice error. Views switch on `scope`, never on
@@ -22,21 +28,86 @@ struct AgentVoiceError: Equatable, Sendable {
 }
 
 @MainActor
-final class AgentSpeechPlayer: AgentSpeechPlayerProtocol {
-    private var player: AVAudioPlayer?
-    func play(_ wav: Data) throws -> TimeInterval {
-        let player = try AVAudioPlayer(data: wav)
-        guard player.prepareToPlay(), player.play() else { throw VoiceError.unavailable("Could not play agent speech.") }
-        self.player = player
-        return player.duration
+final class AgentSpeechPlayer: NSObject, AgentSpeechPlayerProtocol, AVAudioPlayerDelegate {
+    private struct Playback {
+        let player: AVAudioPlayer
+        let completion: CheckedContinuation<Void, Error>
     }
-    func stop() { player?.stop(); player = nil }
+
+    private var active: Playback?
+    private var timeout: Task<Void, Never>?
+
+    func play(_ wav: Data, rate: Double, onStart: () -> Void) async throws {
+        try Task.checkCancellation()
+        guard active == nil else { throw VoiceError.unavailable("Agent speech is already playing.") }
+        let player = try AVAudioPlayer(data: wav)
+        player.delegate = self
+        player.enableRate = true
+        player.rate = Float(rate)
+        try await withCheckedThrowingContinuation { continuation in
+            active = Playback(player: player, completion: continuation)
+            guard player.prepareToPlay(), player.play() else {
+                finish(player, error: VoiceError.unavailable("Could not play agent speech."))
+                return
+            }
+            // The delegate handles completion at the actual rate, including live edits.
+            // Bound the wait in case the audio device never sends a callback.
+            let limit = player.duration / AgentVoiceCoordinator.playbackRateRange.lowerBound + 2
+            timeout = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(limit)) }
+                catch { return }
+                self?.finish(player, error: VoiceError.unavailable("Agent speech playback did not finish. Check your Mac’s sound output."))
+            }
+            onStart()
+        }
+    }
+
+    func setRate(_ rate: Double) { active?.player.rate = Float(rate) }
+
+    func stop() {
+        guard let active else { return }
+        finish(active.player, error: CancellationError())
+    }
+
+    private func finish(_ player: AVAudioPlayer, error: Error? = nil) {
+        guard let playback = active, playback.player === player else { return }
+        active = nil
+        timeout?.cancel()
+        timeout = nil
+        player.delegate = nil
+        player.stop()
+        if let error { playback.completion.resume(throwing: error) }
+        else { playback.completion.resume() }
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor [weak self] in
+            self?.finish(player, error: flag ? nil : VoiceError.unavailable("Could not finish playing agent speech."))
+        }
+    }
+
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        Task { @MainActor [weak self] in
+            self?.finish(player, error: error ?? VoiceError.unavailable("Could not decode agent speech for playback."))
+        }
+    }
 }
 
 /// App-owned boundary for MCP, queue execution, playback, and foreground inference priority.
 /// Dictation's recording state machine remains in DictaFlowAppState.
 @MainActor
 final class AgentVoiceCoordinator: ObservableObject {
+    static let playbackRateRange = 0.75...1.5
+    private static let speechVoiceKey = "agentVoice.speechVoice"
+    private static let englishAccentKey = "agentVoice.englishAccent"
+    private static let playbackRateKey = "agentVoice.playbackRate"
+    private static let previewText = """
+        Here's a sample of how your agent might sound during a longer reply. \
+        The first three steps are complete, and there's one small detail to check before we wrap up. \
+        Once that's done, we can save the result, write a short summary, and move on to the next task. \
+        Does this pace give you enough time to follow each point?
+        """
+
     @Published private(set) var isEnabled: Bool
     @Published private(set) var status = "Agent Voice is off."
     @Published private(set) var isModelReady = false
@@ -50,6 +121,10 @@ final class AgentVoiceCoordinator: ObservableObject {
     @Published private(set) var isForegroundBusy = false
     @Published private(set) var isSpeaking = false
     @Published private(set) var isGenerating = false
+    @Published private(set) var speechVoice: LiquidVoice
+    @Published private(set) var englishAccent: LiquidEnglishAccent
+    @Published private(set) var playbackRate: Double
+    @Published private(set) var previewState: AgentVoicePreviewState = .idle
     @Published private(set) var activeError: AgentVoiceError?
     @Published private(set) var replayError: String?
     private var rejectedRenditionID: UUID?
@@ -66,11 +141,14 @@ final class AgentVoiceCoordinator: ObservableObject {
     private let player: AgentSpeechPlayerProtocol
     private let beforeIdleRefresh: (() async -> Void)?
     private let beforeRetentionRefresh: ((VoiceHistoryRetention) async -> Void)?
+    private let beforePreviewCompletion: (() -> Void)?
     private let logger = Logger(subsystem: "com.dictaflow.agentvoice", category: "Coordinator")
     private var store: VoiceStore?
     private var bridge: LocalVoiceServer?
     private var worker: Task<Void, Never>?
     private var workerNeedsWake = false
+    private var previewTask: Task<AgentVoicePreviewState, Never>?
+    private var synthesisTask: Task<LiquidSpeech, Error>?
     private var maintenance: Task<Void, Never>?
     private var resourceRelease: Task<Void, Never>?
     private var activeJob: UUID?
@@ -83,10 +161,15 @@ final class AgentVoiceCoordinator: ObservableObject {
          supportDirectory: URL? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil,
          limits: VoiceLimits = VoiceLimits(), beforeIdleRefresh: (() async -> Void)? = nil,
          beforeRetentionRefresh: ((VoiceHistoryRetention) async -> Void)? = nil,
-         modelDownloader: (any LiquidAssetDownloading)? = nil) {
+         modelDownloader: (any LiquidAssetDownloading)? = nil, beforePreviewCompletion: (() -> Void)? = nil) {
         self.defaults = defaults; self.player = player ?? AgentSpeechPlayer()
+        speechVoice = defaults.string(forKey: Self.speechVoiceKey).flatMap(LiquidVoice.init(rawValue:)) ?? .female
+        englishAccent = defaults.string(forKey: Self.englishAccentKey).flatMap(LiquidEnglishAccent.init(rawValue:)) ?? .american
+        let savedRate = defaults.double(forKey: Self.playbackRateKey)
+        playbackRate = Self.playbackRateRange.contains(savedRate) ? savedRate : 1
         self.beforeIdleRefresh = beforeIdleRefresh
         self.beforeRetentionRefresh = beforeRetentionRefresh
+        self.beforePreviewCompletion = beforePreviewCompletion
         appID = appIdentity ?? (Bundle.main.bundleIdentifier == "com.dictaflow" ? "com.dictaflow" : "com.dictaflow.dev")
         let name = appID == "com.dictaflow" ? "DictaFlow" : "DictaFlow Dev"
         let support = supportDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(name)
@@ -306,6 +389,62 @@ final class AgentVoiceCoordinator: ObservableObject {
         }
     }
 
+    func setSpeechVoice(_ voice: LiquidVoice) {
+        guard speechVoice != voice else { return }
+        speechVoice = voice
+        defaults.set(voice.rawValue, forKey: Self.speechVoiceKey)
+        speechSynthesisSettingsDidChange()
+    }
+
+    func setEnglishAccent(_ accent: LiquidEnglishAccent) {
+        guard englishAccent != accent else { return }
+        englishAccent = accent
+        defaults.set(accent.rawValue, forKey: Self.englishAccentKey)
+        speechSynthesisSettingsDidChange()
+    }
+
+    private func speechSynthesisSettingsDidChange() {
+        synthesisTask?.cancel()
+        if previewState == .playing {
+            previewState = .generating
+            player.stop()
+        }
+    }
+
+    func setPlaybackRate(_ rate: Double) {
+        guard Self.playbackRateRange.contains(rate), playbackRate != rate else { return }
+        playbackRate = rate
+        defaults.set(rate, forKey: Self.playbackRateKey)
+        player.setRate(rate)
+    }
+
+    var canPreviewVoice: Bool {
+        isEnabled && isModelReady && !isForegroundBusy && !isGenerating && !isSpeaking && !stopped
+    }
+
+    func previewVoice() {
+        guard canPreviewVoice else { return }
+        switch previewState {
+        case .idle, .failed:
+            previewState = .generating
+            pump()
+        case .generating, .playing, .stopping:
+            break
+        }
+    }
+
+    func stopVoicePreview() {
+        guard previewState == .generating || previewState == .playing else { return }
+        guard let previewTask else {
+            previewState = .idle
+            return
+        }
+        previewState = .stopping
+        previewTask.cancel()
+        synthesisTask?.cancel()
+        player.stop()
+    }
+
     /// Queues a rendition for manual playback, retaining any rejection for display until retried.
     func playRendition(_ id: UUID) async {
         guard isEnabled, let store else { return }
@@ -510,6 +649,8 @@ final class AgentVoiceCoordinator: ObservableObject {
         // last refresh are still suppressed.
         let suppressedInput = suppress ? activeInput : nil
         generation = UUID()
+        stopVoicePreview()
+        synthesisTask?.cancel()
         player.stop(); isSpeaking = false; isGenerating = false
         worker?.cancel()
         let oldWorker = worker; worker = nil
@@ -551,6 +692,10 @@ final class AgentVoiceCoordinator: ObservableObject {
             while !Task.isCancelled, generation == token, foregroundLeases.isEmpty, isEnabled {
                 do {
                     workerNeedsWake = false
+                    if previewState == .generating {
+                        await runVoicePreview()
+                        continue
+                    }
                     guard let job = try await store.nextJob() else {
                         await beforeIdleRefresh?()
                         await refresh()
@@ -569,20 +714,22 @@ final class AgentVoiceCoordinator: ObservableObject {
                     await prepareSpeechResources?()
                     logger.info("Speech resource_preparation_seconds=\(Self.seconds(since: processingStarted), privacy: .public)")
                     guard !Task.isCancelled, generation == token, foregroundLeases.isEmpty else { return }
-                    let speech = try await runtime.synthesize(job.text)
-                    // Retire model compute before playback or foreground inference.
-                    await runtime.stop()
+                    let speech = try await synthesizeWithCurrentSettings(job.text)
                     guard !Task.isCancelled, generation == token, foregroundLeases.isEmpty,
                           try await store.transition(job.id, from: .synthesizing, to: .playing) else { continue }
+                    await refresh()
                     guard !Task.isCancelled, generation == token, foregroundLeases.isEmpty else { return }
                     let playerStarted = ContinuousClock.now
-                    let duration = try player.play(speech.wav)
-                    isGenerating = false; isSpeaking = true; status = "Speaking agent response."
-                    await refresh()
-                    logger.info("Speech processing_to_player_start_seconds=\(Self.seconds(since: processingStarted), privacy: .public) player_start_seconds=\(Self.seconds(since: playerStarted), privacy: .public)")
-                    try await Task.sleep(for: .seconds(duration))
-                    player.stop(); isSpeaking = false
+                    try await player.play(speech.wav, rate: playbackRate) {
+                        self.isGenerating = false
+                        self.isSpeaking = true
+                        self.status = "Speaking agent response."
+                        self.logger.info("Speech processing_to_player_start_seconds=\(Self.seconds(since: processingStarted), privacy: .public) player_start_seconds=\(Self.seconds(since: playerStarted), privacy: .public)")
+                    }
+                    guard !Task.isCancelled, generation == token else { return }
+                    isSpeaking = false
                     _ = try await store.transition(job.id, from: .playing, to: .completed)
+                    guard !Task.isCancelled, generation == token else { return }
                     activeJob = nil; status = "Agent speech finished."
                     if activeError?.scope == .playback { activeError = nil }
                     await refresh()
@@ -596,13 +743,61 @@ final class AgentVoiceCoordinator: ObservableObject {
                     }
                     player.stop(); isSpeaking = false; isGenerating = false; status = "Agent speech failed: \(error.localizedDescription)"
                     activeError = AgentVoiceError(scope: .playback, message: status)
-                    await runtime.stop(); await refresh()
+                    await refresh()
                     activeJob = nil
                     if failedJob == nil { return }
                     continue
                 }
             }
         }
+    }
+
+    private func synthesizeWithCurrentSettings(_ text: String) async throws -> LiquidSpeech {
+        while true {
+            try Task.checkCancellation()
+            let voice = speechVoice
+            let accent = englishAccent
+            let task = Task { [runtime] in
+                try await runtime.synthesize(text, voice: voice, englishAccent: accent)
+            }
+            synthesisTask = task
+            let result = await task.result
+            // Release model compute before playback or another synthesis.
+            await runtime.stop()
+            synthesisTask = nil
+            try Task.checkCancellation()
+            if voice == speechVoice, accent == englishAccent, !task.isCancelled { return try result.get() }
+        }
+    }
+
+    private func runVoicePreview() async {
+        let task = Task { [self] () -> AgentVoicePreviewState in
+            do {
+                await prepareSpeechResources?()
+                repeat {
+                    let speech = try await synthesizeWithCurrentSettings(Self.previewText)
+                    try Task.checkCancellation()
+                    do {
+                        try await player.play(speech.wav, rate: playbackRate) { previewState = .playing }
+                    } catch is CancellationError where previewState == .generating {
+                        // A voice or accent change stopped the sample so it can play with the new settings.
+                    }
+                } while previewState == .generating
+                return .idle
+            } catch is CancellationError {
+                return .idle
+            } catch {
+                updateReadiness(after: error)
+                return .failed(error.localizedDescription)
+            }
+        }
+        previewTask = task
+        let result = await task.value
+        beforePreviewCompletion?()
+        previewTask = nil
+        // A settings change between completion and cleanup can request another preview.
+        if previewState == .generating, result == .idle { return }
+        previewState = previewState == .stopping ? .idle : result
     }
 
     private static func seconds(since started: ContinuousClock.Instant) -> Double {
