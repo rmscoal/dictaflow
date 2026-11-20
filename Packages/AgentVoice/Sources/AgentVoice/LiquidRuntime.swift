@@ -126,7 +126,8 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
                                       voice: voice, englishAccent: englishAccent)
         let started = ContinuousClock.now
         let response = try await post(endpoint.appendingPathComponent("tts"), payload: payload,
-                                      maxBytes: LiquidSpeechAudio.maxBytes - synthesisRequests.bytes, deadline: deadline)
+                                      maxBytes: LiquidSpeechAudio.maxBytes - synthesisRequests.bytes, deadline: deadline,
+                                      timeoutError: VoiceError.unavailable("Agent speech exceeded its 60-second synthesis budget. Use a shorter spoken response."))
         try check(token)
         synthesisRequests.seconds += Self.seconds(since: started)
         synthesisRequests.headers += response.headerSeconds
@@ -136,11 +137,18 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
     }
 
     /// Transcribes the WAV with the Liquid sidecar, requesting English translation when asked.
+    ///
+    /// The whole response (headers plus body, including a trickling body)
+    /// shares one deadline scaled to the audio length: three times realtime
+    /// with a three-minute floor. This is an initial budget until near-cap
+    /// timings on a slower supported Mac set a measured value.
     public func transcribe(wav: Data, translateToEnglish: Bool) async throws -> String {
         guard !busy else { throw VoiceError.unavailable("Liquid audio is busy.") }
-        try Self.validateASRInput(wav)
+        let duration = try Self.validateASRInput(wav)
         busy = true; defer { busy = false }
         let token = generation
+        let deadline = ContinuousClock.now.advanced(by: .seconds(Int(max(180, 3 * duration))))
+        let timeout = VoiceError.transcriptionTimedOut("Liquid transcription timed out. The recording is kept; try again or use a shorter recording.")
         do {
             let endpoint = try await start(token: token)
             let payload: [String: Any] = ["model": "dictaflow-liquid", "stream": false, "max_tokens": 2048,
@@ -148,7 +156,8 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
                     ["role": "system", "content": translateToEnglish ? "Translate the following speech to English in text form." : "Perform ASR."],
                     ["role": "user", "content": [["type": "input_audio", "input_audio": ["data": wav.base64EncodedString()]]]]
                 ]]
-            let response = try await post(endpoint.appendingPathComponent("v1/chat/completions"), payload: payload, maxBytes: 1024 * 1024)
+            let response = try await post(endpoint.appendingPathComponent("v1/chat/completions"), payload: payload,
+                                          maxBytes: 1024 * 1024, deadline: deadline, timeoutError: timeout)
             try check(token)
             struct Response: Decodable {
                 struct Choice: Decodable {
@@ -165,7 +174,11 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
                 throw VoiceError.inputTooLong("Liquid reached its transcription limit. The recording is kept so you can retry with Whisper.")
             }
             return choice.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        } catch { await stop(); throw error }
+        } catch {
+            await stop()
+            if let network = error as? URLError, network.code == .timedOut { throw timeout }
+            throw error
+        }
     }
 
     /// Bounded shutdown attempt. Callers check hasExited before admitting foreground inference.
@@ -259,13 +272,14 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
     }
 
     private func post(_ url: URL, payload: [String: Any], maxBytes: Int,
-                      deadline: ContinuousClock.Instant? = nil) async throws -> (data: Data, headerSeconds: Double, bodySeconds: Double) {
+                      deadline: ContinuousClock.Instant? = nil,
+                      timeoutError: VoiceError) async throws -> (data: Data, headerSeconds: Double, bodySeconds: Double) {
         guard maxBytes > 0 else { throw VoiceError.unavailable("Generated speech exceeds the 12 MiB response limit.") }
         let session: URLSession
         if let deadline {
             let remaining = ContinuousClock.now.duration(to: deadline).components
             let seconds = Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18
-            guard seconds > 0 else { throw VoiceError.unavailable("Agent speech exceeded its 60-second synthesis budget. Use a shorter spoken response.") }
+            guard seconds > 0 else { throw timeoutError }
             // Bound headers AND stalled bodies by the remaining whole-response budget.
             let settings = URLSessionConfiguration.ephemeral
             settings.timeoutIntervalForRequest = seconds
@@ -287,7 +301,8 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
         let bodyStarted = ContinuousClock.now
         let bodyDeadline = deadline ?? ContinuousClock.now.advanced(by: .seconds(60))
         for try await byte in bytes {
-            guard data.count < maxBytes, ContinuousClock.now < bodyDeadline else { throw VoiceError.unavailable("Liquid output exceeded the size or synthesis-time limit.") }
+            guard data.count < maxBytes else { throw VoiceError.unavailable("Liquid output exceeded the size limit.") }
+            guard ContinuousClock.now < bodyDeadline else { throw timeoutError }
             data.append(byte)
         }
         return (data, headerSeconds, Self.seconds(since: bodyStarted))
@@ -318,12 +333,18 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
     /// 120*12.5+20+2048=3568 tokens, a 528-token margin, and keeps a normal
     /// 150 wpm transcript (about 400 tokens) well inside max_tokens. 8 MiB covers
     /// 120 s of 16 kHz mono float32 (7.68 MB, 7.32 MiB) with margin while bounding the
-    /// base64 POST and transient memory. Longer clips fail explicitly; they are
+    /// base64 POST and transient memory. These are per-request limits:
+    /// `AgentVoiceCoordinator.recognize` chunks long recordings so each
+    /// request fits. Overlimit requests fail explicitly; they are
     /// never truncated or auto-switched to another provider.
     public static let maxASRDuration: TimeInterval = 120
     public static let maxASRBytes = 8 * 1024 * 1024
 
-    public static func validateASRInput(_ wav: Data) throws {
+    /// Validates one ASR request body and returns its audio duration.
+    /// Callers chunk long recordings so each request fits these limits;
+    /// overlimit chunks fail explicitly and are never truncated.
+    @discardableResult
+    public static func validateASRInput(_ wav: Data) throws -> TimeInterval {
         guard wav.count <= maxASRBytes else {
             throw VoiceError.inputTooLong("Liquid ASR supports up to 8 MiB of audio. The recording is kept; use Whisper or a shorter recording.")
         }
@@ -344,6 +365,7 @@ public actor LiquidRuntime: LiquidRuntimeProtocol {
         guard duration <= maxASRDuration else {
             throw VoiceError.inputTooLong("Liquid ASR supports up to 2 minutes. The recording is kept; use Whisper or a shorter recording.")
         }
+        return duration
     }
 
     private static func availablePort() throws -> UInt16 {

@@ -3451,7 +3451,7 @@ final class DictaFlowAppState: ObservableObject {
         } catch {
             if let voice = error as? VoiceError {
                 switch voice {
-                case .inputTooLong, .liquidModelUnavailable: keepCapture = true
+                case .inputTooLong, .liquidModelUnavailable, .transcriptionTimedOut: keepCapture = true
                 case .unavailable: break
                 }
             }

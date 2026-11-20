@@ -319,7 +319,7 @@ final class AgentVoiceTests: XCTestCase {
         await voice.waitForShutdown()
     }
 
-    func testLiquidRecognizeHandlesMissingInvalidAndOverlimitWithoutDownloads() async throws {
+    func testLiquidRecognizeHandlesMissingInvalidAndChunksLongAudioWithoutDownloads() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -355,23 +355,18 @@ final class AgentVoiceTests: XCTestCase {
         }
         let long = root.appendingPathComponent("long.wav")
         try writeSilence(to: long, seconds: 121)
-        do {
-            _ = try await voice.recognize(long, configuration: configuration)
-            XCTFail("121 s Liquid input must fail.")
-        } catch {
-            XCTAssertTrue(isInputTooLong(error), "Overlimit must use inputTooLong for retention.")
-            XCTAssertTrue(error.localizedDescription.contains("2 minutes"))
-            XCTAssertTrue(error.localizedDescription.contains("recording is kept"))
-        }
-        let overlimitTranscriptions = await runtime.transcribeCount
-        XCTAssertEqual(overlimitTranscriptions, 0, "Overlimit must not reach transcription.")
+        let longResult = try await voice.recognize(long, configuration: configuration)
+        XCTAssertEqual(longResult.text, "Fixture transcription Fixture transcription")
+        XCTAssertEqual(longResult.recognitionProvider, .liquid)
+        let longTranscriptions = await runtime.transcribeCount
+        XCTAssertEqual(longTranscriptions, 2, "121 s must reach transcription once per chunk.")
         let short = root.appendingPathComponent("short.wav")
         try writeSilence(to: short, seconds: 1)
         let result = try await voice.recognize(short, configuration: configuration)
         XCTAssertEqual(result.text, "Fixture transcription")
         XCTAssertEqual(result.recognitionProvider, .liquid)
         let validTranscriptions = await runtime.transcribeCount
-        XCTAssertEqual(validTranscriptions, 1)
+        XCTAssertEqual(validTranscriptions, 3, "Two chunked calls plus one single-chunk call.")
         voice.shutdown()
         await voice.waitForShutdown()
     }
