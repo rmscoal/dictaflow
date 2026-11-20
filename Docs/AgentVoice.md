@@ -12,7 +12,7 @@ The **Speech model** section offers Liquid’s **Female** and **Male** voices, *
 
 Liquid downloads use the shared progress bar and toolbar Downloads list, with combined byte progress across both model files, a separate verification state, cancellation, and completion or failure notices. Opening the download returns to Agent Voice > General. Cancelling removes the partial transfer and any uninstalled temporary files. Previously checksum-verified and installed files remain available for retry. The model becomes ready only after both files pass verification and installation.
 
-The floating control identifies the speaking session and provides Stop and Dictate. It does not take keyboard focus from the target app. The existing dictation shortcut also interrupts speech. Interruption is a deliberate button or shortcut action; DictaFlow does not listen continuously for speech over the agent.
+The floating control identifies the speaking session and provides Stop and Dictate. Hover over the pill to expand it. It collapses after the pointer leaves. Hover uses the pill’s destination bounds during a resize, so the animation can finish under a stationary pointer. The control does not take keyboard focus from the target app. The existing dictation shortcut also interrupts speech. Interruption is a deliberate button or shortcut action; DictaFlow does not listen continuously for speech over the agent.
 
 Stopping the current response persists suppression for the interrupted interaction. Delayed Stop observations and corrections cannot automatically make it speak again. Explicit Play remains possible, and a new user turn is independently eligible.
 
