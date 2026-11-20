@@ -1,0 +1,18 @@
+@use "./styles/tokens" as *;
+
+// Voicet-style page shell: white at the top, sky through the hero,
+// then white sections. The gradient lives here so every section
+// can stay flat and the hero window floats over the sky.
+.page {
+  background: linear-gradient(
+    180deg,
+    $sky-top 0%,
+    #f5f8ff 30%,
+    $sky-mid 46%,
+    $sky-low 54%,
+    $sky-top 62%,
+    $sky-top 100%
+  );
+  min-height: 100vh;
+  overflow-x: clip;
+}
