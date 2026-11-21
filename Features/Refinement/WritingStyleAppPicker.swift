@@ -60,7 +60,7 @@ struct WritingStyleAppPicker: View {
             }.padding(20)
         }
         .frame(width: 580, height: 560)
-        .foregroundStyle(AppTheme.primaryText).omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false).tint(AppTheme.accent)
+        .foregroundStyle(AppTheme.primaryText).omdoSheetBackground().tint(AppTheme.accent)
         .onAppear {
             running = catalog.runningApplications()
             let ids = Set(running.map(\.id))
@@ -90,7 +90,7 @@ struct WritingStyleAppPicker: View {
                     Button("Move \(countLabel(movers.count))") { apply() }
                         .buttonStyle(EmberButtonStyle(primary: true)).disabled(appState.refinementSettingsLocked)
                 }
-            }.padding(22).frame(width: 425).foregroundStyle(AppTheme.primaryText).omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false)
+            }.padding(22).frame(width: 425).foregroundStyle(AppTheme.primaryText).omdoSheetBackground()
         }
     }
 

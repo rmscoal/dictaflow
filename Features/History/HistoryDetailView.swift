@@ -198,7 +198,7 @@ struct HistoryDetailView: View {
                 Text("Previous results").font(.system(size: 13, weight: .medium))
                 Spacer()
                 Button { showsPreviousResults = false } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).accessibilityLabel("Close previous results")
+                    .buttonStyle(EmberButtonStyle(appearance: .plain)).accessibilityLabel("Close previous results")
             }
             Picker("Transcription", selection: $model.selectedTranscriptionID) {
                 ForEach(detail.transcriptions) { result in

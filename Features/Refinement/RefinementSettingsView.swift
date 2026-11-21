@@ -15,7 +15,7 @@ struct RefinementSettingsView: View {
                 EmberRow(title: "Refine before insertion") {
                     Toggle("Refine before insertion", isOn: Binding(
                         get: { appState.refinementConfiguration.isEnabled }, set: { appState.updateRefinementEnabled($0) }
-                    )).labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                    )).labelsHidden().toggleStyle(EmberSwitchStyle(showsLabel: false)).controlSize(.mini)
                         .disabled(appState.refinementSettingsLocked)
                 }
             }

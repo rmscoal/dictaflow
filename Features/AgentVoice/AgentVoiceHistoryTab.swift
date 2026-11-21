@@ -116,7 +116,7 @@ struct AgentVoiceHistoryTab: View {
                         Image(systemName: "xmark.circle.fill")
                             .frame(width: 22, height: 22).contentShape(Rectangle())
                     }
-                        .buttonStyle(.plain).foregroundStyle(AppTheme.secondaryText)
+                        .buttonStyle(EmberButtonStyle(appearance: .plain)).foregroundStyle(AppTheme.secondaryText)
                         .accessibilityLabel("Clear search")
                 }
             }
@@ -223,7 +223,7 @@ struct AgentVoiceHistoryTab: View {
             .background(isSelected ? AppTheme.selectedFill : .clear, in: RoundedRectangle(cornerRadius: 10))
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(EmberButtonStyle(appearance: .plain))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityIdentifier("agent-voice-session-\(session.shortID)")
     }

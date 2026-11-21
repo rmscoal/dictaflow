@@ -83,6 +83,12 @@ extension View {
         }
     }
 
+    func omdoSheetBackground() -> some View {
+        presentationBackground {
+            Color.clear.omdoFloatingWindowBackground(in: Rectangle(), showsRim: false)
+        }
+    }
+
     func omdoControlBackground<S: InsettableShape>(in shape: S) -> some View {
         background {
             OmdoControlSurface(shape: shape)

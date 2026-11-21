@@ -21,7 +21,7 @@ struct RefinementModelsView: View {
                         .overlay { Capsule().stroke(provider == item ? AppTheme.accent : AppTheme.border, lineWidth: 1) }
                         .contentShape(Capsule())
                     }
-                    .buttonStyle(.plain).accessibilityLabel(item.title)
+                    .buttonStyle(EmberButtonStyle(appearance: .plain)).accessibilityLabel(item.title)
                     .accessibilityAddTraits(provider == item ? .isSelected : [])
                 }
             }

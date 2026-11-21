@@ -254,7 +254,7 @@ struct OnboardingView: View {
                             }
                             .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EmberButtonStyle(appearance: .plain))
                     .disabled(appState.onboardingPracticeIsBusy)
                 }
                 .padding(17)

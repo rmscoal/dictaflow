@@ -58,7 +58,7 @@ struct MainWindowToolbar: View {
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(EmberButtonStyle(appearance: .plain))
         .help(count == 1 ? "Show download in progress" : "Show \(count) downloads in progress")
         .accessibilityLabel(count == 1 ? "Show download in progress" : "Show downloads in progress")
         .accessibilityValue(count == 1 ? "1 download" : "\(count) downloads")

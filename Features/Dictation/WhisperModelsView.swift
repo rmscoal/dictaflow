@@ -87,7 +87,7 @@ struct WhisperModelsView: View {
                 HStack {
                     Text("Encoder · \(appState.whisperEncoderDownloadStatusText(for: model))").font(.system(size: 11))
                     Spacer()
-                    Button("Cancel encoder") { appState.cancelWhisperEncoderDownload(model) }.buttonStyle(.plain).font(.system(size: 12))
+                    Button("Cancel encoder") { appState.cancelWhisperEncoderDownload(model) }.buttonStyle(EmberButtonStyle(appearance: .plain)).font(.system(size: 12))
                 }
                 EmberDownloadProgress(value: appState.whisperEncoderDownloadProgress(for: model))
             }
@@ -125,7 +125,7 @@ struct WhisperModelsView: View {
             } else if appState.isWhisperEncoderDownloaded(model) {
                 HStack {
                     Toggle("Use encoder", isOn: Binding(get: { appState.isWhisperEncoderEnabled(model) }, set: { appState.setWhisperEncoderEnabled($0, for: model) }))
-                        .toggleStyle(.switch).controlSize(.mini)
+                        .toggleStyle(EmberSwitchStyle()).controlSize(.mini)
                     Spacer(minLength: 12)
                     if !appState.isWhisperEncoderEnabled(model) {
                         Button("Remove encoder…") { encoderPendingRemoval = model }.buttonStyle(EmberButtonStyle())

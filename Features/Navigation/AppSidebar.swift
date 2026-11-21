@@ -66,7 +66,7 @@ struct AppSidebar: View {
             }
             .contentShape(RoundedRectangle(cornerRadius: 14))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(EmberButtonStyle(appearance: .plain))
         .focused($focusedPage, equals: page)
         .help(page.title)
         .accessibilityLabel(page.title)

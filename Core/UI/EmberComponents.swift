@@ -4,7 +4,6 @@ struct EmberButtonStyle: ButtonStyle {
     enum Appearance {
         case standard, primary, inline, plain
         case icon(size: CGFloat, bordered: Bool, highlighted: Bool)
-        case primaryIcon(size: CGFloat)
     }
 
     var appearance: Appearance
@@ -63,12 +62,6 @@ struct EmberButtonStyle: ButtonStyle {
                         RoundedRectangle(cornerRadius: 7).fill(AppTheme.controlFill)
                     }
                 }
-        case let .primaryIcon(size):
-            configuration.label
-                .font(.system(size: 15))
-                .frame(width: size, height: size)
-                .foregroundStyle(AppTheme.actionText)
-                .background(AppTheme.actionFill, in: Circle())
         }
     }
 }
@@ -90,6 +83,27 @@ struct EmberIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         EmberButtonStyle(appearance: .icon(size: size, bordered: bordered, highlighted: highlighted))
             .makeBody(configuration: configuration, isEnabled: isEnabled)
+    }
+}
+
+struct EmberReadyBadge: View {
+    var title = "Ready"
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let label = Label(title, systemImage: "checkmark.circle.fill")
+            .foregroundStyle(AppTheme.ready)
+
+        if colorScheme == .dark {
+            label
+                .fontWeight(.semibold)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(AppTheme.ready.opacity(0.14), in: Capsule())
+        } else {
+            label
+        }
     }
 }
 
@@ -234,20 +248,27 @@ struct EmberProviderIcon: View {
 
 struct ShortcutKeycaps: View {
     let shortcut: GlobalShortcutDescriptor
+    var onPrimary = false
 
     var body: some View {
-        HStack(spacing: 4) {
+        let ink = onPrimary ? AppTheme.actionText : AppTheme.primaryText
+        let shape = RoundedRectangle(cornerRadius: 6)
+
+        HStack(spacing: 5) {
             ForEach(shortcut.displayParts) { part in
                 Group {
                     if let symbol = part.symbol { Image(systemName: symbol) }
                     else { Text(part.title) }
                 }
-                .font(.system(size: 12))
-                .frame(minWidth: 21, minHeight: 22)
-                .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 4))
-                .overlay { RoundedRectangle(cornerRadius: 4).stroke(AppTheme.border, lineWidth: 1) }
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
             }
         }
+        .foregroundStyle(ink)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(ink.opacity(0.08), in: shape)
+        .overlay { shape.strokeBorder(ink.opacity(0.15), lineWidth: 1) }
+        .fixedSize()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(shortcut.displayValue)
     }
@@ -354,7 +375,7 @@ struct EmberDisclosureGroupStyle: DisclosureGroupStyle {
                 .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(EmberButtonStyle(appearance: .plain))
             .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
             if configuration.isExpanded {
                 configuration.content

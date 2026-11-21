@@ -40,7 +40,7 @@ struct DictationStageCard: View {
             }
             .contentShape(shape)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(EmberButtonStyle(appearance: .plain))
         .accessibilityLabel([tab.title, value, detail].filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityIdentifier("stage-\(tab.rawValue)")
         .accessibilityAddTraits(selected ? .isSelected : [])

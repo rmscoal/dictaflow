@@ -108,7 +108,7 @@ struct VocabularyManagerView: View {
         .padding(20)
         .frame(minWidth: 480, minHeight: 420)
         .foregroundStyle(AppTheme.primaryText)
-        .omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false)
+        .omdoSheetBackground()
         .sheet(isPresented: $showsAdd) {
             VocabularyEntryEditorView(appState: appState, entryID: nil, initialTerm: "", initialSpellings: [], isFromHistory: false)
         }
@@ -150,7 +150,7 @@ private struct VocabularyRow: View {
                 get: { entry.isEnabled },
                 set: { appState.setVocabularyEntryEnabled(id: entry.id, isEnabled: $0) }
             ))
-            .toggleStyle(.switch)
+            .toggleStyle(EmberSwitchStyle(showsLabel: false))
             .controlSize(.mini)
             .labelsHidden()
             .disabled(appState.whisperSettingsLocked)
@@ -314,7 +314,7 @@ struct VocabularyEntryEditorView: View {
         .padding(20)
         .frame(minWidth: 440, minHeight: 380)
         .foregroundStyle(AppTheme.primaryText)
-        .omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false)
+        .omdoSheetBackground()
     }
 
     private func save() {

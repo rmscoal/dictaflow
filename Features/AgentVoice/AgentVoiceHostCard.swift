@@ -98,7 +98,7 @@ struct AgentVoiceHostCard: View {
                                         .frame(width: 24, height: 24)
                                         .contentShape(Rectangle())
                                 }
-                                .buttonStyle(.plain).foregroundStyle(AppTheme.secondaryText)
+                                .buttonStyle(EmberButtonStyle(appearance: .plain)).foregroundStyle(AppTheme.secondaryText)
                                 .accessibilityLabel("\(brand.host.docsLabel), opens in browser")
                                 .help("Open \(brand.host.docsLabel)")
                             }
@@ -155,7 +155,7 @@ struct AgentVoiceHostCard: View {
             }
             .frame(minHeight: 28).contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(EmberButtonStyle(appearance: .plain))
         .accessibilityValue(showsManualConfiguration ? "Expanded" : "Collapsed")
         .accessibilityIdentifier("agent-voice-manual-\(brand.host.rawValue)")
     }

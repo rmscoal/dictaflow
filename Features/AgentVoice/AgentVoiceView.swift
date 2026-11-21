@@ -35,7 +35,7 @@ struct AgentVoiceView: View {
                                         in: RoundedRectangle(cornerRadius: 7))
                             .contentShape(RoundedRectangle(cornerRadius: 7))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EmberButtonStyle(appearance: .plain))
                     .accessibilityIdentifier("agent-voice-\(tab.rawValue)")
                     .accessibilityAddTraits(appState.agentVoiceTab == tab ? .isSelected : [])
                 }

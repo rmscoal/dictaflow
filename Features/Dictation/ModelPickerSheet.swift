@@ -75,12 +75,11 @@ struct ModelPickerSheet: View {
                         Button("Done") { dismiss() }.buttonStyle(EmberButtonStyle()).keyboardShortcut(.cancelAction)
                     }
                     .padding(.horizontal, 22).padding(.vertical, 14)
-                    .background(AppTheme.background, in: Rectangle())
                 }
             }
         }
         .frame(width: 610, height: 650)
-        .foregroundStyle(AppTheme.primaryText).omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false).tint(AppTheme.accent)
+        .foregroundStyle(AppTheme.primaryText).omdoSheetBackground().tint(AppTheme.accent)
         .sheet(item: $downloadRequest) { request in
             ModelDownloadConfirmation(appState: appState, request: request)
         }
@@ -127,7 +126,7 @@ struct ModelPickerSheet: View {
                     .overlay { Capsule().stroke(speechProvider == item ? AppTheme.accent : AppTheme.border, lineWidth: 1) }
                     .contentShape(Capsule())
                 }
-                .buttonStyle(.plain).accessibilityLabel(item.title)
+                .buttonStyle(EmberButtonStyle(appearance: .plain)).accessibilityLabel(item.title)
                 .accessibilityAddTraits(speechProvider == item ? .isSelected : [])
             }
         }
@@ -258,6 +257,6 @@ private struct ModelDownloadConfirmation: View {
             }
         }
         .padding(24).frame(width: 425)
-        .foregroundStyle(AppTheme.primaryText).omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false).tint(AppTheme.accent)
+        .foregroundStyle(AppTheme.primaryText).omdoSheetBackground().tint(AppTheme.accent)
     }
 }

@@ -119,7 +119,7 @@ struct HistoryView: View {
                                     .background(model.selectedID == entry.id ? AppTheme.selectedFill : .clear, in: RoundedRectangle(cornerRadius: 12))
                                     .contentShape(RoundedRectangle(cornerRadius: 12))
                                 }
-                                .buttonStyle(.plain).accessibilityAddTraits(model.selectedID == entry.id ? .isSelected : [])
+                                .buttonStyle(EmberButtonStyle(appearance: .plain)).accessibilityAddTraits(model.selectedID == entry.id ? .isSelected : [])
                             }
                         }
                         if model.hasMore {

@@ -16,7 +16,7 @@ struct DownloadActivitiesPopover: View {
                 Spacer(minLength: 0)
                 if activities.count > 1 {
                     Button("Cancel all") { confirmsCancelAll = true }
-                        .buttonStyle(.plain)
+                        .buttonStyle(EmberButtonStyle(appearance: .plain))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(AppTheme.destructive)
                         .help("Cancel all downloads in progress")
@@ -92,7 +92,7 @@ struct DownloadActivitiesPopover: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(EmberButtonStyle(appearance: .plain))
                 .accessibilityLabel("Open \(activity.name) download")
 
                 if let progress = activity.progress {

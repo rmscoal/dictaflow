@@ -4,7 +4,7 @@ Agent Voice provides automatic, interruptible local speech for connected agent s
 
 ## User experience
 
-Under **Agent Voice > General**, enable Agent Voice and download the verified Liquid model. Choose **Speak automatically** or **Play on request**. Automatic mode admits the current eligible rendition when the host reports Stop. Manual mode retains the response for explicit playback. General also contains host connections, manual configuration with a Copy action in each code block, and a collapsed MCP tool reference.
+Under **Agent Voice > General**, enable Agent Voice and download the verified Liquid model. The Omdo menu bar also has an Agent Voice switch for quick access. Choose **Speak automatically** or **Play on request**. Automatic mode admits the current eligible rendition when the host reports Stop. Manual mode retains the response for explicit playback. General also contains host connections, manual configuration with a Copy action in each code block, and a collapsed MCP tool reference.
 
 The **Speech model** section offers Liquid’s **Female** and **Male** voices, **American** and **British** English accents, and a **Playback speed** slider from 0.75× to 1.5×. The default is Female, American English, and 1×. Settings save immediately and apply to automatic replies and History replay. Omdo detects the language automatically and applies the chosen accent to English. Speed changes also apply during playback. A voice or accent change regenerates speech that is still being synthesized. Replies already playing finish with the voice and accent they started with.
 

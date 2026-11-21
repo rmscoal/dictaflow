@@ -35,7 +35,7 @@ struct GlobalShortcutSettingsContent: View {
                     Text(appState.globalShortcutEditingMessage ?? "Use Command, Control, Option, or Shift. Escape cancels.")
                         .foregroundStyle(appState.globalShortcutEditingMessage == nil ? AppTheme.secondaryText : AppTheme.errorText)
                     Spacer(minLength: 0)
-                    Button("Cancel", role: .cancel) { appState.cancelGlobalShortcutEditing() }.buttonStyle(.plain)
+                    Button("Cancel", role: .cancel) { appState.cancelGlobalShortcutEditing() }.buttonStyle(EmberButtonStyle(appearance: .plain))
                 }
                 .font(.system(size: 11))
             } else if !appState.isHotkeyRegistered {

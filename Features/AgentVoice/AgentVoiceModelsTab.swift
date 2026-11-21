@@ -15,8 +15,8 @@ struct AgentVoiceModelsTab: View {
                         Button("Cancel") { confirmsCancellation = true }
                             .buttonStyle(EmberButtonStyle())
                     } else if voice.isModelReady {
-                        Label("Ready", systemImage: "checkmark.circle.fill")
-                            .font(.system(size: 12)).foregroundStyle(AppTheme.modelActive)
+                        EmberReadyBadge()
+                            .font(.system(size: 12))
                     } else {
                         Button("Download…") { voice.downloadModel() }
                             .buttonStyle(EmberButtonStyle(primary: true))

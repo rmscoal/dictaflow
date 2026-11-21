@@ -40,8 +40,13 @@ struct SelectedModelCard: View {
         }
     }
 
+    @ViewBuilder
     private var statusLabel: some View {
-        Label(status, systemImage: hasError ? "exclamationmark.circle" : "checkmark")
-            .foregroundStyle(hasError ? AppTheme.errorText : AppTheme.modelActive)
+        if hasError {
+            Label(status, systemImage: "exclamationmark.circle")
+                .foregroundStyle(AppTheme.errorText)
+        } else {
+            EmberReadyBadge(title: status)
+        }
     }
 }

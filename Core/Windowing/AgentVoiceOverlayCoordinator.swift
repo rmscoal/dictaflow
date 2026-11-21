@@ -207,6 +207,7 @@ private enum AgentVoiceOverlayLayout {
 
 private struct AgentVoiceOverlay: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     let source: String
     let status: String
     let isReady: Bool
@@ -220,6 +221,10 @@ private struct AgentVoiceOverlay: View {
         content
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Agent Voice. \(source). \(status)")
+    }
+
+    private var statusColor: Color {
+        isReady && colorScheme == .dark ? AppTheme.ready : AppTheme.secondaryText
     }
 
     private var hostName: String { source.components(separatedBy: " · ").first ?? source }
@@ -253,7 +258,7 @@ private struct AgentVoiceOverlay: View {
                         Spacer(minLength: 0)
                         Text(isReady ? "Ready" : status)
                             .font(.system(size: 11))
-                            .foregroundStyle(AppTheme.secondaryText)
+                            .foregroundStyle(statusColor)
                             .lineLimit(1)
                     }
                     .padding(.horizontal, 14)
@@ -285,7 +290,7 @@ private struct AgentVoiceOverlay: View {
                     .lineLimit(1)
                 Text(status)
                     .font(.system(size: 11))
-                    .foregroundStyle(AppTheme.secondaryText)
+                    .foregroundStyle(statusColor)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
