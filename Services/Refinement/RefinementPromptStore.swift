@@ -23,7 +23,7 @@ enum RefinementPromptStoreError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .couldNotCreateDirectory:
-            return "DictaFlow could not create its local prompt folder."
+            return "Omdo could not create its local prompt folder."
         case .invalidPromptFile:
             return "The local prompt file is not a regular private text file."
         case .emptyPrompt:

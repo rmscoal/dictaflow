@@ -29,7 +29,7 @@ struct UpdatesView: View {
                     Toggle("Automatic update checks", isOn: Binding(
                         get: { appState.automaticallyChecksForUpdates },
                         set: { appState.updateAutomaticallyChecksForUpdates($0) }
-                    )).labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                    )).labelsHidden().toggleStyle(EmberSwitchStyle(showsLabel: false)).controlSize(.mini)
                 }
             }
             Text(appState.updateStatusText).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)

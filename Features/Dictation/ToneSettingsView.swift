@@ -58,7 +58,7 @@ struct ToneSettingsView: View {
                 .frame(maxWidth: .infinity, alignment: alignment)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(EmberButtonStyle(appearance: .plain))
         .disabled(isLocked)
         .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])

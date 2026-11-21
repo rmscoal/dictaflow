@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="public/dictaflow-logo.png" alt="DictaFlow" width="720">
-</p>
+# Omdo
 
 <p align="center">
   <strong>Private dictation that types where you work.</strong><br>
@@ -8,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/rmscoal/dictaflow/releases/latest"><img src="https://img.shields.io/github/v/release/rmscoal/dictaflow?style=flat-square&label=download&color=4f72ff" alt="Download the latest release"></a>
+  <a href="https://github.com/rmscoal/dictaflow/releases/latest"><img src="https://img.shields.io/github/v/release/rmscoal/dictaflow?style=flat-square&label=release&color=444444" alt="Download the latest release"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-111827?style=flat-square&logo=apple" alt="macOS 14 or newer">
   <img src="https://img.shields.io/badge/Mac-Apple%20silicon-111827?style=flat-square&logo=apple" alt="Apple silicon Mac">
   <img src="https://img.shields.io/badge/processing-local-16a34a?style=flat-square" alt="Local processing">
@@ -16,22 +14,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/rmscoal/dictaflow/releases/latest"><strong>Download DictaFlow</strong></a><br>
+  <a href="https://github.com/rmscoal/dictaflow/releases/latest"><strong>Published releases</strong></a><br>
   <sub>Apple silicon · macOS 14 or newer · No account or API key</sub>
-</p>
-
-<p align="center">
-  <img src="public/dictaflow-overview.png" alt="DictaFlow Dictation workspace with local speech and refinement models, final formatting, and a sample text preview" width="900"><br>
-  <sub>Your voice, your models, your Mac.</sub>
 </p>
 
 ## From thought to text
 
 An email, a quick reply, a technical note. Say what you want to write, and
-DictaFlow puts the text where your cursor is. Start and stop with a global
+Omdo puts the text where your cursor is. Start and stop with a global
 shortcut or from the menu bar, without switching away from your work.
 
-DictaFlow is a native macOS app. Speech recognition and optional text cleanup
+Omdo is a native macOS app. Speech recognition and optional text cleanup
 run locally, with no cloud transcription, analytics, or account to manage.
 Once your models are downloaded, you can dictate offline.
 
@@ -43,13 +36,13 @@ Once your models are downloaded, you can dictate offline.
 
 ## Start dictating
 
-1. Download the DMG from the [latest release](https://github.com/rmscoal/dictaflow/releases/latest) and drag **DictaFlow** into **Applications**.
-2. Open DictaFlow. In **Dictation → Transcription**, choose and download a speech model.
+1. Build and install the **Omdo Dev** preview with `make run`.
+2. Open Omdo. In **Dictation → Transcription**, choose and download a speech model.
 3. Allow microphone access when asked. For automatic text insertion, allow Accessibility access when needed.
 4. Place your cursor in the app you want to write in. Press your dictation shortcut, speak, then press it again to finish.
 
 Find or change your shortcut in **Settings → General**. If automatic insertion
-is unavailable, DictaFlow offers a copy panel so you can paste the result yourself.
+is unavailable, Omdo offers a copy panel so you can paste the result yourself.
 
 Public releases are signed and notarized. You need an Apple silicon Mac running
 macOS 14 or newer, plus an internet connection to download the app, models, and
@@ -62,24 +55,19 @@ share. Choose a local model and a writing style: Normal Cleanup, Professional
 Formal, Casual Text Messaging, or Technical and Engineering. Add your own
 instructions, or use DIY for a fully custom prompt.
 
-You can assign styles to individual apps and let DictaFlow switch when you
+You can assign styles to individual apps and let Omdo switch when you
 start recording. Below the styles, a **Final formatting** slider offers
 Casual, Original, and Formal finishing for every app, even when refinement
 is off.
 
-<p align="center">
-  <img src="public/dictaflow-refinement.png" alt="Local refinement settings with a writing style selector, per-app style assignments, and the Final formatting slider" width="900"><br>
-  <sub>Choose how your text reads, with processing that stays on your Mac. The preview uses sample text.</sub>
-</p>
-
-Refinement is optional. If it cannot complete, DictaFlow keeps the original
+Refinement is optional. If it cannot complete, Omdo keeps the original
 transcription and applies your selected final formatting. You can review saved results in
 **History** before reusing them.
 
 ## Local by design
 
 Your audio and text stay on your Mac during transcription and refinement.
-DictaFlow uses local [Whisper](https://github.com/ggml-org/whisper.cpp) speech
+Omdo uses local [Whisper](https://github.com/ggml-org/whisper.cpp) speech
 models and [llama.cpp](https://github.com/ggml-org/llama.cpp) for optional text
 refinement. No subscription or cloud inference is required.
 
@@ -96,7 +84,7 @@ You control what stays on disk:
 
 Update checks use GitHub Releases and send no transcripts, recordings, or usage
 data. You can turn automatic checks off. To update, open **Updates**, download
-the new DMG, and replace DictaFlow in Applications.
+the new DMG, and replace Omdo in Applications.
 
 ## Need a hand?
 
@@ -112,7 +100,7 @@ For bugs or suggestions, [open an issue](https://github.com/rmscoal/dictaflow/is
 
 ## Build and contribute
 
-DictaFlow is open source. Contributions that keep it private, local, and pleasant
+Omdo is open source. Contributions that keep it private, local, and pleasant
 to use are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
 
 With Xcode installed, clone the repository and run:
@@ -121,13 +109,13 @@ With Xcode installed, clone the repository and run:
 make run
 ```
 
-This builds, installs, and launches **DictaFlow Dev**. Use `make build` to install
+This builds, installs, and launches **Omdo Dev**. Use `make build` to install
 without launching, or `make verify` to check the installed app’s signature and
 launch it. The main Xcode scheme is `DictaFlow Dev`; see the
 [verification guide](Tests/README.md) for tests and manual checks.
 
 ## License
 
-DictaFlow is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE).
+Omdo is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE).
 Third-party notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 and [NOTICE](NOTICE).

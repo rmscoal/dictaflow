@@ -30,7 +30,7 @@ struct DownloadCompletionNotification: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(EmberButtonStyle(appearance: .plain))
             .accessibilityLabel("\(notice.title). \(notice.message)")
 
             Button { appState.dismissDownloadCompletionNotice() } label: {
@@ -46,10 +46,11 @@ struct DownloadCompletionNotification: View {
         .padding(14)
         .frame(width: 340, alignment: .leading)
         .foregroundStyle(AppTheme.primaryText)
-        .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 16), showsRim: !failed)
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(failed ? AppTheme.errorBorder : AppTheme.border, lineWidth: 1)
+            if failed {
+                RoundedRectangle(cornerRadius: 16).strokeBorder(AppTheme.errorBorder, lineWidth: 1)
+            }
         }
         .shadow(color: .black.opacity(0.16), radius: 18, y: 8)
         .accessibilityElement(children: .contain)

@@ -26,7 +26,7 @@ struct WritingStyleCard<Instructions: View>: View {
                 Toggle("Switch style by app", isOn: Binding(
                     get: { appState.refinementConfiguration.perAppStylesEnabled },
                     set: { appState.updatePerAppStylesEnabled($0) }))
-                    .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                    .labelsHidden().toggleStyle(EmberSwitchStyle(showsLabel: false)).controlSize(.mini)
             }
             if appState.refinementConfiguration.perAppStylesEnabled {
                 EmberDivider()
@@ -108,6 +108,6 @@ struct WritingStyleCard<Instructions: View>: View {
                 Text("Add apps").underline()
             }
         }
-        .buttonStyle(.plain).accessibilityLabel("Add apps to \(mode.title)")
+        .buttonStyle(EmberButtonStyle(appearance: .plain)).accessibilityLabel("Add apps to \(mode.title)")
     }
 }

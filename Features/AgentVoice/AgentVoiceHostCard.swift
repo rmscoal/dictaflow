@@ -22,9 +22,9 @@ enum AgentVoiceHostCardStatus: Equatable {
         case .unsupportedVersion(let requirement):
             requirement
         case .needsSetup:
-            "Found on this Mac. DictaFlow entry not configured."
+            "Found on this Mac. Omdo entry not configured."
         case .disabledInHost:
-            "DictaFlow entry is disabled in the host settings."
+            "Omdo entry is disabled in the host settings."
         case .notFound:
             "Not detected in common install locations."
         case .manualOnly:
@@ -75,7 +75,7 @@ struct AgentVoiceHostCard: View {
         case .checking:
             return nil
         case .disabledInHost:
-            return "Enable DictaFlow in \(brand.displayName) settings."
+            return "Enable Omdo in \(brand.displayName) settings."
         case .unsupportedVersion(let requirement):
             return requirement
         case .notFound:
@@ -98,7 +98,7 @@ struct AgentVoiceHostCard: View {
                                         .frame(width: 24, height: 24)
                                         .contentShape(Rectangle())
                                 }
-                                .buttonStyle(.plain).foregroundStyle(AppTheme.secondaryText)
+                                .buttonStyle(EmberButtonStyle(appearance: .plain)).foregroundStyle(AppTheme.secondaryText)
                                 .accessibilityLabel("\(brand.host.docsLabel), opens in browser")
                                 .help("Open \(brand.host.docsLabel)")
                             }
@@ -155,7 +155,7 @@ struct AgentVoiceHostCard: View {
             }
             .frame(minHeight: 28).contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(EmberButtonStyle(appearance: .plain))
         .accessibilityValue(showsManualConfiguration ? "Expanded" : "Collapsed")
         .accessibilityIdentifier("agent-voice-manual-\(brand.host.rawValue)")
     }

@@ -26,7 +26,7 @@ struct AppearanceSettingsView: View {
                         }
                         .contentShape(RoundedRectangle(cornerRadius: 10))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EmberButtonStyle(appearance: .plain))
                     .accessibilityLabel(option.title)
                     .accessibilityValue(appearance == option ? "Selected" : "Not selected")
                     .accessibilityAddTraits(appearance == option ? .isSelected : [])

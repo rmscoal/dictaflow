@@ -36,12 +36,17 @@ struct SelectedModelCard: View {
             .font(.system(size: 11))
             .padding(.horizontal, 20).padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.background, in: Rectangle())
+            .omdoGlassBackground(in: Rectangle(), tint: AppTheme.background, showsRim: false)
         }
     }
 
+    @ViewBuilder
     private var statusLabel: some View {
-        Label(status, systemImage: hasError ? "exclamationmark.circle" : "checkmark")
-            .foregroundStyle(hasError ? AppTheme.errorText : AppTheme.modelActive)
+        if hasError {
+            Label(status, systemImage: "exclamationmark.circle")
+                .foregroundStyle(AppTheme.errorText)
+        } else {
+            EmberReadyBadge(title: status)
+        }
     }
 }

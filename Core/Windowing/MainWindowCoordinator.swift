@@ -5,6 +5,7 @@ import SwiftUI
 final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate {
     private let appState: DictaFlowAppState
     private var window: NSWindow?
+    private var backdropView: NSVisualEffectView?
 
     init(appState: DictaFlowAppState) {
         self.appState = appState
@@ -16,6 +17,7 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
         NSApp.setActivationPolicy(.regular)
 
         let window = makeWindowIfNeeded()
+        updateBackdropAppearance()
 
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -59,22 +61,66 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
             defer: false
         )
 
-        window.title = "DictaFlow"
+        window.title = "Omdo"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.contentViewController = hostingController
+        window.contentViewController = makeWindowContent(hostingController)
         window.minSize = NSSize(width: 660, height: 520)
         window.center()
-        window.isOpaque = true
-        window.backgroundColor = ThemeColor.adaptiveNSColor(light: 0xF3F0E9, dark: 0x171816)
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.setFrameAutosaveName("DictaFlowMainWindowSidebar")
         window.tabbingMode = .disallowed
         window.toolbarStyle = .unifiedCompact
         window.delegate = self
-
         self.window = window
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(reduceTransparencyDidChange),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil
+        )
         return window
+    }
+
+    private func makeWindowContent(_ hostingController: NSHostingController<ContentView>) -> NSViewController {
+        let controller = NSViewController()
+        let container = NSView()
+        controller.view = container
+
+        // Keep the material and the SwiftUI surface as siblings so the
+        // material stays behind the content even when it is hidden.
+        let backdrop = OmdoWindowBackdrop.makeView()
+        backdropView = backdrop
+
+        controller.addChild(hostingController)
+        for view in [backdrop, hostingController.view] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(view)
+            NSLayoutConstraint.activate([
+                view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                view.topAnchor.constraint(equalTo: container.topAnchor),
+                view.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+            ])
+        }
+        return controller
+    }
+
+    @objc private nonisolated func reduceTransparencyDidChange(_ notification: Notification) {
+        Task { @MainActor [weak self] in self?.updateBackdropAppearance() }
+    }
+
+    private func updateBackdropAppearance() {
+        guard let window else { return }
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        backdropView?.isHidden = reduce
+        window.isOpaque = reduce
+        window.backgroundColor = reduce ? AppTheme.windowBackgroundColor : .clear
+        window.invalidateShadow()
+    }
+
+    deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 }

@@ -464,13 +464,13 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         ]
         for (host, event) in events {
             XCTAssertEqual(AgentVoiceHostInstaller.expectedHookHandler(for: host, event: event)?["statusMessage"] as? String,
-                           "DictaFlow: Agent Voice",
+                           "Omdo: Agent Voice",
                            "\(event) must show the DictaFlow label in host review, not \"Unnamed hook\".")
         }
         for host: AgentVoiceHostInstaller.Host in [.claudeCode, .museCode] {
             XCTAssertEqual(AgentVoiceHostInstaller.expectedCommandHookHandler(
                 for: host, event: "PreToolUse", executable: executable)?["statusMessage"] as? String,
-                           "DictaFlow: Agent Voice")
+                           "Omdo: Agent Voice")
         }
     }
 

@@ -24,11 +24,11 @@ private enum SocketIO {
 
     static func wait(_ descriptor: Int32, events: Int16, deadline: ContinuousClock.Instant) throws {
         let remaining = ContinuousClock.now.duration(to: deadline)
-        guard remaining > .zero else { throw VoiceError.unavailable("DictaFlow request timed out; its outcome may be unknown.") }
+        guard remaining > .zero else { throw VoiceError.unavailable("Omdo request timed out; its outcome may be unknown.") }
         let milliseconds = remaining.components.seconds * 1000 + remaining.components.attoseconds / 1_000_000_000_000_000
         var item = pollfd(fd: descriptor, events: events, revents: 0)
         let count = poll(&item, 1, Int32(min(milliseconds, 30_000)))
-        guard count > 0, item.revents & events != 0 else { throw VoiceError.unavailable("DictaFlow bridge disconnected or timed out.") }
+        guard count > 0, item.revents & events != 0 else { throw VoiceError.unavailable("Omdo bridge disconnected or timed out.") }
     }
 
     static func write(_ data: Data, to descriptor: Int32, deadline: ContinuousClock.Instant) throws {
@@ -39,7 +39,7 @@ private enum SocketIO {
             while offset < bytes.count {
                 try wait(descriptor, events: Int16(POLLOUT), deadline: deadline)
                 let count = Darwin.write(descriptor, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
-                guard count > 0 else { throw VoiceError.unavailable("Could not write to DictaFlow.") }
+                guard count > 0 else { throw VoiceError.unavailable("Could not write to Omdo.") }
                 offset += count
             }
         }
@@ -51,7 +51,7 @@ private enum SocketIO {
         var byte: UInt8 = 0
         while data.count < maximumFrame {
             try wait(descriptor, events: Int16(POLLIN), deadline: deadline)
-            guard Darwin.read(descriptor, &byte, 1) == 1 else { throw VoiceError.unavailable("DictaFlow bridge closed.") }
+            guard Darwin.read(descriptor, &byte, 1) == 1 else { throw VoiceError.unavailable("Omdo bridge closed.") }
             if byte == 10 { return data }
             data.append(byte)
         }
@@ -100,20 +100,20 @@ public actor LocalVoiceClient: VoiceBridgeClientProtocol {
         do {
             if descriptor < 0 {
                 let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-                guard fd >= 0 else { throw VoiceError.unavailable("Could not create the DictaFlow connection.") }
+                guard fd >= 0 else { throw VoiceError.unavailable("Could not create the Omdo connection.") }
                 descriptor = fd; SocketIO.configure(fd)
                 var address = try SocketIO.address(url.path)
                 let connected = withUnsafePointer(to: &address) { pointer in
                     pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
                 }
                 if connected != 0 {
-                    guard errno == EINPROGRESS else { throw VoiceError.unavailable("Open DictaFlow and enable Agent Voice first.") }
+                    guard errno == EINPROGRESS else { throw VoiceError.unavailable("Open Omdo and enable Agent Voice first.") }
                     try SocketIO.wait(fd, events: Int16(POLLOUT), deadline: .now.advanced(by: .milliseconds(100)))
                     var error: Int32 = 0; var length = socklen_t(MemoryLayout<Int32>.size)
-                    guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0, error == 0 else { throw VoiceError.unavailable("Could not connect to DictaFlow.") }
+                    guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0, error == 0 else { throw VoiceError.unavailable("Could not connect to Omdo.") }
                 }
                 guard SocketIO.isSameUser(fd) else {
-                    throw VoiceError.unavailable("Could not verify the local DictaFlow server's identity.")
+                    throw VoiceError.unavailable("Could not verify the local Omdo server's identity.")
                 }
             }
             try Task.checkCancellation()
@@ -159,13 +159,13 @@ public final class LocalVoiceServer: @unchecked Sendable {
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw VoiceError.unavailable("Could not create the DictaFlow bridge.") }
+        guard fd >= 0 else { throw VoiceError.unavailable("Could not create the Omdo bridge.") }
         var started = false
         defer { if !started { Darwin.close(fd) } }
         // Never unlink an active app's listener. Dev/release use different paths.
         if FileManager.default.fileExists(atPath: url.path) {
             let probe = socket(AF_UNIX, SOCK_STREAM, 0)
-            guard probe >= 0 else { throw VoiceError.unavailable("Could not check the existing DictaFlow bridge.") }
+            guard probe >= 0 else { throw VoiceError.unavailable("Could not check the existing Omdo bridge.") }
             defer { Darwin.close(probe) }
             SocketIO.configure(probe)
             var address = try SocketIO.address(url.path)
@@ -174,7 +174,7 @@ public final class LocalVoiceServer: @unchecked Sendable {
             }
             let connectionError = errno
             guard result != 0, connectionError == ECONNREFUSED || connectionError == ENOENT else {
-                throw VoiceError.unavailable("Another DictaFlow instance may own Agent Voice.")
+                throw VoiceError.unavailable("Another Omdo instance may own Agent Voice.")
             }
             try FileManager.default.removeItem(at: url)
         }
@@ -182,7 +182,7 @@ public final class LocalVoiceServer: @unchecked Sendable {
         let bound = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
-        guard bound == 0, listen(fd, 8) == 0 else { throw VoiceError.unavailable("Could not bind the DictaFlow bridge.") }
+        guard bound == 0, listen(fd, 8) == 0 else { throw VoiceError.unavailable("Could not bind the Omdo bridge.") }
         chmod(url.path, 0o600)
         SocketIO.configure(fd)
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue(label: "com.dictaflow.voice.accept"))

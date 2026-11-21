@@ -59,7 +59,7 @@ do {
             ("on_user_prompt_submit", "Observe a new prompt and return input identity and spoken-rendition instructions. This is not proof the host accepted the prompt."),
             ("prepare_spoken_response", "Prepare a natural spoken rendition when the answer has useful information to hear. Routine acknowledgments may use skip_spoken_response instead. Never plays audio by itself. On failure finish the written answer without repair loops."),
             ("skip_spoken_response", "Explicitly skip routine speech. Supply current replaces_draft_id and expected_revision, or omit both to assert no rendition exists. Returns skipToken for an intentional continuation; repeated skips preserve it and do not cancel manual replay. On failure finish the written answer without repair loops."),
-            ("on_stop", "Observe Stop for the current rendition. DictaFlow applies its user-set admission policy; a corrected revision needs a fresh Stop."),
+            ("on_stop", "Observe Stop for the current rendition. Omdo applies its user-set admission policy; a corrected revision needs a fresh Stop."),
             ("on_interrupt", "Conservatively cancel speech for an interrupted input. Does not cancel the agent."),
             ("get_speech_status", "Read an input's speech state.")
         ]
@@ -88,7 +88,7 @@ do {
             try Task.checkCancellation()
             if params.name == "on_user_prompt_submit", reply.accepted {
                 let context: [String: Value] = ["hookSpecificOutput": .object([
-                    "hookEventName": "UserPromptSubmit", "additionalContext": .string("DictaFlow session_id: \(params.arguments?["session_id"]?.stringValue ?? ""). Use a fresh UUID request_id for each new operation, and reuse it unchanged only for a timeout retry.\n" + reply.message)
+                    "hookEventName": "UserPromptSubmit", "additionalContext": .string("Omdo session_id: \(params.arguments?["session_id"]?.stringValue ?? ""). Use a fresh UUID request_id for each new operation, and reuse it unchanged only for a timeout retry.\n" + reply.message)
                 ])]
                 let data = try JSONEncoder().encode(context)
                 return .init(content: [.text(text: String(decoding: data, as: UTF8.self), annotations: nil, _meta: nil)], structuredContent: .object(context))
@@ -96,7 +96,7 @@ do {
             if params.name == "on_stop" || params.name == "on_interrupt" {
                 // Hook failures remain fail-open, but must be observable rather than looking accepted.
                 if !reply.accepted {
-                    let notice: [String: Value] = ["systemMessage": .string("DictaFlow: \(reply.code). Speech observation was not applied; finish the written answer normally.")]
+                    let notice: [String: Value] = ["systemMessage": .string("Omdo: \(reply.code). Speech observation was not applied; finish the written answer normally.")]
                     let data = try JSONEncoder().encode(notice)
                     return .init(content: [.text(text: String(decoding: data, as: UTF8.self), annotations: nil, _meta: nil)], structuredContent: .object(notice), isError: true)
                 }
@@ -107,7 +107,7 @@ do {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            return .init(content: [.text(text: "DictaFlow unavailable: \(error.localizedDescription) Finish your written answer normally; do not attempt repeated repairs.", annotations: nil, _meta: nil)], isError: true)
+            return .init(content: [.text(text: "Omdo unavailable: \(error.localizedDescription) Finish your written answer normally; do not attempt repeated repairs.", annotations: nil, _meta: nil)], isError: true)
         }
     }
     let heartbeat = Task {

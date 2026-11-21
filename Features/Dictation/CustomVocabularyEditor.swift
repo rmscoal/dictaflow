@@ -8,7 +8,7 @@ struct CustomVocabularyEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Help DictaFlow recognize your words and correct recurring spellings.")
+            Text("Help Omdo recognize your words and correct recurring spellings.")
                 .font(.system(size: 11))
                 .foregroundStyle(AppTheme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -108,7 +108,7 @@ struct VocabularyManagerView: View {
         .padding(20)
         .frame(minWidth: 480, minHeight: 420)
         .foregroundStyle(AppTheme.primaryText)
-        .background(AppTheme.tileFill)
+        .omdoSheetBackground()
         .sheet(isPresented: $showsAdd) {
             VocabularyEntryEditorView(appState: appState, entryID: nil, initialTerm: "", initialSpellings: [], isFromHistory: false)
         }
@@ -150,7 +150,7 @@ private struct VocabularyRow: View {
                 get: { entry.isEnabled },
                 set: { appState.setVocabularyEntryEnabled(id: entry.id, isEnabled: $0) }
             ))
-            .toggleStyle(.switch)
+            .toggleStyle(EmberSwitchStyle(showsLabel: false))
             .controlSize(.mini)
             .labelsHidden()
             .disabled(appState.whisperSettingsLocked)
@@ -218,7 +218,7 @@ struct VocabularyEntryEditorView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Word or phrase")
                         .font(.system(size: 12, weight: .semibold))
-                    TextField("e.g. DictaFlow", text: $term)
+                    TextField("e.g. Omdo", text: $term)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit(save)
                     Text("The correct spelling. Helps recognition, but does not guarantee a match.")
@@ -314,7 +314,7 @@ struct VocabularyEntryEditorView: View {
         .padding(20)
         .frame(minWidth: 440, minHeight: 380)
         .foregroundStyle(AppTheme.primaryText)
-        .background(AppTheme.tileFill)
+        .omdoSheetBackground()
     }
 
     private func save() {

@@ -11,7 +11,7 @@ struct MainWindowToolbar: View {
         let activities = appState.activeDownloadActivities
         HStack(spacing: 12) {
             Button(action: toggleSidebar) { Image(systemName: "sidebar.left") }
-                .buttonStyle(EmberIconButtonStyle())
+                .buttonStyle(EmberIconButtonStyle(bordered: true))
                 .help(sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar")
                 .accessibilityLabel(sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar")
             Text(appState.mainWindowPage.title).font(.system(size: 14, weight: .medium))
@@ -48,17 +48,17 @@ struct MainWindowToolbar: View {
                 .overlay(alignment: .topTrailing) {
                     Text("\(count)")
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(AppTheme.actionText)
                         .frame(minWidth: 16, minHeight: 16)
                         .padding(.horizontal, 1)
-                        .background(AppTheme.destructive, in: Capsule())
+                        .background(AppTheme.actionFill, in: Capsule())
                         .overlay { Capsule().stroke(AppTheme.background, lineWidth: 1.5) }
                         .offset(x: 5, y: -5)
                         .accessibilityHidden(true)
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(EmberButtonStyle(appearance: .plain))
         .help(count == 1 ? "Show download in progress" : "Show \(count) downloads in progress")
         .accessibilityLabel(count == 1 ? "Show download in progress" : "Show downloads in progress")
         .accessibilityValue(count == 1 ? "1 download" : "\(count) downloads")

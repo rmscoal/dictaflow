@@ -15,7 +15,7 @@ nonisolated enum AppUpdateCheckError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .noPublishedRelease:
-            return "DictaFlow does not have a published GitHub release yet."
+            return "Omdo does not have a published GitHub release yet."
         case .invalidServerResponse:
             return "GitHub returned an invalid update response."
         case .requestFailed(let statusCode):
@@ -79,7 +79,7 @@ actor GitHubReleaseUpdateService: AppUpdateChecking {
         request.timeoutInterval = 15
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2026-03-10", forHTTPHeaderField: "X-GitHub-Api-Version")
-        request.setValue("DictaFlow", forHTTPHeaderField: "User-Agent")
+        request.setValue("Omdo", forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {

@@ -6,12 +6,12 @@ RUN_SCRIPT := ./script/build_and_run.sh
 
 help:
 	@printf "DictaFlow local commands:\n"
-	@printf "  make run            Build, install to /Applications, and launch DictaFlow Dev\n"
-	@printf "  make build          Build and install DictaFlow Dev without launching\n"
+	@printf "  make run            Build, install to /Applications, and launch Omdo Dev\n"
+	@printf "  make build          Build and install Omdo Dev without launching\n"
 	@printf "  make install        Alias for make build\n"
-	@printf "  make install-dev    Build and install DictaFlow Dev\n"
-	@printf "  make package-dev    Build DictaFlow Dev and create a local DMG\n"
-	@printf "  make uninstall-dev  Remove only DictaFlow Dev from /Applications\n"
+	@printf "  make install-dev    Build and install Omdo Dev\n"
+	@printf "  make package-dev    Build Omdo Dev and create a local DMG\n"
+	@printf "  make uninstall-dev  Remove only Omdo Dev from /Applications\n"
 	@printf "  make reset-dev      Reset Dev onboarding and macOS permissions\n"
 	@printf "  make verify         Build, install, verify signing, and launch\n"
 	@printf "  make logs           Build, install, launch, and stream process logs\n"

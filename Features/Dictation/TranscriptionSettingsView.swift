@@ -2,7 +2,6 @@ import SwiftUI
 
 struct TranscriptionSettingsView: View {
     @ObservedObject var appState: DictaFlowAppState
-    private let pickerWidth: CGFloat = 200
     private var model: WhisperModelDescriptor { appState.whisperConfiguration.model }
     private var prepared: Bool { appState.isWhisperModelPrepared(model) }
 
@@ -42,7 +41,7 @@ struct TranscriptionSettingsView: View {
             }
             EmberPanel {
                 EmberRow(title: "Task") {
-                    selectionMenu(label: "Task", title: appState.whisperConfiguration.taskMode == .transcribe ? "Transcribe" : "Translate to English") {
+                    EmberSelectionMenu(label: "Task", title: appState.whisperConfiguration.taskMode == .transcribe ? "Transcribe" : "Translate to English") {
                         Picker("Task", selection: Binding(get: { appState.whisperConfiguration.taskMode }, set: { appState.updateTaskMode($0) })) {
                             Text("Transcribe").tag(WhisperTaskMode.transcribe)
                             Text("Translate to English").tag(WhisperTaskMode.translateToEnglish)
@@ -52,7 +51,7 @@ struct TranscriptionSettingsView: View {
                 }
                 EmberDivider()
                 EmberRow(title: "Input language") {
-                    selectionMenu(label: "Input language", title: appState.whisperConfiguration.inputLanguage.displayName) {
+                    EmberSelectionMenu(label: "Input language", title: appState.whisperConfiguration.inputLanguage.displayName) {
                         Picker("Input language", selection: Binding(get: { appState.whisperConfiguration.inputLanguage }, set: { appState.updateInputLanguage($0) })) {
                             Text("Auto Detect").tag(WhisperInputLanguage.automatic)
                             Section("Common") {
@@ -97,37 +96,19 @@ struct TranscriptionSettingsView: View {
         }
     }
 
-    private func selectionMenu<Content: View>(label: String, title: String, @ViewBuilder content: () -> Content) -> some View {
-        Menu(content: content) {
-            HStack(spacing: 8) {
-                Text(title).lineLimit(1)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold))
-                    .accessibilityHidden(true)
-            }
-            .font(.system(size: 12))
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .frame(width: pickerWidth)
-            .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6))
-        }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(label).accessibilityValue(title)
-    }
-
     private var soundCues: some View {
         VStack(alignment: .leading, spacing: 15) {
             HStack(spacing: 14) {
                 Text("Play sound cues")
                 Spacer(minLength: 12)
                 Toggle("Play sound cues", isOn: Binding(get: { appState.soundCuesEnabled }, set: { appState.updateSoundCuesEnabled($0) }))
-                    .toggleStyle(.switch).controlSize(.mini).labelsHidden()
+                    .toggleStyle(EmberSwitchStyle(showsLabel: false)).controlSize(.mini).labelsHidden()
                     .accessibilityLabel("Play sound cues")
             }
             HStack(spacing: 14) {
                 Text("Sound style")
                 Spacer(minLength: 12)
-                selectionMenu(label: "Sound style", title: appState.soundCueStyle.title) {
+                EmberSelectionMenu(label: "Sound style", title: appState.soundCueStyle.title) {
                     Picker("Sound style", selection: Binding(get: { appState.soundCueStyle }, set: { appState.updateSoundCueStyle($0) })) {
                         ForEach(SoundCueStyle.allCases) { Text($0.title).tag($0) }
                     }

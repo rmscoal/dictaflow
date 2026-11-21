@@ -143,7 +143,7 @@ enum AgentVoiceHostInstaller {
         var errorDescription: String? {
             switch self {
             case .helperMissing(let path):
-                return "DictaFlow helper not found at \(path). Reinstall the app, then try again."
+                return "Omdo helper not found at \(path). Reinstall the app, then try again."
             case .hostCLIMissing(let host):
                 return "\(host) was not found on this Mac, so automatic setup cannot run. Install the host CLI first, or use the manual setup below."
             case .commandFailed(let host, let detail):
@@ -151,11 +151,11 @@ enum AgentVoiceHostInstaller {
             case .invalidSettings(let path):
                 return "Muse settings at \(path) is not valid JSON. Fix or move it aside, then try again."
             case .invalidHooksFile(let path):
-                return "The hooks file at \(path) is not valid JSON, so DictaFlow hooks were not changed. Fix or move it aside, then try again."
+                return "The hooks file at \(path) is not valid JSON, so Omdo hooks were not changed. Fix or move it aside, then try again."
             case .invalidCodexConfig(let path):
-                return "The Codex config at \(path) could not be safely updated with DictaFlow tool pre-approval, so it was left unchanged. In Codex, choose Always allow when prompted for DictaFlow tools."
+                return "The Codex config at \(path) could not be safely updated with Omdo tool pre-approval, so it was left unchanged. In Codex, choose Always allow when prompted for Omdo tools."
             case .codexRollbackConflict(let path):
-                return "Codex could not verify tool pre-approval. DictaFlow could not safely restore the earlier config at \(path). Review it before trying again."
+                return "Codex could not verify tool pre-approval. Omdo could not safely restore the earlier config at \(path). Review it before trying again."
             case .verificationFailed(let host):
                 return "\(host) ran but the entry could not be verified. Start a new session; if tools are missing, use the manual setup below."
             case .timedOut(let host):
@@ -376,26 +376,26 @@ enum AgentVoiceHostInstaller {
             museDisabled = entry.disabled
         }
         if museDisabled {
-            return "Muse Code settings updated. The DictaFlow server is still disabled. Enable it in Muse Code settings before starting a new session."
+            return "Muse Code settings updated. The Omdo server is still disabled. Enable it in Muse Code settings before starting a new session."
         }
         var message = "\(host.name) setup complete."
         switch host {
         case .codex:
-            message += " DictaFlow hooks were added to \(codexHooks.path) alongside the server. Open /hooks in Codex and review and trust the three DictaFlow hooks. Start a new Codex session so it picks up the server."
+            message += " Omdo hooks were added to \(codexHooks.path) alongside the server. Open /hooks in Codex and review and trust the three Omdo hooks. Start a new Codex session so it picks up the server."
             switch codexApproval {
             case .applied:
-                message += " DictaFlow's own tools are pre-approved in \(codexConfig.path), so Codex will not prompt for them."
+                message += " Omdo's own tools are pre-approved in \(codexConfig.path), so Codex will not prompt for them."
             case .alreadyApproved:
-                message += " DictaFlow tool approval in \(codexConfig.path) is already set and was left untouched; Codex honors that value."
+                message += " Omdo tool approval in \(codexConfig.path) is already set and was left untouched; Codex honors that value."
             case .noServerEntry:
-                message += " The DictaFlow server entry was not found in \(codexConfig.path), so tool pre-approval was skipped. In Codex, choose Always allow when prompted for DictaFlow tools."
+                message += " The Omdo server entry was not found in \(codexConfig.path), so tool pre-approval was skipped. In Codex, choose Always allow when prompted for Omdo tools."
             case .none:
                 break
             }
         case .claudeCode:
-            message += " DictaFlow hooks were added to ~/.claude/settings.json alongside your other settings: voice lifecycle plus a main-agent-only tool guard. Start a new Claude Code session so it picks up the server and hooks."
+            message += " Omdo hooks were added to ~/.claude/settings.json alongside your other settings: voice lifecycle plus a main-agent-only tool guard. Start a new Claude Code session so it picks up the server and hooks."
         case .museCode:
-            message += " DictaFlow's main-agent-only tool guard was added to ~/.config/muse/settings.json alongside the server. Start a new Muse Code session so it picks up the server and guard."
+            message += " Omdo's main-agent-only tool guard was added to ~/.config/muse/settings.json alongside the server. Start a new Muse Code session so it picks up the server and guard."
         default:
             message += " Start a new \(host.name) session so it picks up the server."
         }
@@ -547,7 +547,7 @@ enum AgentVoiceHostInstaller {
         // unknown keys are tolerated but never displayed. Identification still
         // uses type + server only.
         return ["type": "mcp_tool", "server": "dictaflow", "tool": tool, "input": input,
-                "timeout": 2, "statusMessage": "DictaFlow: Agent Voice"]
+                "timeout": 2, "statusMessage": "Omdo: Agent Voice"]
     }
 
     /// The exact PreToolUse guard handler for one host. The helper runs once
@@ -563,10 +563,10 @@ enum AgentVoiceHostInstaller {
         switch (host, event) {
         case (.claudeCode, "PreToolUse"):
             return ["type": "command", "command": claudeGuardCommand(executable: executable),
-                    "timeout": 5, "statusMessage": "DictaFlow: Agent Voice"]
+                    "timeout": 5, "statusMessage": "Omdo: Agent Voice"]
         case (.museCode, "PreToolUse"):
             return ["type": "command", "command": museGuardCommand(executable: executable),
-                    "timeout": 5, "statusMessage": "DictaFlow: Agent Voice"]
+                    "timeout": 5, "statusMessage": "Omdo: Agent Voice"]
         default: return nil
         }
     }

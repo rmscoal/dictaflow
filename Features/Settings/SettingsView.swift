@@ -15,7 +15,7 @@ struct SettingsView: View {
                                         in: RoundedRectangle(cornerRadius: 7))
                             .contentShape(RoundedRectangle(cornerRadius: 7))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EmberButtonStyle(appearance: .plain))
                     .accessibilityIdentifier("settings-\(category.rawValue)")
                     .accessibilityAddTraits(appState.settingsCategory == category ? .isSelected : [])
                 }

@@ -20,6 +20,10 @@ struct AgentVoiceConnectionsTab: View {
 
     private typealias Host = AgentVoiceHostAvailability.Host
 
+    private var playbackTitle: String {
+        voice.admissionPolicy == .automatic ? "Speak automatically" : "Play on request"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             EmberPanel {
@@ -30,7 +34,7 @@ struct AgentVoiceConnectionsTab: View {
                         get: { voice.isEnabled },
                         set: { voice.setEnabled($0) }
                     ))
-                    .toggleStyle(.switch).controlSize(.small).labelsHidden()
+                    .toggleStyle(EmberSwitchStyle(showsLabel: false)).controlSize(.small).labelsHidden()
                     .accessibilityLabel("Enable Agent Voice")
                 }
                 .padding(18)
@@ -38,15 +42,17 @@ struct AgentVoiceConnectionsTab: View {
                 HStack(spacing: 14) {
                     Text("Playback").font(.system(size: 13))
                     Spacer(minLength: 12)
-                    Picker("Playback", selection: Binding(
-                        get: { voice.admissionPolicy },
-                        set: { voice.setAdmissionPolicy($0) }
-                    )) {
-                        Text("Speak automatically").tag(VoiceAdmissionPolicy.automatic)
-                        Text("Play on request").tag(VoiceAdmissionPolicy.manualOnly)
+                    EmberSelectionMenu(label: "Agent Voice playback", title: playbackTitle) {
+                        Picker("Playback", selection: Binding(
+                            get: { voice.admissionPolicy },
+                            set: { voice.setAdmissionPolicy($0) }
+                        )) {
+                            Text("Speak automatically").tag(VoiceAdmissionPolicy.automatic)
+                            Text("Play on request").tag(VoiceAdmissionPolicy.manualOnly)
+                        }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
                     }
-                    .labelsHidden().fixedSize()
-                    .accessibilityLabel("Agent Voice playback")
                 }
                 .padding(18)
             }
@@ -105,7 +111,7 @@ struct AgentVoiceConnectionsTab: View {
                                     in: RoundedRectangle(cornerRadius: 7))
                         .contentShape(RoundedRectangle(cornerRadius: 7))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EmberButtonStyle(appearance: .plain))
                     .accessibilityIdentifier("agent-voice-host-\(host.rawValue)")
                     .accessibilityAddTraits(effectiveHost == host ? .isSelected : [])
                 }
@@ -263,11 +269,11 @@ struct AgentVoiceConnectionsTab: View {
     private static func hint(for host: Host) -> String {
         switch host {
         case .codex:
-            return "Adds DictaFlow and its voice hooks to Codex."
+            return "Adds Omdo and its voice hooks to Codex."
         case .claudeCode:
-            return "Adds DictaFlow and its voice hooks to Claude Code."
+            return "Adds Omdo and its voice hooks to Claude Code."
         case .museCode:
-            return "Adds DictaFlow and its voice guard to your Muse settings."
+            return "Adds Omdo and its voice guard to your Muse settings."
         case .other:
             return "Copy the command and register it as a stdio server named dictaflow."
         }

@@ -30,7 +30,6 @@ struct OnboardingView: View {
             }
             .clipped()
         }
-        .background(OnboardingTheme.background)
         .foregroundStyle(OnboardingTheme.primaryText)
         .animation(pageAnimation, value: step)
     }
@@ -80,7 +79,7 @@ struct OnboardingView: View {
 
     private var permissionsPage: some View {
         OnboardingPageLayout(
-            title: "Allow DictaFlow to work for you",
+            title: "Allow Omdo to work for you",
             subtitle: "Your microphone records speech. Accessibility places the finished text into the app you were using."
         ) {
             VStack(spacing: 12) {
@@ -255,7 +254,7 @@ struct OnboardingView: View {
                             }
                             .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(EmberButtonStyle(appearance: .plain))
                     .disabled(appState.onboardingPracticeIsBusy)
                 }
                 .padding(17)
@@ -327,7 +326,7 @@ struct OnboardingView: View {
 
     private var readyPage: some View {
         OnboardingPageLayout(
-            title: "DictaFlow is ready",
+            title: "Omdo is ready",
             subtitle: "Everything stays on your Mac. Use your shortcut whenever you want to turn speech into text."
         ) {
             VStack(spacing: 0) {
@@ -348,7 +347,7 @@ struct OnboardingView: View {
         } footer: {
             navigationFooter(
                 backTitle: "Back",
-                continueTitle: "Start Using DictaFlow",
+                continueTitle: "Start Using Omdo",
                 continueDisabled: false
             )
         }
@@ -356,10 +355,9 @@ struct OnboardingView: View {
 
     private var brand: some View {
         HStack(spacing: 12) {
-            OnboardingMark()
-                .frame(width: 52, height: 52)
+            EmberAppMark(size: 52)
 
-            Text("DictaFlow")
+            Text("Omdo")
                 .font(.system(size: 30, weight: .semibold, design: .rounded))
         }
         .fixedSize()
@@ -714,24 +712,6 @@ private struct ReadyDivider: View {
     }
 }
 
-private struct OnboardingMark: View {
-    private let barHeights: [CGFloat] = [8, 15, 23, 15, 8]
-
-    var body: some View {
-        Circle()
-            .fill(Color.white)
-            .overlay {
-                HStack(spacing: 2.5) {
-                    ForEach(Array(barHeights.enumerated()), id: \.offset) { _, height in
-                        Capsule()
-                            .fill(OnboardingTheme.logoInk)
-                            .frame(width: 3, height: height)
-                    }
-                }
-            }
-    }
-}
-
 private struct WaveformDecoration: View {
     private let heights: [CGFloat] = [6, 11, 18, 30, 42, 26, 15, 9, 14, 25, 37, 22, 12, 7]
 
@@ -752,10 +732,11 @@ private struct PrimaryOnboardingButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(Color.white)
+            .foregroundStyle(AppTheme.actionText)
             .padding(.horizontal, 22)
             .frame(minWidth: 126, minHeight: 38)
             .background(OnboardingTheme.accent.opacity(configuration.isPressed ? 0.76 : 1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(Rectangle())
             .opacity(isEnabled ? 1 : 0.42)
     }
 }
@@ -768,6 +749,7 @@ private struct SecondaryOnboardingButtonStyle: ButtonStyle {
             .padding(.horizontal, 17)
             .frame(minHeight: 38)
             .background(OnboardingTheme.controlFill.opacity(configuration.isPressed ? 0.7 : 1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(Rectangle())
     }
 }
 
@@ -778,19 +760,19 @@ private struct CompactOnboardingButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(isProminent ? Color.white : OnboardingTheme.primaryText)
+            .foregroundStyle(isProminent ? AppTheme.actionText : OnboardingTheme.primaryText)
             .padding(.horizontal, 12)
             .frame(minHeight: 31)
             .background(
                 isProminent ? OnboardingTheme.accent : OnboardingTheme.controlFill,
                 in: RoundedRectangle(cornerRadius: 8, style: .continuous)
             )
+            .contentShape(Rectangle())
             .opacity(isEnabled ? (configuration.isPressed ? 0.76 : 1) : 0.46)
     }
 }
 
 private enum OnboardingTheme {
-    static let background = AppTheme.background
     static let tileFill = AppTheme.tileFill
     static let controlFill = AppTheme.controlFill
     static let border = AppTheme.border
@@ -800,5 +782,4 @@ private enum OnboardingTheme {
     static let accent = AppTheme.accent
     static let success = AppTheme.modelActive
     static let warning = AppTheme.warning
-    static let logoInk = AppTheme.actionText
 }
