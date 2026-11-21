@@ -1,4 +1,5 @@
 import AgentVoice
+import AppKit
 import AVFoundation
 import Foundation
 import GRDB
@@ -939,7 +940,8 @@ final class AgentVoiceTests: XCTestCase {
         let player = VoicePlayerFixture()
         let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
                                           runtime: VoiceRuntimeFixture(), appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
-        let overlay = AgentVoiceOverlayCoordinator(voice: voice) {}
+        var pointer = NSPoint(x: -10_000, y: -10_000)
+        let overlay = AgentVoiceOverlayCoordinator(voice: voice, mouseLocation: { pointer }) {}
         defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
         voice.setEnabled(true)
         XCTAssertFalse(overlay.isControlVisible)
@@ -956,31 +958,66 @@ final class AgentVoiceTests: XCTestCase {
         XCTAssertTrue(overlay.isControlVisible, "The control must stay visible while speaking.")
         let collapsedFrame = try XCTUnwrap(overlay.controlFrame)
         XCTAssertEqual(collapsedFrame.size, NSSize(width: 176, height: 44))
-        overlay.setHovered(true)
+        let hostingView = try XCTUnwrap(NSApp.windows.first {
+            $0.isVisible && $0.title == "Agent Voice" && $0.frame == collapsedFrame
+        }?.contentView)
+        let hoverAreas = {
+            hostingView.trackingAreas.filter {
+                $0.owner === hostingView && $0.options == [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+            }
+        }
+        let trackingArea = try XCTUnwrap(hoverAreas().first)
+        let edge = NSPoint(x: collapsedFrame.midX, y: collapsedFrame.minY + 1)
+        let outside = NSPoint(x: collapsedFrame.midX, y: collapsedFrame.minY - 10)
+        pointer = edge
+        let enterDeadline = ContinuousClock.now + .milliseconds(600)
+        repeat {
+            overlay.updateHover()
+            try await Task.sleep(for: .milliseconds(20))
+        } while !overlay.isControlExpanded && ContinuousClock.now < enterDeadline
+        XCTAssertTrue(overlay.isControlExpanded, "Repeated callbacks must not postpone expansion.")
         try await waitUntil { overlay.isControlExpanded && overlay.controlFrame?.width == 340 }
         let expandedFrame = try XCTUnwrap(overlay.controlFrame)
         XCTAssertEqual(expandedFrame.height, 68)
         XCTAssertEqual(expandedFrame.maxX, collapsedFrame.maxX, accuracy: 0.5)
         XCTAssertEqual(expandedFrame.minY, collapsedFrame.minY, accuracy: 0.5)
+        hostingView.updateTrackingAreas()
+        XCTAssertEqual(hoverAreas().count, 1)
+        XCTAssertTrue(hoverAreas().first === trackingArea, "Resizing must keep the original tracking area.")
 
-        // Briefly leaving and re-entering must cancel the pending collapse.
-        overlay.setHovered(false)
-        try await Task.sleep(for: .milliseconds(80))
-        overlay.setHovered(true)
+        // Resize callbacks with a stationary cursor at the edge must leave the panel open.
+        overlay.updateHover()
         try await Task.sleep(for: .milliseconds(350))
         XCTAssertTrue(overlay.isControlExpanded)
-        // Re-enter during the actual shrink, rather than only during its delay.
-        overlay.setHovered(false)
+
+        // Check the current position at the deadline even if AppKit missed the re-entry.
+        pointer = outside
+        overlay.updateHover()
+        try await Task.sleep(for: .milliseconds(80))
+        pointer = edge
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertTrue(overlay.isControlExpanded)
+
+        pointer = outside
+        overlay.updateHover()
         try await waitUntil { !overlay.isControlExpanded && (overlay.controlFrame?.width ?? 340) < 340 }
-        overlay.setHovered(true)
+        // Only the destination bounds can trigger expansion during a shrink.
+        pointer = NSPoint(x: collapsedFrame.minX - 4, y: collapsedFrame.midY)
+        overlay.updateHover()
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertFalse(overlay.isControlExpanded)
+        pointer = edge
+        overlay.updateHover()
         try await waitUntil { overlay.isControlExpanded && overlay.controlFrame?.width == 340 }
         XCTAssertEqual(overlay.controlFrame?.maxX ?? 0, collapsedFrame.maxX, accuracy: 0.5)
-        overlay.setHovered(false)
+        pointer = outside
+        overlay.updateHover()
         try await waitUntil { !overlay.isControlExpanded && overlay.controlFrame?.width == 176 }
         XCTAssertEqual(overlay.controlFrame?.maxX ?? 0, collapsedFrame.maxX, accuracy: 0.5)
 
         // A delayed hover must not reopen the control after speech stops.
-        overlay.setHovered(true)
+        pointer = edge
+        overlay.updateHover()
         voice.stopSpeech()
         try await waitUntil { !voice.isSpeaking && !voice.isGenerating }
         try await waitUntil { !overlay.isControlVisible }
@@ -997,13 +1034,15 @@ final class AgentVoiceTests: XCTestCase {
         let player = VoicePlayerFixture()
         let voice = AgentVoiceCoordinator(defaults: defaults, player: player, supportDirectory: root,
                                           runtime: VoiceRuntimeFixture(), appIdentity: "df-test-\(UUID().uuidString.prefix(8))")
-        let overlay = AgentVoiceOverlayCoordinator(voice: voice) {}
+        var pointer = NSPoint(x: -10_000, y: -10_000)
+        let overlay = AgentVoiceOverlayCoordinator(voice: voice, mouseLocation: { pointer }) {}
         defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
         voice.setAdmissionPolicy(.manualOnly)
         try await waitUntil { voice.admissionPolicy == .manualOnly }
         voice.setEnabled(true)
         let client = LocalVoiceClient(socketURL: VoicePaths.socketURL(appID: voice.appID))
-        let session = VoiceSession(installationID: UUID(), host: "fixture", sessionID: "overlay-manual")
+        let session = VoiceSession(installationID: UUID(), host: String(repeating: "W", count: 40),
+                                   sessionID: "overlay-manual")
         let attachment = try await client.send(.init(session: session, operation: .attach)).attachment
         let input = try await client.send(.init(session: session, operation: .prompt, attachment: attachment)).inputID
         let response = try await client.send(.init(session: session, operation: .prepare, attachment: attachment,
@@ -1014,8 +1053,13 @@ final class AgentVoiceTests: XCTestCase {
         // The Stop must endorse the revision so the overlay can offer replay.
         try await waitUntil { voice.history.first?.interaction.stopEligibleRevision != nil }
         XCTAssertTrue(overlay.isControlVisible, "Manual mode must surface the Response ready control.")
-        overlay.setHovered(true)
-        try await waitUntil { overlay.isControlExpanded && overlay.controlFrame?.width == 360 }
+        let frame = try XCTUnwrap(overlay.controlFrame)
+        XCTAssertGreaterThan(frame.width, 360)
+        // A wide compact pill must keep this point inside after expanding.
+        pointer = NSPoint(x: frame.minX + 4, y: frame.midY)
+        overlay.updateHover()
+        try await waitUntil { overlay.isControlExpanded && overlay.controlFrame?.height == 68 }
+        XCTAssertEqual(overlay.controlFrame?.width, frame.width)
         await voice.playRendition(try XCTUnwrap(response.renditionID))
         try await waitUntil { voice.isSpeaking }
         XCTAssertTrue(overlay.isControlVisible)
