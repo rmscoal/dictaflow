@@ -360,13 +360,20 @@ final class AgentVoiceTests: XCTestCase {
         XCTAssertEqual(longResult.recognitionProvider, .liquid)
         let longTranscriptions = await runtime.transcribeCount
         XCTAssertEqual(longTranscriptions, 2, "121 s must reach transcription once per chunk.")
+        let exact = root.appendingPathComponent("exact.wav")
+        try writeSilence(to: exact, seconds: 120)
+        let exactResult = try await voice.recognize(exact, configuration: configuration)
+        XCTAssertEqual(exactResult.text, "Fixture transcription")
+        XCTAssertEqual(exactResult.recognitionProvider, .liquid)
+        let exactTranscriptions = await runtime.transcribeCount
+        XCTAssertEqual(exactTranscriptions, 3, "120 s must stay a single request.")
         let short = root.appendingPathComponent("short.wav")
         try writeSilence(to: short, seconds: 1)
         let result = try await voice.recognize(short, configuration: configuration)
         XCTAssertEqual(result.text, "Fixture transcription")
         XCTAssertEqual(result.recognitionProvider, .liquid)
         let validTranscriptions = await runtime.transcribeCount
-        XCTAssertEqual(validTranscriptions, 3, "Two chunked calls plus one single-chunk call.")
+        XCTAssertEqual(validTranscriptions, 4, "Two chunked calls plus two single-chunk calls.")
         voice.shutdown()
         await voice.waitForShutdown()
     }

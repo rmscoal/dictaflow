@@ -523,7 +523,16 @@ final class AgentVoiceCoordinator: ObservableObject {
     func recognize(_ audioURL: URL, configuration: WhisperConfiguration) async throws -> WhisperTranscriptionResult {
         try Self.preflightAudioReadable(audioURL)
         let samples = try await AVAudioDecodingService().decodePCMFloatSamples(from: audioURL)
-        let chunks = LiquidAudioChunker.split(samples: samples, sampleRate: 16_000)
+        // Recordings that fit one request keep the single-request path; only longer
+        // recordings pay for a chunk boundary. The energy scan runs off MainActor.
+        let chunks: [Range<Int>]
+        if Double(samples.count) / 16_000 <= LiquidRuntime.maxASRDuration {
+            chunks = [0..<samples.count]
+        } else {
+            chunks = await Task.detached(priority: .userInitiated) {
+                LiquidAudioChunker.split(samples: samples, sampleRate: 16_000)
+            }.value
+        }
         guard !chunks.isEmpty else { throw VoiceError.unavailable("The recorded audio is empty.") }
         let translateToEnglish = configuration.taskMode == .translateToEnglish
         do {

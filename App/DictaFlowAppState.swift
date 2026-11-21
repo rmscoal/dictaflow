@@ -3452,7 +3452,12 @@ final class DictaFlowAppState: ObservableObject {
             if let voice = error as? VoiceError {
                 switch voice {
                 case .inputTooLong, .liquidModelUnavailable, .transcriptionTimedOut: keepCapture = true
-                case .unavailable: break
+                case .unavailable:
+                    // Any failed Liquid transcription keeps its recording: a later chunk can fail
+                    // after earlier chunks succeeded, and the user must not have to dictate again.
+                    // Cancellation throws CancellationError rather than VoiceError, so deliberate
+                    // cancellation still cleans up, and termination is guarded in the defer above.
+                    if configuration.recognitionProvider == .liquid { keepCapture = true }
                 }
             }
             if let historyAttempt {
