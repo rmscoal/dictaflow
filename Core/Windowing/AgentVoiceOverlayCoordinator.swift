@@ -9,6 +9,7 @@ import SwiftUI
 @MainActor
 final class AgentVoiceOverlayCoordinator {
     private let voice: AgentVoiceCoordinator
+    private let mouseLocation: () -> NSPoint
     private let record: () -> Void
     private var observation: AnyCancellable?
     private var panel: NSPanel?
@@ -20,8 +21,10 @@ final class AgentVoiceOverlayCoordinator {
     private var currentCollapsedSize = AgentVoiceOverlayLayout.collapsedSize
     private(set) var isControlExpanded = false
 
-    init(voice: AgentVoiceCoordinator, record: @escaping () -> Void) {
+    init(voice: AgentVoiceCoordinator, mouseLocation: @escaping () -> NSPoint = { NSEvent.mouseLocation },
+         record: @escaping () -> Void) {
         self.voice = voice
+        self.mouseLocation = mouseLocation
         self.record = record
         observation = voice.objectWillChange.sink { [weak self] in
             Task { @MainActor [weak self] in self?.update() }
@@ -34,40 +37,72 @@ final class AgentVoiceOverlayCoordinator {
 
     deinit { hoverTask?.cancel() }
 
-    /// Shared by native tracking and the hover lifecycle tests.
-    func setHovered(_ hovered: Bool) {
-        hoverTask?.cancel()
+    /// A tracking event can come from resizing the panel under a stationary pointer.
+    func updateHover() {
         guard isControlVisible else { return }
-        guard hovered != isControlExpanded else { return }
+        let hovered = isPointerOverControl
+        guard hovered != isControlExpanded else {
+            cancelHover()
+            return
+        }
+        // Identical observations share the same deadline.
+        guard hoverTask == nil else { return }
         hoverTask = Task { @MainActor [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(hovered ? 90 : 280))
             } catch { return }
-            guard let self, self.isControlVisible else { return }
-            self.setExpanded(hovered)
+            guard !Task.isCancelled, let self, self.isControlVisible else { return }
+            self.hoverTask = nil
+            guard self.isPointerOverControl == hovered else { return }
+            self.setExpanded(hovered) { [weak self] in
+                // Reconcile once in case the moving edge swallowed a tracking event.
+                Task { @MainActor [weak self] in self?.updateHover() }
+            }
         }
     }
 
-    private func setExpanded(_ expanded: Bool, animated: Bool = true) {
+    private func cancelHover() {
+        hoverTask?.cancel()
+        hoverTask = nil
+    }
+
+    private var isPointerOverControl: Bool {
+        guard let panel else { return false }
+        // Use the destination size so the animated edges cannot change the result.
+        return anchoredFrame(for: targetSize, in: panel.frame).contains(mouseLocation())
+    }
+
+    private func anchoredFrame(for size: NSSize, in frame: NSRect) -> NSRect {
+        // Keep the lower-right corner fixed, including after the user moves the panel.
+        NSRect(x: frame.maxX - size.width, y: frame.minY, width: size.width, height: size.height)
+    }
+
+    private func setExpanded(_ expanded: Bool, animated: Bool = true,
+                             completion: (@Sendable () -> Void)? = nil) {
         guard let panel else { return }
         if isControlExpanded != expanded {
             isControlExpanded = expanded
             updateContent()
         }
         let size = expanded
-            ? AgentVoiceOverlayLayout.expandedSize(isReady: hostingView?.rootView.isReady == true)
+            ? AgentVoiceOverlayLayout.expandedSize(isReady: hostingView?.rootView.isReady == true,
+                                                  minimumWidth: currentCollapsedSize.width)
             : currentCollapsedSize
         // Speech updates must not restart an in-flight resize toward the same size.
         guard size != targetSize || !animated else { return }
         targetSize = size
-        // Keep the lower-right corner fixed, including after the user moves the panel.
-        let frame = NSRect(x: panel.frame.maxX - size.width, y: panel.frame.minY,
-                           width: size.width, height: size.height)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.32 : 0
+        let frame = anchoredFrame(for: size, in: panel.frame)
+        guard animated, panel.occlusionState.contains(.visible),
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            panel.setFrame(frame, display: true)
+            completion?()
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.32
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
             panel.animator().setFrame(frame, display: true)
-        }
+        }, completionHandler: completion)
     }
 
     private var readyInteraction: VoiceHistoryRecord? {
@@ -83,7 +118,7 @@ final class AgentVoiceOverlayCoordinator {
         let ready = readyInteraction
         let showReady = voice.admissionPolicy == .manualOnly && ready != nil
         guard voice.isEnabled, !voice.isForegroundBusy, voice.isSpeaking || voice.isGenerating || showReady else {
-            hoverTask?.cancel()
+            cancelHover()
             panel?.orderOut(nil)
             if panel != nil { setExpanded(false, animated: false) }
             return
@@ -111,7 +146,7 @@ final class AgentVoiceOverlayCoordinator {
         updateContent()
         // Ready mode has one extra action; resize without resetting the hover state.
         if isControlExpanded { setExpanded(true) }
-        else { setExpanded(false, animated: false) }
+        else if currentCollapsedSize != targetSize { setExpanded(false, animated: false) }
         panel?.orderFrontRegardless()
     }
 
@@ -131,7 +166,7 @@ final class AgentVoiceOverlayCoordinator {
             isReady: isReady,
             isExpanded: isControlExpanded,
             expand: { [weak self] in
-                self?.hoverTask?.cancel()
+                self?.cancelHover()
                 self?.setExpanded(true)
             },
             stop: { [weak voice] in
@@ -151,7 +186,7 @@ final class AgentVoiceOverlayCoordinator {
         } else {
             let hostingView = AgentVoiceHostingView(rootView: view)
             hostingView.sizingOptions = []
-            hostingView.onHover = { [weak self] in self?.setHovered($0) }
+            hostingView.onHover = { [weak self] in self?.updateHover() }
             panel?.contentView = hostingView
             self.hostingView = hostingView
         }
@@ -159,21 +194,29 @@ final class AgentVoiceOverlayCoordinator {
 }
 
 private final class AgentVoiceHostingView: NSHostingView<AgentVoiceOverlay> {
-    var onHover: ((Bool) -> Void)?
+    var onHover: (() -> Void)?
     private var hoverTrackingArea: NSTrackingArea?
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        // AppKit keeps this area in sync with the hosting view during a resize.
+        guard hoverTrackingArea == nil else { return }
         let area = NSTrackingArea(rect: .zero,
                                   options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                                   owner: self, userInfo: nil)
-        addTrackingArea(area)
         hoverTrackingArea = area
+        addTrackingArea(area)
     }
 
-    override func mouseEntered(with event: NSEvent) { onHover?(true) }
-    override func mouseExited(with event: NSEvent) { onHover?(false) }
+    override func mouseEntered(with event: NSEvent) {
+        if event.trackingArea === hoverTrackingArea { onHover?() }
+        else { super.mouseEntered(with: event) }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if event.trackingArea === hoverTrackingArea { onHover?() }
+        else { super.mouseExited(with: event) }
+    }
 }
 
 private final class AgentVoicePanel: NSPanel {
@@ -197,8 +240,9 @@ private enum AgentVoiceOverlayLayout {
         return NSSize(width: max(collapsedSize.width, width), height: collapsedSize.height)
     }
 
-    static func expandedSize(isReady: Bool) -> NSSize {
-        NSSize(width: isReady ? 360 : 340, height: 68)
+    static func expandedSize(isReady: Bool, minimumWidth: CGFloat) -> NSSize {
+        // Long host names can widen the compact pill beyond the default control width.
+        NSSize(width: max(isReady ? 360 : 340, minimumWidth), height: 68)
     }
 
     static let screenInset: CGFloat = 24
