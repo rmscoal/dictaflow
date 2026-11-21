@@ -70,8 +70,7 @@ struct OutputExampleView: View {
                 .padding(.top, compact ? 8 : 16)
             }
             .padding(compact ? 18 : 24).frame(maxWidth: .infinity, minHeight: compact ? 0 : 410, alignment: .topLeading)
-            .background(AppTheme.paper, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay { RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(AppTheme.paperBorder, lineWidth: 1) }
+            .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
         .help("Sample text. Custom instructions apply only to actual dictation.")
         .accessibilityElement(children: .contain).accessibilityLabel("Example using sample text, without custom instructions")

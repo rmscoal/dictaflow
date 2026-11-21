@@ -108,7 +108,8 @@ struct TranscriptionSettingsView: View {
             .font(.system(size: 12))
             .padding(.horizontal, 10).padding(.vertical, 5)
             .frame(width: pickerWidth)
-            .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 6))
+            .omdoControlBackground(in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
         .accessibilityElement(children: .ignore)

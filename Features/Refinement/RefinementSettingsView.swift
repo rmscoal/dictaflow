@@ -21,7 +21,7 @@ struct RefinementSettingsView: View {
             }
             .padding(.bottom, 18)
             if unavailable {
-                EmberErrorBanner(title: "Refinement is unavailable", message: appState.refinementModelSupport(for: model).unsupportedReason ?? "Reinstall DictaFlow to restore local refinement. Dictation still works with your selected tone.")
+                EmberErrorBanner(title: "Refinement is unavailable", message: appState.refinementModelSupport(for: model).unsupportedReason ?? "Reinstall Omdo to restore local refinement. Dictation still works with your selected tone.")
                     .padding(.bottom, 18)
             } else if !appState.isSelectedRefinementModelPrepared {
                 EmberErrorBanner(title: "Refinement model needs a download", message: "Dictation still works with your selected tone.", actionTitle: "Choose a refinement model") {
@@ -78,7 +78,7 @@ struct RefinementSettingsView: View {
             TextEditor(text: Binding(get: { appState.currentPresetInstructions }, set: { appState.updatePresetInstructions($0) }))
                 .font(.system(size: 12)).scrollContentBackground(.hidden)
                 .frame(height: 100).padding(10)
-                .background(AppTheme.background, in: RoundedRectangle(cornerRadius: 12))
+                .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 12))
                 .overlay { RoundedRectangle(cornerRadius: 12).stroke(AppTheme.border, lineWidth: 1) }
                 .disabled(appState.refinementSettingsLocked)
                 .accessibilityLabel("Additional refinement instructions")
@@ -122,7 +122,7 @@ struct RefinementSettingsView: View {
                 }
             }
             .frame(height: 280)
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 12))
+            .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 12))
             .overlay { RoundedRectangle(cornerRadius: 12).stroke(AppTheme.border, lineWidth: 1) }
             HStack {
                 Text(appState.isRefinementPromptDirty ? "Unsaved changes" : "Saved")

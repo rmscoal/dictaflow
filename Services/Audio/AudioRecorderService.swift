@@ -45,11 +45,11 @@ enum AudioRecorderServiceError: LocalizedError, Equatable {
         case .failedToWrite:
             return "The recording could not be saved completely. Check available disk space, then try again."
         case .temporaryDirectoryCreationFailed:
-            return "DictaFlow could not create its temporary recording folder."
+            return "Omdo could not create its temporary recording folder."
         case .temporaryFileProtectionFailed:
-            return "DictaFlow could not secure its temporary recording file."
+            return "Omdo could not secure its temporary recording file."
         case .temporaryFileDeletionFailed:
-            return "DictaFlow could not delete the cancelled temporary recording."
+            return "Omdo could not delete the cancelled temporary recording."
         }
     }
 }

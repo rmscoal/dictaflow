@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
-  echo "usage: $0 /path/to/DictaFlow.app/Contents/MacOS" >&2
+  echo "usage: $0 /path/to/Omdo.app/Contents/MacOS" >&2
   exit 2
 fi
 

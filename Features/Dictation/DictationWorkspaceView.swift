@@ -28,11 +28,16 @@ struct DictationWorkspaceView: View {
                             .buttonStyle(EmberButtonStyle())
                             .padding(.bottom, 18)
                     }
-                    HStack(alignment: .top, spacing: contentWidth > AppLayout.workspaceStackingWidth ? 12 : 8) {
-                        stage(.transcription, index: 1, value: appState.whisperConfiguration.speechModelName, detail: appState.whisperConfiguration.inputLanguage.displayName, asset: appState.whisperConfiguration.recognitionProvider.iconName, compact: contentWidth <= AppLayout.workspaceStackingWidth)
-                        stage(.refinement, index: 2, value: appState.refinementConfiguration.isEnabled ? appState.refinementConfiguration.model.displayName : "Refinement off", detail: appState.refinementConfiguration.isEnabled ? appState.effectiveRefinementStyle.mode.title + (appState.refinementConfiguration.perAppStylesEnabled ? " · Per-app on" : "") : "Optional", asset: appState.refinementConfiguration.model.provider?.iconName, compact: contentWidth <= AppLayout.workspaceStackingWidth)
+                    HStack(alignment: .top, spacing: 8) {
+                        stage(.transcription, value: appState.whisperConfiguration.speechModelName, detail: appState.whisperConfiguration.inputLanguage.displayName, asset: appState.whisperConfiguration.recognitionProvider.iconName, compact: !sideBySide)
+                        stage(.refinement, value: appState.refinementConfiguration.isEnabled ? appState.refinementConfiguration.model.displayName : "Refinement off", detail: appState.refinementConfiguration.isEnabled ? appState.effectiveRefinementStyle.mode.title + (appState.refinementConfiguration.perAppStylesEnabled ? " · Per-app on" : "") : "Optional", asset: appState.refinementConfiguration.model.provider?.iconName, compact: !sideBySide)
                     }
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(5)
+                    .omdoGlassBackground(
+                        in: RoundedRectangle(cornerRadius: 23, style: .continuous),
+                        tint: AppTheme.controlFill
+                    )
                     .padding(.bottom, 22)
                     .accessibilityElement(children: .contain).accessibilityLabel("Dictation settings")
                     EmberColumns {
@@ -73,7 +78,7 @@ struct DictationWorkspaceView: View {
         EmberPanel {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Untranscribed recordings").font(.headline)
-                Text("These recordings are kept until you discard them, retry successfully, or quit DictaFlow.")
+                Text("These recordings are kept until you discard them, retry successfully, or quit Omdo.")
                     .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
                 ForEach(appState.retainedCaptures, id: \.fileURL) { capture in
                     HStack {
@@ -103,8 +108,8 @@ struct DictationWorkspaceView: View {
         return min(max(desired, 0), maximum)
     }
 
-    private func stage(_ tab: DictationSettingsTab, index: Int, value: String, detail: String, asset: String?, compact: Bool) -> some View {
-        DictationStageCard(tab: tab, index: index, value: value, detail: detail, providerAsset: asset,
+    private func stage(_ tab: DictationSettingsTab, value: String, detail: String, asset: String?, compact: Bool) -> some View {
+        DictationStageCard(tab: tab, value: value, detail: detail, providerAsset: asset,
                            selected: appState.dictationSettingsTab == tab, compact: compact) {
             appState.dictationSettingsTab = tab
         }

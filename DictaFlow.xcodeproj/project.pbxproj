@@ -43,8 +43,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		FBD100002D11000100000004 /* DictaFlow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DictaFlow.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		FB742D982F9A63D800AA0EED /* DictaFlow Dev.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "DictaFlow Dev.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		FBD100002D11000100000004 /* Omdo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Omdo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FB742D982F9A63D800AA0EED /* Omdo Dev.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Omdo Dev.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		FB742D992F9A63D800AA0EED /* DictaFlow-Dev-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "DictaFlow-Dev-Info.plist"; sourceTree = "<group>"; };
 		FBE942B32D0A000100000006 /* Vendor/whisper.cpp/build-apple/whisper.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = "Vendor/whisper.cpp/build-apple/whisper.xcframework"; sourceTree = "<group>"; };
 		DF40000000000000000000001 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = DictaFlowTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -128,8 +128,8 @@
 				FBD100002D11000100000005 /* Config */,
 				FB742D962F9A61CB00AA0EED /* Resources */,
 				FB29581B2F9A4FAA008AE621 /* App */,
-				FBD100002D11000100000004 /* DictaFlow.app */,
-				FB742D982F9A63D800AA0EED /* DictaFlow Dev.app */,
+				FBD100002D11000100000004 /* Omdo.app */,
+				FB742D982F9A63D800AA0EED /* Omdo Dev.app */,
 			);
 			sourceTree = "<group>";
 		};
@@ -162,7 +162,7 @@
 			packageProductDependencies = (DF51000000000000000000003, DF52000000000000000000003, );
 			name = DictaFlow;
 			productName = DictaFlow;
-			productReference = FBD100002D11000100000004 /* DictaFlow.app */;
+			productReference = FBD100002D11000100000004 /* Omdo.app */;
 			productType = "com.apple.product-type.application";
 		};
 		FB2958182F9A4FAA008AE621 /* DictaFlow Dev */ = {
@@ -191,7 +191,7 @@
 			packageProductDependencies = (DF51000000000000000000004, DF52000000000000000000004, );
 			name = "DictaFlow Dev";
 			productName = "DictaFlow Dev";
-			productReference = FB742D982F9A63D800AA0EED /* DictaFlow Dev.app */;
+			productReference = FB742D982F9A63D800AA0EED /* Omdo Dev.app */;
 			productType = "com.apple.product-type.application";
 		};
 		DF40000000000000000000003 = {
@@ -390,11 +390,11 @@
 				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = DictaFlow;
+				INFOPLIST_KEY_CFBundleDisplayName = Omdo;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright (C) 2026 Rifky Manuel Satyana";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "DictaFlow uses your microphone for private local voice typing.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Omdo uses your microphone for private local voice typing.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -402,7 +402,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 2.9.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Omdo";
+				PRODUCT_MODULE_NAME = DictaFlow;
 				REGISTER_APP_GROUPS = YES;
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
 				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
@@ -446,11 +447,11 @@
 				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
 				ENABLE_USER_SELECTED_FILES = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = DictaFlow;
+				INFOPLIST_KEY_CFBundleDisplayName = Omdo;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright (C) 2026 Rifky Manuel Satyana";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "DictaFlow uses your microphone for private local voice typing.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Omdo uses your microphone for private local voice typing.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -458,7 +459,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 2.9.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Omdo";
+				PRODUCT_MODULE_NAME = DictaFlow;
 				REGISTER_APP_GROUPS = NO;
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
 				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
@@ -618,11 +620,11 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "DictaFlow-Dev-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "DictaFlow Dev";
+				INFOPLIST_KEY_CFBundleDisplayName = "Omdo Dev";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright (C) 2026 Rifky Manuel Satyana";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "DictaFlow uses your microphone for private local voice typing.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Omdo uses your microphone for private local voice typing.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -630,7 +632,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 2.9.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow.dev;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Omdo Dev";
+				PRODUCT_MODULE_NAME = DictaFlow_Dev;
 				REGISTER_APP_GROUPS = YES;
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
 				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
@@ -672,11 +675,11 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "DictaFlow-Dev-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = "DictaFlow Dev";
+				INFOPLIST_KEY_CFBundleDisplayName = "Omdo Dev";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright (C) 2026 Rifky Manuel Satyana";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "DictaFlow uses your microphone for private local voice typing.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Omdo uses your microphone for private local voice typing.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -684,7 +687,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 2.9.3;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow.dev;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Omdo Dev";
+				PRODUCT_MODULE_NAME = DictaFlow_Dev;
 				REGISTER_APP_GROUPS = YES;
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
 				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
@@ -703,14 +707,14 @@
 		};
 		DF40000000000000000000007 = {isa = XCBuildConfiguration; buildSettings = {
  BUNDLE_LOADER = "$(TEST_HOST)";
- TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DictaFlow Dev.app/Contents/MacOS/DictaFlow Dev";
+ TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Omdo Dev.app/Contents/MacOS/Omdo Dev";
  GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow.dev.tests;
  PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; MACOSX_DEPLOYMENT_TARGET = 14.0;
  CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = 627M6A6KRH; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @loader_path/../Frameworks @executable_path/../Frameworks";
 }; name = Debug; };
 		DF40000000000000000000008 = {isa = XCBuildConfiguration; buildSettings = {
  BUNDLE_LOADER = "$(TEST_HOST)";
- TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DictaFlow Dev.app/Contents/MacOS/DictaFlow Dev";
+ TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Omdo Dev.app/Contents/MacOS/Omdo Dev";
  GENERATE_INFOPLIST_FILE = YES; PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow.dev.tests;
  PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; MACOSX_DEPLOYMENT_TARGET = 14.0;
  CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = 627M6A6KRH; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @loader_path/../Frameworks @executable_path/../Frameworks";

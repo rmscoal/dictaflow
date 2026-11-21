@@ -206,7 +206,6 @@ private enum AgentVoiceOverlayLayout {
 }
 
 private struct AgentVoiceOverlay: View {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let source: String
     let status: String
@@ -254,14 +253,13 @@ private struct AgentVoiceOverlay: View {
                         Spacer(minLength: 0)
                         Text(isReady ? "Ready" : status)
                             .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(AppTheme.secondaryText)
                             .lineLimit(1)
                     }
                     .padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(EmberButtonStyle(appearance: .plain))
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .accessibilityLabel("Show speech controls. \(displayHostName). \(status)")
                 .accessibilityIdentifier("agent-voice-overlay-expand")
@@ -273,7 +271,8 @@ private struct AgentVoiceOverlay: View {
         }
         .help(source)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16).delay(isExpanded ? 0.1 : 0), value: isExpanded)
-        .modifier(AgentVoiceOverlayMaterial(reduceTransparency: reduceTransparency))
+        .foregroundStyle(AppTheme.primaryText)
+        .omdoFloatingWindowBackground(in: RoundedRectangle(cornerRadius: AgentVoiceOverlayLayout.cornerRadius))
     }
 
     private var expandedContent: some View {
@@ -286,7 +285,7 @@ private struct AgentVoiceOverlay: View {
                     .lineLimit(1)
                 Text(status)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.secondaryText)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -310,64 +309,15 @@ private struct AgentVoiceOverlay: View {
                         .accessibilityIdentifier("agent-voice-overlay-play")
                 }
                 Button("Dictate", action: record)
-                    .buttonStyle(AgentVoiceOverlayButtonStyle(isProminent: true))
+                    .buttonStyle(EmberButtonStyle(primary: true))
                     .help("Interrupt speech and start dictation")
                     .accessibilityIdentifier("agent-voice-overlay-dictate")
             }
-            .buttonStyle(AgentVoiceOverlayButtonStyle())
+            .buttonStyle(EmberButtonStyle())
             .fixedSize()
         }
         .padding(.horizontal, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-    }
-}
-
-private struct AgentVoiceOverlayMaterial: ViewModifier {
-    let reduceTransparency: Bool
-
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: AgentVoiceOverlayLayout.cornerRadius,
-                                     style: .continuous)
-        if reduceTransparency {
-            content
-                .background(Color(nsColor: .windowBackgroundColor), in: shape)
-                .overlay { shape.strokeBorder(.primary.opacity(0.12)) }
-        } else if #available(macOS 26.0, *) {
-            content.glassEffect(.regular, in: shape)
-        } else {
-            content
-                .background(.regularMaterial, in: shape)
-                .overlay { shape.strokeBorder(.primary.opacity(0.12)) }
-        }
-    }
-}
-
-private struct AgentVoiceOverlayButtonStyle: ButtonStyle {
-    @Environment(\.colorScheme) private var colorScheme
-    let isProminent: Bool
-
-    init(isProminent: Bool = false) {
-        self.isProminent = isProminent
-    }
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .medium))
-            .padding(.horizontal, 11)
-            .frame(height: 32)
-            .foregroundStyle(isProminent ? (colorScheme == .dark ? Color.black : .white) : Color(nsColor: .labelColor))
-            .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(isProminent
-                          ? Color(white: colorScheme == .dark ? 0.92 : 0.2)
-                          : Color(nsColor: .labelColor).opacity(0.07))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color(nsColor: .labelColor).opacity(isProminent ? 0 : 0.08))
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }

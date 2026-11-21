@@ -36,7 +36,7 @@ struct SelectedModelCard: View {
             .font(.system(size: 11))
             .padding(.horizontal, 20).padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.background, in: Rectangle())
+            .omdoGlassBackground(in: Rectangle(), tint: AppTheme.background, showsRim: false)
         }
     }
 

@@ -567,7 +567,7 @@ public actor VoiceStore {
 
     nonisolated private func attach(_ request: VoiceRequest, key: String, connectionID: UUID, now: Date, db: Database) throws -> VoiceReply {
         let existing = try Row.fetchOne(db, sql: "SELECT * FROM sessions WHERE key = ?", arguments: [key])
-        let message = "DictaFlow decides playback from lifecycle and user settings."
+        let message = "Omdo decides playback from lifecycle and user settings."
         if let existing, existing["lease"] as Double > now.timeIntervalSince1970 {
             // The helper may lose its local copy while an attach is in flight.
             // Only the original socket can recover that attachment.

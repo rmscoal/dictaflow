@@ -22,9 +22,9 @@ enum AgentVoiceHostCardStatus: Equatable {
         case .unsupportedVersion(let requirement):
             requirement
         case .needsSetup:
-            "Found on this Mac. DictaFlow entry not configured."
+            "Found on this Mac. Omdo entry not configured."
         case .disabledInHost:
-            "DictaFlow entry is disabled in the host settings."
+            "Omdo entry is disabled in the host settings."
         case .notFound:
             "Not detected in common install locations."
         case .manualOnly:
@@ -75,7 +75,7 @@ struct AgentVoiceHostCard: View {
         case .checking:
             return nil
         case .disabledInHost:
-            return "Enable DictaFlow in \(brand.displayName) settings."
+            return "Enable Omdo in \(brand.displayName) settings."
         case .unsupportedVersion(let requirement):
             return requirement
         case .notFound:

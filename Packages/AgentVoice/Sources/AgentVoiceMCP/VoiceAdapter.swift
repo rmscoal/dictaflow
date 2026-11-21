@@ -70,7 +70,7 @@ public actor VoiceAdapter {
                 }
                 if !id.isEmpty, id != "${agent_id}" {
                     return VoiceReply(accepted: false, code: "child_agent_denied",
-                                      message: "Only the main agent can use DictaFlow voice. Finish the written answer normally.")
+                                      message: "Only the main agent can use Omdo voice. Finish the written answer normally.")
                 }
             }
         }
@@ -163,7 +163,7 @@ public actor VoiceAdapter {
     private func codexCallerRejection(operation: VoiceOperation, session: String,
                                       metadata: [String: Value]?) -> VoiceReply? {
         let unavailable = VoiceReply(accepted: false, code: "caller_identity_missing",
-                                    message: "DictaFlow could not verify the calling agent. Use Codex 0.156.0 or later and start a new session. Finish the written answer normally.")
+                                    message: "Omdo could not verify the calling agent. Use Codex 0.156.0 or later and start a new session. Finish the written answer normally.")
         guard let metadata, let thread = metadata["threadId"]?.stringValue, !thread.isEmpty else {
             return unavailable
         }
@@ -184,7 +184,7 @@ public actor VoiceAdapter {
         }
         guard thread == root else {
             return VoiceReply(accepted: false, code: "child_agent_denied",
-                              message: "Only the main agent can use DictaFlow voice. Finish the written answer normally.")
+                              message: "Only the main agent can use Omdo voice. Finish the written answer normally.")
         }
         guard session == root else {
             return VoiceReply(accepted: false, code: "session_identity_mismatch",
@@ -250,7 +250,7 @@ public actor VoiceAdapter {
             throw VoiceError.unavailable("The app connection changed while attaching. Begin a new prompt for speech.")
         }
         guard reply.accepted, let attachment = reply.attachment else {
-            throw VoiceError.unavailable("Could not attach to DictaFlow: \(reply.code). Finish the written answer normally.")
+            throw VoiceError.unavailable("Could not attach to Omdo: \(reply.code). Finish the written answer normally.")
         }
         return attachment
     }

@@ -428,7 +428,8 @@ private struct RecordingOverlayView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(OverlayTheme.panelFill, in: Capsule(style: .continuous))
+        .foregroundStyle(AppTheme.primaryText)
+        .omdoFloatingWindowBackground(in: Capsule())
     }
 
     private var recordingContent: some View {
@@ -493,20 +494,8 @@ private struct RecordingOverlayView: View {
         Button(role: .cancel, action: viewModel.cancel) {
             Image(systemName: "xmark")
                 .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(OverlayTheme.primaryText)
-                .frame(width: 26, height: 26)
-                .background(
-                    isCancelButtonHovered
-                        ? OverlayTheme.controlHoverFill
-                        : OverlayTheme.controlFill,
-                    in: Circle()
-                )
-                .overlay {
-                    Circle()
-                        .strokeBorder(OverlayTheme.panelBorder, lineWidth: 0.75)
-                }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(EmberIconButtonStyle(bordered: true, size: 26, highlighted: isCancelButtonHovered))
         .onHover { isHovering in
             isCancelButtonHovered = isHovering
         }
@@ -617,10 +606,6 @@ private struct OverlayLoadingView: View {
 }
 
 private enum OverlayTheme {
-    static let panelFill = AppTheme.tileFill.opacity(0.96)
-    static let panelBorder = AppTheme.border
-    static let controlFill = AppTheme.controlFill
-    static let controlHoverFill = AppTheme.selectedFill
     static let primaryText = AppTheme.primaryText
     static let refinementStar = AppTheme.accent
     static let refinementGlow = AppTheme.accent

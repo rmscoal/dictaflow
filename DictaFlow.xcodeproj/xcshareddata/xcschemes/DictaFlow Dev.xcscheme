@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "FB2958182F9A4FAA008AE621"
-               BuildableName = "DictaFlow Dev.app"
+               BuildableName = "Omdo Dev.app"
                BlueprintName = "DictaFlow Dev"
                ReferencedContainer = "container:DictaFlow.xcodeproj">
             </BuildableReference>
@@ -50,7 +50,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "FB2958182F9A4FAA008AE621"
-            BuildableName = "DictaFlow Dev.app"
+            BuildableName = "Omdo Dev.app"
             BlueprintName = "DictaFlow Dev"
             ReferencedContainer = "container:DictaFlow.xcodeproj">
          </BuildableReference>
@@ -67,7 +67,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "FB2958182F9A4FAA008AE621"
-            BuildableName = "DictaFlow Dev.app"
+            BuildableName = "Omdo Dev.app"
             BlueprintName = "DictaFlow Dev"
             ReferencedContainer = "container:DictaFlow.xcodeproj">
          </BuildableReference>

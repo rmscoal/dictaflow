@@ -46,7 +46,7 @@ struct DownloadActivitiesPopover: View {
         }
         .frame(width: 340)
         .foregroundStyle(AppTheme.primaryText)
-        .background(AppTheme.tileFill)
+        .omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false)
         .tint(AppTheme.accent)
         .onChange(of: activities.isEmpty) { _, isEmpty in
             if isEmpty { isPresented = false }

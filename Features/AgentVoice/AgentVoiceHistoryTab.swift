@@ -55,7 +55,7 @@ struct AgentVoiceHistoryTab: View {
                     }
                 }
             }
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 16))
+            .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 16))
             .clipShape(RoundedRectangle(cornerRadius: 16))
             .overlay { RoundedRectangle(cornerRadius: 16).stroke(AppTheme.border, lineWidth: 1) }
         }
@@ -120,7 +120,7 @@ struct AgentVoiceHistoryTab: View {
                         .accessibilityLabel("Clear search")
                 }
             }
-            .padding(10).background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 9))
+            .padding(10).omdoControlBackground(in: RoundedRectangle(cornerRadius: 9))
             if voice.isSpeaking || voice.isGenerating {
                 Button("Stop speech", systemImage: "stop.fill") { voice.stopSpeech() }
                     .buttonStyle(EmberButtonStyle())
@@ -150,7 +150,7 @@ struct AgentVoiceHistoryTab: View {
             Text("Spoken responses and prompts expire together. Up to 500 interactions are kept. Off stops saving new voice history; existing entries keep their expiry. Play regenerates speech from saved text.")
                 .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
         }
-        .padding(20).frame(width: 320).foregroundStyle(AppTheme.primaryText).background(AppTheme.tileFill)
+        .padding(20).frame(width: 320).foregroundStyle(AppTheme.primaryText).omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false)
     }
 
     private var sessions: [AgentVoiceSessionGroup] {

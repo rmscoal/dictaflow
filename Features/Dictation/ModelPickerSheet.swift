@@ -80,7 +80,7 @@ struct ModelPickerSheet: View {
             }
         }
         .frame(width: 610, height: 650)
-        .foregroundStyle(AppTheme.primaryText).background(AppTheme.tileFill).tint(AppTheme.accent)
+        .foregroundStyle(AppTheme.primaryText).omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false).tint(AppTheme.accent)
         .sheet(item: $downloadRequest) { request in
             ModelDownloadConfirmation(appState: appState, request: request)
         }
@@ -258,6 +258,6 @@ private struct ModelDownloadConfirmation: View {
             }
         }
         .padding(24).frame(width: 425)
-        .foregroundStyle(AppTheme.primaryText).background(AppTheme.tileFill).tint(AppTheme.accent)
+        .foregroundStyle(AppTheme.primaryText).omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false).tint(AppTheme.accent)
     }
 }

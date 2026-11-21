@@ -16,11 +16,11 @@ enum AudioDecodingServiceError: LocalizedError {
         case .emptyAudio:
             return "The recorded audio file did not contain any samples."
         case .unsupportedOutputFormat:
-            return "DictaFlow could not prepare the audio for Whisper transcription."
+            return "Omdo could not prepare the audio for Whisper transcription."
         case .conversionFailed:
-            return "DictaFlow could not convert the recording into Whisper's PCM format."
+            return "Omdo could not convert the recording into Whisper's PCM format."
         case .missingChannelData:
-            return "DictaFlow could not read the converted audio samples."
+            return "Omdo could not read the converted audio samples."
         }
     }
 }

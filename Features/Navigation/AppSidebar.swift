@@ -4,7 +4,6 @@ struct AppSidebar: View {
     @ObservedObject var appState: DictaFlowAppState
     let collapsed: Bool
     @FocusState private var focusedPage: MainWindowPage?
-    @Environment(\.colorScheme) private var colorScheme
     private let primaryPages: [MainWindowPage] = [.dictation, .agentVoice, .history, .settings]
 
     var body: some View {
@@ -13,7 +12,7 @@ struct AppSidebar: View {
             HStack(spacing: 10) {
                 EmberAppMark()
                 if !collapsed {
-                    Text("DictaFlow").font(.system(size: 17, weight: .semibold))
+                    Text("Omdo").font(.system(size: 17, weight: .semibold))
                 }
             }
             .frame(maxWidth: .infinity, alignment: collapsed ? .center : .leading)
@@ -41,15 +40,13 @@ struct AppSidebar: View {
         .padding(.horizontal, collapsed ? 8 : 12)
         .padding(.top, 22).padding(.bottom, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background {
-            EmberMaterialFill(tint: AppTheme.sidebar, tintOpacity: colorScheme == .dark ? 0.96 : 0.94)
-        }
+        .omdoGlassBackground(in: Rectangle(), tint: AppTheme.sidebar, tintOpacity: 0.12, showsRim: false)
         .overlay(alignment: .trailing) {
-            Rectangle().fill(AppTheme.border).frame(width: 1)
+            Rectangle().fill(AppTheme.border.opacity(0.55)).frame(width: 1).accessibilityHidden(true)
         }
         .frame(width: collapsed ? AppLayout.collapsedSidebarWidth : AppLayout.sidebarWidth)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("DictaFlow navigation")
+        .accessibilityLabel("Omdo navigation")
     }
 
     private func navigationButton(_ page: MainWindowPage) -> some View {
@@ -59,11 +56,14 @@ struct AppSidebar: View {
                 Image(systemName: page.symbol).font(.system(size: 15)).frame(width: 16)
                 if !collapsed { Text(page.title).font(.system(size: 13)); Spacer(minLength: 0) }
             }
-            .foregroundStyle(selected ? AppTheme.accent : AppTheme.secondaryText)
+            .foregroundStyle(AppTheme.primaryText)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, collapsed ? 8 : 11).padding(.vertical, 13)
-            .background(selected ? AppTheme.selectedFill : .clear,
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background {
+                if selected {
+                    OmdoGlass(shape: RoundedRectangle(cornerRadius: 14), tint: AppTheme.selectedFill)
+                }
+            }
             .contentShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)

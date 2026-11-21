@@ -29,7 +29,7 @@ enum AccessibilityPermissionState: Equatable {
     var detailText: String {
         switch self {
         case .undetermined:
-            return "DictaFlow will request Accessibility access the first time it needs to insert text into another app."
+            return "Omdo will request Accessibility access the first time it needs to insert text into another app."
         case .granted:
             return "Accessibility access is available for direct insertion, paste fallback, and simulated typing."
         case .denied:

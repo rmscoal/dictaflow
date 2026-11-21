@@ -246,7 +246,7 @@ public struct VoiceHistoryRecord: Codable, Equatable, Sendable, Identifiable {
 public enum VoiceInstructions {
     public static func prompt(inputID: UUID) -> String {
         """
-        DictaFlow Agent Voice input_id: \(inputID.uuidString).
+        Omdo Agent Voice input_id: \(inputID.uuidString).
         Before each final written response, choose whether there is something useful to hear.
         You may skip speech for a simple acknowledgment or routine success confirmation with no substantive result, important caveat, or required next action.
         Base this on the response and conversation context, not prompt length or a minimum word count. Speak substantive answers, unexpected outcomes, failures, blockers, and questions requiring the user's decision, even when brief. Honor explicit requests for spoken confirmation.
@@ -261,8 +261,8 @@ public enum VoiceInstructions {
         Vary sentence lengths naturally, use contractions where appropriate, and punctuate according to meaning. Preserve uncertainty and what was actually verified.
         Describe commands, symbols, and technical identifiers in natural spoken language when practical. Do not include Markdown, stage directions, pause tags, SSML, or artificial ellipses.
         Explain a code block's purpose or result rather than reading its source. Use enough of a filename to identify it; keep exact commands, full paths, and URLs in the written answer.
-        Aim for at most 220 spoken words, leading with the outcome and important caveats. DictaFlow accepts content without correction retries and may announce a spoken preview of a long response; the submitted text remains in history.
-        Send the complete rendition in one prepare_spoken_response call. DictaFlow handles synthesis chunks; additional preparations replace revisions rather than append speech.
+        Aim for at most 220 spoken words, leading with the outcome and important caveats. Omdo accepts content without correction retries and may announce a spoken preview of a long response; the submitted text remains in history.
+        Send the complete rendition in one prepare_spoken_response call. Omdo handles synthesis chunks; additional preparations replace revisions rather than append speech.
         Keep the written answer clean: no spoken-output tags or appended speech transcript.
         If a hook asks you to continue or you discover a material correction, update the rendition before finishing again.
         For an existing draft, use get_speech_status with a fresh request_id to obtain its current draft_id and revision.
@@ -270,7 +270,7 @@ public enum VoiceInstructions {
         Replace it explicitly using replaces_draft_id and expected_revision; use a fresh request_id for that replacement.
         If a new prompt hook supplies a new input_id, use that newest input instead of the previous one.
         If preparation fails, finish the written answer normally without repair loops.
-        Preparation never plays audio by itself. DictaFlow decides playback from lifecycle and user settings.
+        Preparation never plays audio by itself. Omdo decides playback from lifecycle and user settings.
         """
     }
 }

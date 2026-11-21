@@ -28,15 +28,15 @@ enum WhisperServiceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .failedToInitializeContext:
-            return "DictaFlow could not initialize Whisper with the selected local model."
+            return "Omdo could not initialize Whisper with the selected local model."
         case .transcriptionFailed:
             return "Whisper could not transcribe the recorded audio."
         case .missingVADModel:
-            return "The bundled speech detection model is missing. Reinstall DictaFlow and try again."
+            return "The bundled speech detection model is missing. Reinstall Omdo and try again."
         case .invalidVADModel:
-            return "The bundled speech detection model could not be verified. Reinstall DictaFlow and try again."
+            return "The bundled speech detection model could not be verified. Reinstall Omdo and try again."
         case .speechDetectionFailed:
-            return "Speech detection could not process the recording. Restart DictaFlow and try again."
+            return "Speech detection could not process the recording. Restart Omdo and try again."
         }
     }
 }

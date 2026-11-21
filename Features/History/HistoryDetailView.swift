@@ -47,7 +47,7 @@ struct HistoryDetailView: View {
                                 available: detail.entry.audioAvailable && !model.isPlaybackLoading && !appState.isHistoryProcessing && !model.isMutating && appState.recordingState == .idle) {
                 Task { await model.togglePlayback() }
             }
-            .padding(.horizontal, 12).background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 12).omdoControlBackground(in: RoundedRectangle(cornerRadius: 12))
             if isRetrying {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -189,7 +189,7 @@ struct HistoryDetailView: View {
             }
         }
         .font(.system(size: 12)).padding(20).frame(width: 340)
-        .foregroundStyle(AppTheme.primaryText).background(AppTheme.tileFill)
+        .foregroundStyle(AppTheme.primaryText).omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false)
     }
 
     private var previousResults: some View {
@@ -215,7 +215,7 @@ struct HistoryDetailView: View {
             }
         }
         .font(.system(size: 12)).padding(14)
-        .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 12))
+        .omdoControlBackground(in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var missingText: String {

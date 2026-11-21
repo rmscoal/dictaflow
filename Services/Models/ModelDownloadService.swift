@@ -46,13 +46,13 @@ enum ModelDownloadServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .couldNotCreateModelsDirectory:
-            return "DictaFlow could not create its local model folder."
+            return "Omdo could not create its local model folder."
         case .couldNotCreateModelFile:
-            return "DictaFlow could not create its local model file."
+            return "Omdo could not create its local model file."
         case .invalidServerResponse:
             return "The model download returned an invalid response."
         case .untrustedDownloadURL:
-            return "DictaFlow can only download models over HTTPS."
+            return "Omdo can only download models over HTTPS."
         case .downloadTooLarge:
             return "The model download was larger than expected."
         case .checksumMismatch:
@@ -60,13 +60,13 @@ enum ModelDownloadServiceError: LocalizedError {
         case .invalidLocalModelFile:
             return "The local model path is not a regular file."
         case .invalidModelDeletionRequest:
-            return "DictaFlow can only delete local model files it recognizes."
+            return "Omdo can only delete local model files it recognizes."
         case .modelDeletionUnavailable:
             return "A model is still being prepared. Try deleting unused models after it finishes."
         case .unsupportedRefinementModel:
             return "This refinement model is no longer supported. Select another model in Dictation > Refinement."
         case .encoderExtractionFailed:
-            return "DictaFlow could not unpack the Neural Engine encoder. Try downloading it again."
+            return "Omdo could not unpack the Neural Engine encoder. Try downloading it again."
         }
     }
 }

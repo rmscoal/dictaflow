@@ -598,7 +598,7 @@ final class AgentVoiceCoordinator: ObservableObject {
                     await self?.reportPlaybackError(VoiceError.unavailable("This response is too old for automatic speech. Use Play in History."))
                 }
                 return reply
-            } catch { return VoiceReply(accepted: false, code: "storage_failed", message: "DictaFlow could not persist the request. Finish your written answer normally.") }
+            } catch { return VoiceReply(accepted: false, code: "storage_failed", message: "Omdo could not persist the request. Finish your written answer normally.") }
         }, onDisconnect: { [weak self] connection in
             try? await store.disconnect(connectionID: connection)
             await self?.didReceiveRequest()

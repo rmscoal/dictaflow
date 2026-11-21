@@ -2,7 +2,6 @@ import SwiftUI
 
 struct DictationStageCard: View {
     let tab: DictationSettingsTab
-    let index: Int
     let value: String
     let detail: String
     let providerAsset: String?
@@ -11,14 +10,15 @@ struct DictationStageCard: View {
     let action: () -> Void
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 17, style: .continuous)
         Button(action: action) {
             VStack(alignment: .leading, spacing: 11) {
                 HStack(spacing: 4) {
-                    Text("0\(index) / \(tab.title)").font(.system(size: 11))
+                    Text(tab.title).font(.system(size: 11, weight: .medium))
                     Spacer(minLength: 0)
                     Image(systemName: selected ? "chevron.down" : "chevron.right").font(.system(size: 10))
                 }
-                .foregroundStyle(selected ? AppTheme.accent : AppTheme.secondaryText)
+                .foregroundStyle(AppTheme.primaryText)
                 HStack(spacing: compact ? 8 : 11) {
                     if let providerAsset { EmberProviderIcon(asset: providerAsset, size: compact ? 24 : 32) }
                     else { EmberAppMark(size: compact ? 24 : 32) }
@@ -31,15 +31,14 @@ struct DictationStageCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(.horizontal, compact ? 12 : 18).padding(.vertical, 15)
-            .frame(maxWidth: .infinity, minHeight: compact ? 92 : 98, maxHeight: .infinity, alignment: .topLeading)
-            .background(selected ? AppTheme.selectedFill : AppTheme.tileFill,
-                        in: RoundedRectangle(cornerRadius: compact ? 17 : 21, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: compact ? 17 : 21, style: .continuous)
-                    .stroke(selected ? AppTheme.accent : AppTheme.border, lineWidth: 1)
+            .padding(.horizontal, compact ? 12 : 15).padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: compact ? 80 : 86, maxHeight: .infinity, alignment: .topLeading)
+            .background {
+                if selected {
+                    OmdoGlass(shape: shape, tint: AppTheme.selectedFill)
+                }
             }
-            .contentShape(RoundedRectangle(cornerRadius: 21))
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
         .accessibilityLabel([tab.title, value, detail].filter { !$0.isEmpty }.joined(separator: ", "))

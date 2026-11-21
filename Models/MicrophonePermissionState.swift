@@ -22,7 +22,7 @@ enum MicrophonePermissionState: Equatable {
     var detailText: String {
         switch self {
         case .undetermined:
-            return "DictaFlow will request microphone access the first time you start dictation."
+            return "Omdo will request microphone access the first time you start dictation."
         case .granted:
             return "Microphone access is available for local recording."
         case .denied:

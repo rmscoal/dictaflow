@@ -11,10 +11,10 @@ struct MenuBarView: View {
         VStack(spacing: 0) {
             HStack(spacing: 9) {
                 EmberAppMark(size: 24)
-                Text("DictaFlow").font(.system(size: 13, weight: .medium))
+                Text("Omdo").font(.system(size: 13, weight: .medium))
                 Spacer()
                 Button { dismiss() } label: { Image(systemName: "xmark") }
-                    .buttonStyle(EmberIconButtonStyle()).accessibilityLabel("Close DictaFlow menu")
+                    .buttonStyle(EmberIconButtonStyle()).accessibilityLabel("Close Omdo menu")
             }
             .padding(.horizontal, 4).padding(.bottom, 10)
             capturePanel
@@ -27,19 +27,22 @@ struct MenuBarView: View {
             EmberDivider()
             HStack {
                 Button { dismiss(); appState.showMainWindowPage(.dictation) } label: { Label("Settings…", systemImage: "slider.horizontal.3") }
+                    .buttonStyle(EmberInlineActionButtonStyle())
                     .accessibilityLabel("Open Dictation settings")
                 Spacer()
                 Button("Quit") { appState.quit() }
+                    .buttonStyle(EmberInlineActionButtonStyle())
                     .foregroundStyle(AppTheme.secondaryText)
             }
-            .buttonStyle(.plain).font(.system(size: 12))
+            .font(.system(size: 12))
             .padding(.horizontal, 7).padding(.vertical, 11)
         }
         .padding(12).frame(width: 360)
-        .foregroundStyle(AppTheme.primaryText).background { EmberMaterialFill(tint: AppTheme.glass) }.tint(AppTheme.accent)
+        .foregroundStyle(AppTheme.primaryText)
+        .omdoFloatingWindowBackground(in: Rectangle(), showsRim: false)
+        .tint(AppTheme.accent)
     }
 
-    // Borderless warm paper tile, distinct as the primary action zone.
     private var capturePanel: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 5) {
@@ -76,19 +79,17 @@ struct MenuBarView: View {
             }
 
             Button { appState.toggleDictation() } label: {
-                Image(systemName: listening ? "stop" : "mic").font(.system(size: 15))
-                    .frame(width: 38, height: 38)
-                    .foregroundStyle(AppTheme.actionText).background(AppTheme.actionFill, in: Circle())
-                    .contentShape(Circle())
+                Image(systemName: listening ? "stop" : "mic")
             }
-            .buttonStyle(.plain).disabled(appState.isDictationActionDisabled)
+            .buttonStyle(EmberButtonStyle(appearance: .primaryIcon(size: 38)))
+            .disabled(appState.isDictationActionDisabled)
             .accessibilityLabel(listening ? "Stop recording" : "Start dictation")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .foregroundStyle(AppTheme.paperText)
-        .background(AppTheme.paper, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var waveform: some View {
@@ -114,8 +115,8 @@ struct MenuBarView: View {
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
             }
-            .padding(.horizontal, 7).padding(.vertical, 9).contentShape(Rectangle())
+            .padding(.horizontal, 7).padding(.vertical, 9)
         }
-        .buttonStyle(.plain).accessibilityLabel("Open \(title). \(detail)")
+        .buttonStyle(EmberButtonStyle(appearance: .plain)).accessibilityLabel("Open \(title). \(detail)")
     }
 }

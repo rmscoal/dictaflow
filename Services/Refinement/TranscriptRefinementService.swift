@@ -20,7 +20,7 @@ nonisolated enum TranscriptRefinementServiceError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .missingRuntime: "The local refinement runtime is unavailable. Reinstall DictaFlow and try again."
+        case .missingRuntime: "The local refinement runtime is unavailable. Reinstall Omdo and try again."
         case .failedToRun(let details): "The local model could not clean the transcript. \(details)"
         case .timedOut: "The local refinement model took too long to respond."
         case .emptyOutput: "The local refinement model returned an empty result."

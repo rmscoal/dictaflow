@@ -368,7 +368,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     var appDisplayNameText: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "DictaFlow"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Omdo"
     }
 
     var updateStatusText: String {
@@ -385,7 +385,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         if automaticallyChecksForUpdates {
-            return "DictaFlow checks GitHub for a new release at most once per day."
+            return "Omdo checks GitHub for a new release at most once per day."
         }
 
         return "Automatic update checks are off."
@@ -2816,33 +2816,33 @@ final class DictaFlowAppState: ObservableObject {
 
     private var missingRefinementRuntimeStatusText: String {
         #if DEBUG
-            return "Install llama.cpp so DictaFlow can run llama-server for local refinement. Preparing only downloads the selected LLM model."
+            return "Install llama.cpp so Omdo can run llama-server for local refinement. Preparing only downloads the selected LLM model."
         #else
-            return "DictaFlow could not find its bundled local refinement runtime. Reinstall DictaFlow, then try local cleanup again."
+            return "Omdo could not find its bundled local refinement runtime. Reinstall Omdo, then try local cleanup again."
         #endif
     }
 
     private var missingRefinementRuntimeActionMessage: String {
         #if DEBUG
-            return "Install llama.cpp so DictaFlow can run llama-server before preparing LLM refinement."
+            return "Install llama.cpp so Omdo can run llama-server before preparing LLM refinement."
         #else
-            return "DictaFlow could not find its bundled local refinement runtime. Reinstall DictaFlow before preparing LLM refinement."
+            return "Omdo could not find its bundled local refinement runtime. Reinstall Omdo before preparing LLM refinement."
         #endif
     }
 
     private var missingRefinementRuntimeEnableMessage: String {
         #if DEBUG
-            return "Install llama.cpp so DictaFlow can run llama-server before turning on local refinement."
+            return "Install llama.cpp so Omdo can run llama-server before turning on local refinement."
         #else
-            return "DictaFlow could not find its bundled local refinement runtime. Reinstall DictaFlow before turning on local refinement."
+            return "Omdo could not find its bundled local refinement runtime. Reinstall Omdo before turning on local refinement."
         #endif
     }
 
     private var missingRefinementRuntimeDisabledMessage: String {
         #if DEBUG
-            return "Refinement was turned off because DictaFlow could not find llama-server. Install llama.cpp, then turn refinement back on."
+            return "Refinement was turned off because Omdo could not find llama-server. Install llama.cpp, then turn refinement back on."
         #else
-            return "Refinement was turned off because DictaFlow could not find its bundled local refinement runtime. Reinstall DictaFlow, then turn refinement back on."
+            return "Refinement was turned off because Omdo could not find its bundled local refinement runtime. Reinstall Omdo, then turn refinement back on."
         #endif
     }
 
@@ -3491,7 +3491,7 @@ final class DictaFlowAppState: ObservableObject {
                 "Could not delete temporary recording \(captureURL.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
             )
             if shouldSurfaceFailure {
-                setPreservedStatusMessage("DictaFlow could not delete its temporary recording. Check the temporary recordings folder if you need to remove it manually.", issueTitle: "Could not remove temporary audio")
+                setPreservedStatusMessage("Omdo could not delete its temporary recording. Check the temporary recordings folder if you need to remove it manually.", issueTitle: "Could not remove temporary audio")
                 updateStatusMessage()
             }
             return
@@ -3532,7 +3532,7 @@ final class DictaFlowAppState: ObservableObject {
             var skippedTranscription = transcription
             skippedTranscription.refinementStatus = .skipped(reason: message)
             lastTranscription = skippedTranscription
-            setPreservedStatusMessage("Could not refine the transcript locally, so DictaFlow will use the transcript with your selected tone. \(message)", issueTitle: "Refinement was skipped")
+            setPreservedStatusMessage("Could not refine the transcript locally, so Omdo will use the transcript with your selected tone. \(message)", issueTitle: "Refinement was skipped")
             playSoundCue(.error)
             showMainWindow()
             updateStatusMessage()
@@ -3599,7 +3599,7 @@ final class DictaFlowAppState: ObservableObject {
             }
             guard !isTerminating else { return transcription }
             if forceEnabled { history.report(error) }
-            let message = "Could not refine the transcript locally, so DictaFlow will use the transcript with your selected tone. \(error.localizedDescription)"
+            let message = "Could not refine the transcript locally, so Omdo will use the transcript with your selected tone. \(error.localizedDescription)"
             var failedTranscription = transcription
             failedTranscription.refinementStatus = .failed(
                 model: model,
@@ -3610,7 +3610,7 @@ final class DictaFlowAppState: ObservableObject {
             setPreservedStatusMessage(message, issueTitle: "Refinement failed")
             playSoundCue(.error)
             localNotificationService.show(
-                title: "DictaFlow refinement failed",
+                title: "Omdo refinement failed",
                 body: "Using the transcript with your selected tone instead."
             )
             showMainWindowPage(forceEnabled ? .history : .dictation)
@@ -3745,7 +3745,7 @@ final class DictaFlowAppState: ObservableObject {
 
         guard let installedAppVersion else {
             if userInitiated {
-                updateCheckMessage = "DictaFlow could not read its installed version."
+                updateCheckMessage = "Omdo could not read its installed version."
             }
             return
         }
@@ -3775,7 +3775,7 @@ final class DictaFlowAppState: ObservableObject {
 
                 if userInitiated {
                     self.updateCheckMessage = newerRelease == nil
-                        ? "DictaFlow is up to date."
+                        ? "Omdo is up to date."
                         : nil
                 } else {
                     self.updateCheckMessage = nil
@@ -3858,7 +3858,7 @@ final class DictaFlowAppState: ObservableObject {
     private func updateStatusMessage() {
         switch recordingState {
         case .requestingPermission:
-            statusMessage = "DictaFlow is requesting microphone access before starting local dictation."
+            statusMessage = "Omdo is requesting microphone access before starting local dictation."
             return
         case .starting:
             statusMessage = "Preparing the microphone before recording."
@@ -3891,7 +3891,7 @@ final class DictaFlowAppState: ObservableObject {
         case .idle:
             break
         case .requestingAccessibilityPermission(let targetApplicationName):
-            statusMessage = "DictaFlow is requesting Accessibility permission before inserting into \(targetApplicationName ?? "the target app")."
+            statusMessage = "Omdo is requesting Accessibility permission before inserting into \(targetApplicationName ?? "the target app")."
             return
         case .inserting(let targetApplicationName):
             statusMessage = "Inserting the latest transcript into \(targetApplicationName ?? "the focused app")."
@@ -3947,7 +3947,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         if !isHotkeyRegistered {
-            statusMessage = "DictaFlow could not register the global shortcut. Open the app window to troubleshoot."
+            statusMessage = "Omdo could not register the global shortcut. Open the app window to troubleshoot."
             return
         }
 
@@ -3960,7 +3960,7 @@ final class DictaFlowAppState: ObservableObject {
         case .firstLaunch where onboardingPresentation != nil:
             statusMessage = "First-launch session. Open Dictation to prepare a Whisper model for offline use."
         case .firstLaunch, .returningUser:
-            statusMessage = "DictaFlow is ready in the menu bar. Press \(hotkeyDisplayText) to start recording."
+            statusMessage = "Omdo is ready in the menu bar. Press \(hotkeyDisplayText) to start recording."
         }
     }
 }
