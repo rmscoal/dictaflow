@@ -11,8 +11,8 @@ import Foundation
 enum AgentVoiceHostInstaller {
     typealias Host = AgentVoiceHostAvailability.Host
 
-    static let serverAlias = "omdo"
-    static let legacyAlias = "dictaflow"
+    nonisolated static let serverAlias = "omdo"
+    nonisolated static let legacyAlias = "dictaflow"
 
     // MARK: - State
 
@@ -265,9 +265,10 @@ enum AgentVoiceHostInstaller {
                   current.exitCode == 0 else { return state }
             state.configuredEntryFound = true
             if host == .codex {
-                state.entryMatchesCurrent = codexEntryMatches(json: Data(current.stdout.utf8), executable: executable, arguments: arguments)
-                let config = migration.flatMap { try? AgentVoiceHostMigration.read($0.configuration) }
-                state.entryDisabled = (try? CodexMCPConfiguration(config).isDisabled(alias: serverAlias)) == true
+                if let entry = try? JSONDecoder().decode(CodexEntry.self, from: Data(current.stdout.utf8)) {
+                    state.entryMatchesCurrent = entry.matches(executable: executable, arguments: arguments)
+                    state.entryDisabled = entry.enabled == false
+                }
             } else {
                 state.entryMatchesCurrent = claudeOutputMatches(output: current.stdout, executable: executable, arguments: arguments)
             }
@@ -383,12 +384,18 @@ enum AgentVoiceHostInstaller {
 
     // MARK: - Verification helpers
 
-    static func codexEntryMatches(json: Data, executable: String, arguments: [String]) -> Bool {
+    private struct CodexEntry: Decodable {
         struct Transport: Decodable { var command: String; var args: [String]? }
-        struct Entry: Decodable { var transport: Transport }
-        guard let entry = try? JSONDecoder().decode(Entry.self, from: json) else { return false }
-        guard entry.transport.command == executable else { return false }
-        return entry.transport.args == arguments
+        let transport: Transport
+        let enabled: Bool?
+
+        func matches(executable: String, arguments: [String]) -> Bool {
+            transport.command == executable && transport.args == arguments
+        }
+    }
+
+    static func codexEntryMatches(json: Data, executable: String, arguments: [String]) -> Bool {
+        (try? JSONDecoder().decode(CodexEntry.self, from: json))?.matches(executable: executable, arguments: arguments) == true
     }
 
     /// Checks that `mcp get` output names the exact helper command and arguments.

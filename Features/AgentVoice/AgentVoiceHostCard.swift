@@ -75,11 +75,14 @@ struct AgentVoiceHostCard: View {
     private var guidance: String? {
         switch status {
         case .configured(let hooksInstalled):
-            return hooksInstalled ? nil : "Update setup to add the missing voice hooks."
+            guard !hooksInstalled else { return nil }
+            return offersOneClickSetup ? "Update setup to add the missing voice hooks."
+                : "Open Show setup and follow the Voice hooks instructions."
         case .needsMigration:
             return "Close the host before replacing the old DictaFlow registration."
         case .updateInterrupted:
-            return "Close the host, then choose Recover setup."
+            return offersOneClickSetup ? "Close the host, then choose Recover setup."
+                : "Install or restore the \(brand.displayName) CLI, then reopen this page to recover setup."
         case .needsSetup, .manualOnly:
             return hint
         case .checking:

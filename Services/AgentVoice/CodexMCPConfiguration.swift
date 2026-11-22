@@ -27,6 +27,7 @@ nonisolated struct CodexMCPConfiguration {
 
     private let text: String
     private let entries: [Entry]
+    private let hooksReferenceManagedAlias: Bool
 
     init(_ data: Data?) throws {
         guard let text = data.map({ String(data: $0, encoding: .utf8) }) ?? "" else { throw EditError.unsupported }
@@ -34,12 +35,14 @@ nonisolated struct CodexMCPConfiguration {
         var section: [Key] = []
         var entries: [Entry] = []
         var valueDepth = 0
+        var hookValues: [String] = []
         for line in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let content = try Self.withoutComment(line)
             let first = content.firstIndex(where: { !$0.isWhitespace }) ?? content.endIndex
             guard first < content.endIndex else { continue }
             let active = content[first...]
             if valueDepth > 0 {
+                if entries.last?.path.first?.name == "hooks" { hookValues.append(String(active)) }
                 valueDepth += try Self.bracketBalance(active)
                 guard valueDepth >= 0 else { throw EditError.unsupported }
                 continue
@@ -65,6 +68,7 @@ nonisolated struct CodexMCPConfiguration {
                    path.count < 3 || path[2].name == "command" || path[2].name == "args" {
                     throw EditError.unsupported
                 }
+                if path.first?.name == "hooks" { hookValues.append(String(active)) }
                 entries.append(Entry(path: path, value: value))
             }
         }
@@ -74,6 +78,29 @@ nonisolated struct CodexMCPConfiguration {
             throw EditError.unsupported
         }
         self.entries = entries
+        // Tokenize quoted strings so assignments inside a command or a comment
+        // cannot be mistaken for hook fields.
+        let hooks = hookValues.joined(separator: "\n")
+        let tokens = /"(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_-]+|[^\s]/
+        let aliases = [AgentVoiceHostInstaller.legacyAlias, AgentVoiceHostInstaller.serverAlias]
+        let parts = hooks.matches(of: tokens).map(\.output)
+        hooksReferenceManagedAlias = try parts.indices.dropLast(2).contains { index in
+            guard parts[index + 1] == "=" else { return false }
+            let keyToken = parts[index]
+            let key: String
+            if keyToken.first == "\"" || keyToken.first == "'" {
+                guard let decoded = Self.string(keyToken) else { throw EditError.unsupported }
+                key = decoded
+            } else {
+                key = String(keyToken)
+            }
+            guard key == "server" || key == "matcher" else { return false }
+            let token = parts[index + 2]
+            guard let value = Self.string(token) else { throw EditError.unsupported }
+            return aliases.contains {
+                key == "server" ? value == $0 : value.contains("mcp__\($0)__")
+            }
+        }
     }
 
     var aliases: Set<String> {
@@ -85,6 +112,7 @@ nonisolated struct CodexMCPConfiguration {
     func candidate(executable: String, arguments: [String], ownsPath: (String) -> Bool) throws -> Data {
         let old = AgentVoiceHostInstaller.legacyAlias
         let new = AgentVoiceHostInstaller.serverAlias
+        guard !hooksReferenceManagedAlias else { throw AgentVoiceHostMigration.Failure.unownedHook }
         if aliases.contains(old), aliases.contains(new) { throw EditError.collision }
         guard aliases.contains(old) || aliases.contains(new) else {
             let values = try arguments.map(Self.literal).joined(separator: ", ")

@@ -1,4 +1,5 @@
 import AgentVoice
+import GRDB
 import os
 import XCTest
 @testable import DictaFlow_Dev
@@ -64,6 +65,83 @@ final class OmdoMigrationTests: XCTestCase {
         XCTAssertTrue(events.isEmpty)
     }
 
+    func testCommittedStoreFailuresStayLocalAndDoNotCreateReplacementDatabases() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
+        let migration = ApplicationSupportMigration(paths: paths)
+        _ = try await migration.prepare { false }
+
+        let historyURL = paths.current.appendingPathComponent("History/history.sqlite")
+        let voiceURL = paths.current.appendingPathComponent("AgentVoice/voice.sqlite")
+        let corrupt = Data(repeating: 0x61, count: 4096)
+        try corrupt.write(to: voiceURL, options: .atomic)
+        do {
+            let withCorruptVoice = try await migration.prepare { false }
+            XCTAssertThrowsError(try withCorruptVoice.voice.get())
+            try await withCorruptVoice.history.validateStorage()
+            XCTAssertEqual(try Data(contentsOf: voiceURL), corrupt)
+        }
+
+        try FileManager.default.removeItem(at: historyURL)
+        try FileManager.default.removeItem(at: voiceURL)
+        let withMissingStores = try await migration.prepare { false }
+        XCTAssertThrowsError(try withMissingStores.voice.get())
+        do {
+            try await withMissingStores.history.validateStorage()
+            XCTFail("Expected the missing history database to be reported")
+        } catch ApplicationSupportMigration.Failure.missingCommittedData(let url) {
+            XCTAssertEqual(url, historyURL)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: historyURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: voiceURL.path))
+    }
+
+    func testStagedResumeRejectsMissingImportedHistory() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
+        do {
+            let history = SQLiteHistoryStore(root: paths.legacy.appendingPathComponent("History"))
+            try await history.validateStorage()
+        }
+        let migration = ApplicationSupportMigration(paths: paths)
+        let checks = OSAllocatedUnfairLock(initialState: 0)
+        do {
+            _ = try await migration.prepare { checks.withLock { count in count += 1; return count == 3 } }
+            XCTFail("Expected an interruption after promotion")
+        } catch ApplicationSupportMigration.Failure.sourceChanged {}
+
+        let imported = paths.current.appendingPathComponent("History/history.sqlite")
+        try FileManager.default.removeItem(at: imported)
+        do {
+            _ = try await migration.prepare { false }
+            XCTFail("Expected a missing imported database to prevent commit")
+        } catch ApplicationSupportMigration.Failure.missingCommittedData(let url) {
+            XCTAssertEqual(url, imported)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: imported.path))
+    }
+
+    func testStagedResumeReimportsChangedDevFallbackPrompt() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
+        let relative = "Prompts/refinement.txt"
+        let fallback = paths.applicationSupport.appendingPathComponent("DictaFlow/\(relative)")
+        try FileManager.default.createDirectory(at: fallback.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("initial".utf8).write(to: fallback)
+        let migration = ApplicationSupportMigration(paths: paths)
+        let changed = OSAllocatedUnfairLock(initialState: false)
+        do {
+            _ = try await migration.prepare(report: { progress in
+                guard progress == .openingStores else { return }
+                let result: Void? = try? Data("changed fallback".utf8).write(to: fallback, options: .atomic)
+                changed.withLock { $0 = result != nil }
+            }) { false }
+            XCTFail("Expected the changed fallback to prevent commit")
+        } catch ApplicationSupportMigration.Failure.sourceChanged {}
+        XCTAssertTrue(changed.withLock { $0 })
+
+        _ = try await migration.prepare { false }
+        XCTAssertEqual(try String(contentsOf: paths.current.appendingPathComponent(relative), encoding: .utf8), "changed fallback")
+        XCTAssertEqual(try String(contentsOf: paths.uncommittedData.appendingPathComponent(relative), encoding: .utf8), "initial")
+    }
+
     func testUpgradeReportsStagesAndIncompleteSpeechModels() async throws {
         let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
         let assetDirectory = paths.legacy.appendingPathComponent("Models/Liquid/\(LiquidAssets.revision)")
@@ -73,6 +151,50 @@ final class OmdoMigrationTests: XCTestCase {
         _ = try await ApplicationSupportMigration(paths: paths).prepare(report: { await progress.append($0) }) { false }
         let events = await progress.values
         XCTAssertEqual(events, [.started(resuming: false), .copyingData, .checkingSpeechModels, .speechModelsIncomplete, .openingStores])
+    }
+
+    func testStorageSpaceCheckIgnoresUnusedLiquidRevision() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
+        let unused = paths.legacy.appendingPathComponent("Models/Liquid/old-revision/unused.gguf")
+        try FileManager.default.createDirectory(at: unused.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: unused)
+        let volume = try paths.applicationSupport.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        let capacity = try XCTUnwrap(volume.volumeAvailableCapacityForImportantUsage)
+        do {
+            let handle = try FileHandle(forWritingTo: unused)
+            defer { try? handle.close() }
+            // Use a sparse file so this fixture reserves no model-sized storage.
+            try handle.truncate(atOffset: UInt64(capacity) + 1_073_741_824)
+        }
+        let prompt = paths.legacy.appendingPathComponent("Prompts/refinement.txt")
+        try FileManager.default.createDirectory(at: prompt.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("keep this prompt".utf8).write(to: prompt)
+        _ = try await ApplicationSupportMigration(paths: paths).prepare { false }
+        XCTAssertEqual(try Data(contentsOf: paths.current.appendingPathComponent("Prompts/refinement.txt")),
+                       try Data(contentsOf: prompt))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.current.appendingPathComponent("Models/Liquid").path))
+    }
+
+    func testDatabaseQuickCheckReportsTheRetainedLegacyPath() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
+        let legacy = paths.legacy.appendingPathComponent("History/history.sqlite")
+        try FileManager.default.createDirectory(at: legacy.deletingLastPathComponent(), withIntermediateDirectories: true)
+        do {
+            let db = try DatabaseQueue(path: legacy.path)
+            try await db.writeWithoutTransaction {
+                try $0.execute(sql: "CREATE TABLE fixture (value INTEGER CHECK (value > 0))")
+                try $0.execute(sql: "PRAGMA ignore_check_constraints = ON")
+                try $0.execute(sql: "INSERT INTO fixture VALUES (-1)")
+            }
+        }
+        do {
+            _ = try await ApplicationSupportMigration(paths: paths).prepare { false }
+            XCTFail("Expected quick_check to detect the invalid row")
+        } catch ApplicationSupportMigration.Failure.invalidLegacyDatabase(let url) {
+            XCTAssertEqual(url, legacy)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacy.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.current.path))
     }
 
     func testInterruptedUpgradeReportsResumeAndWaitsForLegacyApp() async throws {
@@ -263,6 +385,55 @@ final class OmdoMigrationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "invalid model")
     }
 
+    func testSharedModelRetryDoesNotRestoreRemovedEncoder() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow")
+        let model = try XCTUnwrap(WhisperModelDescriptor.allCases.first)
+        let refinement = try XCTUnwrap(RefinementModelDescriptor.storedModels.first)
+        let encoder = paths.legacySharedModels.appendingPathComponent(model.encoderDirectoryName)
+        try FileManager.default.createDirectory(at: encoder, withIntermediateDirectories: true)
+        try Data("encoder".utf8).write(to: encoder.appendingPathComponent("model.mil"))
+        let corrupt = paths.legacySharedModels.appendingPathComponent(refinement.filename)
+        try Data("bad cache".utf8).write(to: corrupt)
+        try FileManager.default.createDirectory(at: paths.sharedModels, withIntermediateDirectories: true)
+        try Data("existing model".utf8).write(to: paths.sharedModels.appendingPathComponent(model.filename))
+        do {
+            try await WhisperModelDownloadService.seedOmdoModels(paths: paths)
+            XCTFail("Expected the corrupt refinement model to require a retry")
+        } catch ModelDownloadServiceError.checksumMismatch {}
+        let imported = paths.sharedModels.appendingPathComponent(model.encoderDirectoryName)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: imported.path))
+        try FileManager.default.removeItem(at: imported)
+        try FileManager.default.removeItem(at: corrupt)
+        try await WhisperModelDownloadService.seedOmdoModels(paths: paths)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: imported.path))
+    }
+
+    func testCodexInlineHooksReferencingEitherAliasRequireManualMigration() throws {
+        let hooks = """
+        [[hooks.Stop]]
+        hooks = [
+            { type = "mcp_tool", server = 'SERVER', tool = "on_stop" },
+        ]
+        """
+        let registration = """
+
+        [mcp_servers.dictaflow]
+        command = "\(legacyHelper)"
+        args = []
+        """
+        for alias in ["dictaflow", "omdo"] {
+            let source = hooks.replacingOccurrences(of: "SERVER", with: alias) + registration
+            let config = try CodexMCPConfiguration(Data(source.utf8))
+            XCTAssertThrowsError(try config.candidate(executable: currentHelper, arguments: [], ownsPath: { _ in true })) {
+                guard case AgentVoiceHostMigration.Failure.unownedHook = $0 else { return XCTFail("Expected manual migration") }
+            }
+        }
+        let unrelated = hooks.replacingOccurrences(of: "SERVER", with: "other")
+        let config = try CodexMCPConfiguration(Data((unrelated + registration).utf8))
+        let migrated = try config.candidate(executable: currentHelper, arguments: [], ownsPath: { _ in true })
+        XCTAssertTrue(String(decoding: migrated, as: UTF8.self).hasPrefix(unrelated))
+    }
+
     func testCodexRekeysBothTableAndDottedNamespacesWithoutLosingPolicy() throws {
         let args = AgentVoiceHostInstaller.serverArguments(appID: "com.dictaflow.dev", installationID: installation, host: .codex)
         let array = args.map { "\"\($0)\"" }.joined(separator: ", ")
@@ -381,6 +552,39 @@ final class OmdoMigrationTests: XCTestCase {
             path: "/fixture", executable: currentHelper, arguments: ["different installation"], ownsPath: { _ in true }))
     }
 
+    func testHostRecoveryFinalizesAnAlreadyAppliedPairWithoutRewritingIt() async throws {
+        let root = try fixture()
+        let config = root.appendingPathComponent("config.toml")
+        let hooks = root.appendingPathComponent("hooks.json")
+        let migration = AgentVoiceHostMigration(host: .codex, configuration: config, hooks: hooks, applicationSupport: root)
+        let changes = [
+            try AgentVoiceHostMigration.change(at: config, original: nil, candidate: Data("new registry".utf8)),
+            try AgentVoiceHostMigration.change(at: hooks, original: nil, candidate: Data("new hooks".utf8)),
+        ]
+        var checks = 0
+        do {
+            try await migration.apply(executable: currentHelper, arguments: [], prepare: { changes }, verify: { _, _ in }) {
+                checks += 1
+                if checks >= 3 { throw AgentVoiceHostMigration.Failure.hostRunning("Codex") }
+            }
+            XCTFail("Expected the pending journal to survive the interruption")
+        } catch AgentVoiceHostMigration.Failure.interrupted {}
+
+        // Simulate the files left by a run that reached cleanup.
+        try changes[1].candidate.write(to: hooks)
+        checks = 0
+        try await migration.apply(executable: currentHelper, arguments: [], prepare: {
+            XCTFail("Expected the existing journal to be reused")
+            return []
+        }, verify: { _, _ in }) {
+            checks += 1
+            if checks > 1 { throw AgentVoiceHostMigration.Failure.hostRunning("Codex") }
+        }
+        XCTAssertFalse(migration.hasPendingUpdate)
+        XCTAssertEqual(try AgentVoiceHostMigration.read(config), changes[0].candidate)
+        XCTAssertEqual(try AgentVoiceHostMigration.read(hooks), changes[1].candidate)
+    }
+
     func testHostUpdateResumesAfterLossOfQuiescenceBetweenFiles() async throws {
         let root = try fixture()
         let config = root.appendingPathComponent("config.toml")
@@ -398,7 +602,12 @@ final class OmdoMigrationTests: XCTestCase {
                 if checks >= 3 { throw AgentVoiceHostMigration.Failure.hostRunning("Codex") }
             }
             XCTFail("Expected recovery to be required")
-        } catch AgentVoiceHostMigration.Failure.interrupted {}
+        } catch AgentVoiceHostMigration.Failure.interrupted(let cause, let recoveryError) {
+            guard case AgentVoiceHostMigration.Failure.hostRunning = cause,
+                  case AgentVoiceHostMigration.Failure.hostRunning = recoveryError else {
+                return XCTFail("Expected both the apply and rollback errors")
+            }
+        }
         XCTAssertTrue(migration.hasPendingUpdate)
         XCTAssertEqual(try AgentVoiceHostMigration.read(config), changes[0].candidate)
         XCTAssertNil(try AgentVoiceHostMigration.read(hooks))

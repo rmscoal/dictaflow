@@ -895,15 +895,28 @@ extension WhisperModelDownloadService {
         guard !Set(installed).isDisjoint(with: whisperCandidates + refinementCandidates) else { return }
         await onCopy()
         var needsRetry = false
+        let imported = work.appendingPathComponent("Imported")
+        try MigrationFiles.makePrivateDirectory(imported)
         try Self.ensureModelsDirectoryExists(at: target, using: files)
         for model in WhisperModelDescriptor.allCases {
             try Task.checkCancellation()
             let names = [model.encoderDirectoryName, model.encoderDisabledDirectoryName]
             if installed.contains(model.filename) {
-                if try !copyCachedModel(model, from: source, to: target, work: work) { needsRetry = true }
+                let receipt = imported.appendingPathComponent(model.filename)
+                if try MigrationFiles.attributes(receipt) == nil {
+                    guard try copyCachedModel(model, from: source, to: target, work: work) else {
+                        needsRetry = true
+                        continue
+                    }
+                    try MigrationFiles.replaceDurably(Data(), at: receipt)
+                }
+                // Storage can remove a model while another import still needs retrying.
+                guard try MigrationFiles.attributes(target.appendingPathComponent(model.filename)) != nil else { continue }
             }
             let candidates = names.filter { installed.contains($0) }
             guard !candidates.isEmpty else { continue }
+            let receipt = imported.appendingPathComponent(model.encoderDirectoryName)
+            guard try MigrationFiles.attributes(receipt) == nil else { continue }
             guard candidates.count == 1, let name = candidates.first else { needsRetry = true; continue }
             let origin = source.appendingPathComponent(name)
             guard isValidEncoderDirectory(at: origin),
@@ -912,7 +925,11 @@ extension WhisperModelDownloadService {
             // enabled setting. Never overwrite it or create both directories.
             let installedEncoder = try names.first { try MigrationFiles.attributes(target.appendingPathComponent($0)) != nil }
             if let installedEncoder {
-                if !isValidEncoderDirectory(at: target.appendingPathComponent(installedEncoder)) { needsRetry = true }
+                if isValidEncoderDirectory(at: target.appendingPathComponent(installedEncoder)) {
+                    try MigrationFiles.replaceDurably(Data(), at: receipt)
+                } else {
+                    needsRetry = true
+                }
                 continue
             }
             let copied = try copyCacheItem(origin, to: target.appendingPathComponent(name), work: work) { copy in
@@ -920,11 +937,18 @@ extension WhisperModelDownloadService {
                 guard current == candidates else { throw ApplicationSupportMigration.Failure.sourceChanged }
                 return Self.isValidEncoderDirectory(at: copy)
             }
-            if !copied { needsRetry = true }
+            if copied { try MigrationFiles.replaceDurably(Data(), at: receipt) }
+            else { needsRetry = true }
         }
         for model in RefinementModelDescriptor.storedModels where installed.contains(model.filename) {
             try Task.checkCancellation()
-            if try !copyCachedModel(model, from: source, to: target, work: work) { needsRetry = true }
+            let receipt = imported.appendingPathComponent(model.filename)
+            guard try MigrationFiles.attributes(receipt) == nil else { continue }
+            if try copyCachedModel(model, from: source, to: target, work: work) {
+                try MigrationFiles.replaceDurably(Data(), at: receipt)
+            } else {
+                needsRetry = true
+            }
         }
         let latest = try files.contentsOfDirectory(atPath: source.path)
         if Set(latest) != Set(installed) || latest.contains(where: { $0.hasSuffix(".download") || $0.hasSuffix(".extracting") }) {

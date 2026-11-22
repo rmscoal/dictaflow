@@ -24,14 +24,20 @@ struct AgentVoiceHostMigration {
     }
 
     enum Failure: LocalizedError {
-        case manual, hostRunning(String), conflict, interrupted, manualRecovery(URL), unownedHook
+        case manual, hostRunning(String), conflict, manualRecovery(URL), unownedHook
+        case interrupted(cause: any Error, recoveryError: any Error)
+        case committedCleanup(any Error, canRetry: Bool)
 
         var errorDescription: String? {
             switch self {
             case .manual: return "Use the manual configuration below to update this profile safely."
             case .hostRunning(let host): return "Quit \(host) and close any sessions using this profile, then try again."
             case .conflict: return "The host configuration changed or is owned by another installation. Review the entries before retrying."
-            case .interrupted: return "The host update was interrupted. Quit the host and choose Recover setup. If the files changed since the update, review them manually."
+            case .interrupted(let cause, _):
+                return "The host update was interrupted. Quit the host and choose Recover setup. If the files changed since the update, review them manually. \(cause.localizedDescription)"
+            case .committedCleanup(let error, let canRetry):
+                let action = canRetry ? " Quit the host and choose Recover setup to finish." : ""
+                return "The host configuration was updated, but Omdo could not finish cleaning up its recovery journal. \(error.localizedDescription)\(action)"
             case .manualRecovery(let journal):
                 return "Reconcile the host profile with the manual setup below. Then move the recovery file at \(journal.path) aside before retrying. Keep that file private."
             case .unownedHook: return "A custom voice hook references dictaflow or omdo. Review it in your host before changing the registration."
@@ -72,9 +78,11 @@ struct AgentVoiceHostMigration {
         guard journal.changes.map(\.url) == [configuration] + (hooks.map { [$0] } ?? []) else { throw Failure.manualRecovery(journalURL) }
 
         let changes = journal.changes
+        var alreadyApplied = true
         for change in changes {
             let current = try Self.read(change.url)
             guard current == change.original || current == change.candidate else { throw Failure.manualRecovery(journalURL) }
+            if current != change.candidate { alreadyApplied = false }
         }
         // Validate the candidate in an isolated profile before any live edit.
         try await verify(changes, directory)
@@ -83,18 +91,21 @@ struct AgentVoiceHostMigration {
         }
 
         do {
-            for change in changes {
-                try await checkIdle()
-                let current = try Self.read(change.url)
-                if current == change.candidate { continue }
-                guard current == change.original else { throw Failure.conflict }
-                try Self.write(change.candidate, to: change)
+            if !alreadyApplied {
+                for change in changes {
+                    try await checkIdle()
+                    let current = try Self.read(change.url)
+                    if current == change.candidate { continue }
+                    guard current == change.original else { throw Failure.conflict }
+                    try Self.write(change.candidate, to: change)
+                }
             }
             for change in changes where try Self.read(change.url) != change.candidate {
                 throw Failure.conflict
             }
-            try finish()
-        } catch {
+        } catch let applyError {
+            // Recovery may only need to finalize a pair from a previous run.
+            guard !alreadyApplied else { throw applyError }
             do {
                 try await checkIdle()
                 // Reverse the order so hooks already refer to the old alias
@@ -105,11 +116,26 @@ struct AgentVoiceHostMigration {
                     guard current == change.candidate else { throw Failure.conflict }
                     try Self.write(change.original, to: change)
                 }
-                try finish()
             } catch {
-                throw Failure.interrupted
+                throw Failure.interrupted(cause: applyError, recoveryError: error)
             }
-            throw error
+            do { try finish() }
+            catch where hasPendingUpdate {
+                throw Failure.interrupted(cause: applyError, recoveryError: error)
+            }
+            catch { throw applyError }
+            throw applyError
+        }
+
+        // The verified pair is committed. A remaining journal can be finalized
+        // on retry without rewriting either file.
+        do {
+            for directory in Set(changes.map { $0.url.deletingLastPathComponent() }) {
+                try MigrationFiles.syncDirectory(directory)
+            }
+            try finish()
+        } catch {
+            throw Failure.committedCleanup(error, canRetry: hasPendingUpdate)
         }
     }
 

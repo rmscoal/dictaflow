@@ -253,6 +253,30 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         XCTAssertEqual(state.status, .configured)
     }
 
+    func testRefreshUsesCodexDisabledStateWithUnsupportedEditSyntax() async throws {
+        let home = try makeHome()
+        let config = home.appendingPathComponent(".codex/config.toml")
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let configData = Data("instructions = '''multiline TOML'''".utf8)
+        try configData.write(to: config)
+        XCTAssertThrowsError(try CodexMCPConfiguration(configData))
+
+        let payload: [String: Any] = [
+            "enabled": false,
+            "transport": ["type": "stdio", "command": executable, "args": arguments(host: .codex)],
+        ]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+        let runner = StubRunner(handlers: [
+            { _, args in args == ["mcp", "get", "--json", "omdo"]
+                ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: json, stderr: "") : nil },
+        ])
+        let state = await AgentVoiceHostInstaller.refreshState(
+            host: .codex, executable: executable, appID: "com.dictaflow.dev",
+            installationID: installation, runner: runner, homeDirectoryURL: home,
+            cliDiscovery: { _ in "/bin/codex" })
+        XCTAssertEqual(state.status, .disabled)
+    }
+
     private final class CallLog: Sendable {
         private let lock = NSLock()
         private var calls: [[String]] = []

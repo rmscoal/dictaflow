@@ -319,12 +319,24 @@ final class DictaFlowAppState: ObservableObject {
         applyInitialVoiceHistoryRetention()
     }
 
+    private static let recordingDuringLiquidCheck = "Omdo is checking the existing speech model. Try recording again when the check finishes."
+
     private func observeAgentVoiceDownloads() {
         guard let agentVoice else { return }
         agentVoiceModelObservation = agentVoice.$isModelReady.combineLatest(agentVoice.$modelDownloadProgress, agentVoice.$activeError,
                                                                           agentVoice.$isCheckingSpeechModel)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .sink { [weak self] _, _, _, checking in
+                guard let self else { return }
+                if !checking {
+                    if self.interfaceIssue?.message == Self.recordingDuringLiquidCheck { self.interfaceIssue = nil }
+                    if self.preservedStatusMessage == Self.recordingDuringLiquidCheck {
+                        self.clearPreservedStatusMessage()
+                        self.updateStatusMessage()
+                    }
+                }
+                self.objectWillChange.send()
+            }
         agentVoice.onModelDownloadFinished = { [weak self] result in
             switch result {
             case .success:
@@ -2899,7 +2911,7 @@ final class DictaFlowAppState: ObservableObject {
             releaseRecordingAudioLease()
             isOnboardingPracticeSession = false
             if usesLiquid, agentVoice?.isCheckingSpeechModel == true {
-                setPreservedStatusMessage("Omdo is checking the existing speech model. Try recording again when the check finishes.",
+                setPreservedStatusMessage(Self.recordingDuringLiquidCheck,
                                           issueTitle: AgentVoiceCoordinator.checkingSpeechModelText, severity: .information)
                 return
             }

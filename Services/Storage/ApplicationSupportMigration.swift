@@ -234,7 +234,7 @@ nonisolated struct ApplicationSupportMigration: Sendable {
 
     struct Stores {
         let history: SQLiteHistoryStore
-        let voice: VoiceStore
+        let voice: Result<VoiceStore, any Error>
         var isNewStorage = false
     }
 
@@ -268,7 +268,7 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         if var committed = journal, committed.phase == .committed {
             guard try MigrationFiles.attributes(destination) != nil else { throw Failure.missingCommittedData(destination) }
             guard try matchesDestination(destination, journal: committed) else { throw Failure.destinationConflict(destination) }
-            let stores = try await openStores(at: destination, requireExisting: true)
+            let stores = reopenCommittedStores(at: destination)
             if committed.hasDestinationMarker != true {
                 try markDestination(destination, journal: &committed)
                 try save(committed, to: journalURL)
@@ -277,9 +277,10 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         }
 
         let components = Self.components
-        let source = try snapshotSource(components)
+        let hasIndependentDestination = try journal == nil && MigrationFiles.attributes(destination) != nil
+        let source = try snapshotSource(includeDevFallback: !hasIndependentDestination)
         // A fully independent existing Omdo installation needs no data import.
-        if journal == nil, try MigrationFiles.attributes(destination) != nil {
+        if hasIndependentDestination {
             guard source.values.allSatisfy(\.isEmpty) else { throw Failure.destinationConflict(destination) }
             try MigrationFiles.requireDirectory(destination)
             return try await openStores(at: destination)
@@ -316,7 +317,8 @@ nonisolated struct ApplicationSupportMigration: Sendable {
             for parent in [paths.legacy, paths.legacy.appendingPathComponent("Models")] {
                 if try MigrationFiles.attributes(parent) != nil { try MigrationFiles.requireDirectory(parent) }
             }
-            let copiedBytes = source.values.flatMap(\.values).filter { !$0.directory }.reduce(Int64(0)) { $0 + $1.length }
+            let copiedBytes = source.filter { $0.key != "Models/Liquid" }.values
+                .flatMap(\.values).filter { !$0.directory }.reduce(Int64(0)) { $0 + $1.length }
             try MigrationFiles.requireSpace(copiedBytes, at: staging)
             for component in components where component != "Models/Liquid" {
                 let origin = paths.legacy.appendingPathComponent(component)
@@ -335,18 +337,23 @@ nonisolated struct ApplicationSupportMigration: Sendable {
                     }
                 }
             }
-            try importLegacyDevPrompt(into: staging)
+            if source[Self.devFallbackComponent] != nil {
+                try importLegacyDevPrompt(into: staging)
+            }
             if reportsMigration { await report(.checkingSpeechModels) }
             if try copyLiquid(into: staging), reportsMigration { await report(.speechModelsIncomplete) }
-            for relativePath in ["History/history.sqlite", "AgentVoice/voice.sqlite"] {
-                do { try normalizeDatabase(staging.appendingPathComponent(relativePath)) }
+            for relativePath in Self.storeDatabasePaths {
+                do {
+                    try normalizeDatabase(staging.appendingPathComponent(relativePath),
+                                          legacyURL: paths.legacy.appendingPathComponent(relativePath))
+                }
                 catch let error as DatabaseError where error.resultCode == .SQLITE_CORRUPT || error.resultCode == .SQLITE_NOTADB {
                     throw Failure.invalidLegacyDatabase(paths.legacy.appendingPathComponent(relativePath))
                 }
             }
             try markDestination(staging, journal: &pending)
             try flushStagedTree(staging)
-            guard !legacyIsRunning(), try source == snapshotSource(components) else { throw Failure.sourceChanged }
+            guard !legacyIsRunning(), try source == snapshotSource() else { throw Failure.sourceChanged }
             pending.phase = .staged
             try save(pending, to: journalURL)
             try MigrationFiles.promote(staging, to: destination)
@@ -354,8 +361,14 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         }
 
         if reportsMigration { await report(.openingStores) }
+        for relativePath in Self.storeDatabasePaths {
+            let parts = relativePath.split(separator: "/", maxSplits: 1).map(String.init)
+            if source[parts[0]]?[parts[1]] != nil {
+                try Self.requireStoreDatabase(at: destination.appendingPathComponent(relativePath))
+            }
+        }
         var stores = try await openStores(at: destination)
-        guard !legacyIsRunning(), try source == snapshotSource(components) else { throw Failure.sourceChanged }
+        guard !legacyIsRunning(), try source == snapshotSource() else { throw Failure.sourceChanged }
         guard var committed = journal else { throw Failure.destinationConflict(destination) }
         if committed.hasDestinationMarker != true {
             try markDestination(destination, journal: &committed)
@@ -381,13 +394,19 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         return try MigrationFiles.attributes(paths.current) == nil && legacyDevPrompt() != nil
     }
 
-    private func snapshotSource(_ components: [String]) throws -> [String: [String: MigrationFiles.Fingerprint]] {
+    private static let devFallbackComponent = "Dev fallback prompt"
+
+    private func snapshotSource(includeDevFallback: Bool = true) throws -> [String: [String: MigrationFiles.Fingerprint]] {
         for parent in [paths.legacy, paths.legacy.appendingPathComponent("Models")] {
             if try MigrationFiles.attributes(parent) != nil { try MigrationFiles.requireDirectory(parent) }
         }
-        return try Dictionary(uniqueKeysWithValues: components.map {
+        var source = try Dictionary(uniqueKeysWithValues: Self.components.map {
             ($0, try MigrationFiles.snapshot(paths.legacy.appendingPathComponent($0)))
         })
+        if includeDevFallback, source["Prompts"]?["refinement.txt"] == nil, let fallback = try legacyDevPrompt() {
+            source[Self.devFallbackComponent] = try MigrationFiles.snapshot(fallback)
+        }
+        return source
     }
 
     private func importLegacyDevPrompt(into staging: URL) throws {
@@ -419,20 +438,24 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         guard try MigrationFiles.attributes(old) != nil else { return false }
         let target = staging.appendingPathComponent(component)
         var hasExistingAsset = false
-        var verifiedAssets = 0
-        for asset in LiquidAssets.files {
+        let verifiedAssets = try LiquidAssets.files.filter { asset in
             let source = old.appendingPathComponent(asset.name)
-            guard try MigrationFiles.attributes(source) != nil else { continue }
+            guard try MigrationFiles.attributes(source) != nil else { return false }
             hasExistingAsset = true
-            guard try LiquidAssets.verify(source, asset: asset) else { continue }
+            return try LiquidAssets.verify(source, asset: asset)
+        }
+        if !verifiedAssets.isEmpty {
+            try MigrationFiles.requireSpace(verifiedAssets.reduce(Int64(0)) { $0 + $1.bytes }, at: staging)
             try MigrationFiles.makePrivateDirectory(target)
+        }
+        for asset in verifiedAssets {
+            let source = old.appendingPathComponent(asset.name)
             let copy = target.appendingPathComponent(asset.name)
             try FileManager.default.copyItem(at: source, to: copy)
             guard try LiquidAssets.verify(copy, asset: asset) else { throw Failure.sourceChanged }
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: copy.path)
-            verifiedAssets += 1
         }
-        return hasExistingAsset && verifiedAssets < LiquidAssets.files.count
+        return hasExistingAsset && verifiedAssets.count < LiquidAssets.files.count
     }
 
     private func markDestination(_ root: URL, journal: inout Journal) throws {
@@ -476,7 +499,7 @@ nonisolated struct ApplicationSupportMigration: Sendable {
 
     /// The staged database and sidecars are a private clone. Let SQLite recover
     /// that clone and make a standalone backup before an app store opens it.
-    private func normalizeDatabase(_ url: URL) throws {
+    private func normalizeDatabase(_ url: URL, legacyURL: URL) throws {
         guard let type = try MigrationFiles.attributes(url)?[.type] as? FileAttributeType else { return }
         guard type == .typeRegular else { throw Failure.unsafeItem(url) }
         let clean = url.deletingLastPathComponent().appendingPathComponent("migration-\(UUID().uuidString).sqlite")
@@ -485,7 +508,7 @@ nonisolated struct ApplicationSupportMigration: Sendable {
             let backup = try DatabaseQueue(path: clean.path)
             try original.backup(to: backup)
             let result = try backup.read { try String.fetchAll($0, sql: "PRAGMA quick_check") }
-            guard result == ["ok"] else { throw Failure.unsafeItem(url) }
+            guard result == ["ok"] else { throw Failure.invalidLegacyDatabase(legacyURL) }
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: clean.path)
         for suffix in ["-wal", "-shm", "-journal"] {
@@ -504,22 +527,35 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         }
     }
 
-    private func openStores(at root: URL, requireExisting: Bool = false) async throws -> Stores {
+    private static let storeDatabasePaths = ["History/history.sqlite", "AgentVoice/voice.sqlite"]
+
+    static func requireStoreDatabase(at url: URL) throws {
+        let parent = url.deletingLastPathComponent()
+        if try MigrationFiles.attributes(parent) != nil { try MigrationFiles.requireDirectory(parent) }
+        guard try MigrationFiles.attributes(url)?[.type] as? FileAttributeType == .typeRegular else {
+            throw Failure.missingCommittedData(url)
+        }
+    }
+
+    private func reopenCommittedStores(at root: URL) -> Stores {
+        let history = SQLiteHistoryStore(root: root.appendingPathComponent("History"), requireExisting: true)
+        let voiceURL = root.appendingPathComponent("AgentVoice/voice.sqlite")
+        let voice = Result {
+            try Self.requireStoreDatabase(at: voiceURL)
+            return try VoiceStore(url: voiceURL)
+        }
+        return Stores(history: history, voice: voice)
+    }
+
+    private func openStores(at root: URL) async throws -> Stores {
         let voiceURL = root.appendingPathComponent("AgentVoice/voice.sqlite")
         let historyRoot = root.appendingPathComponent("History")
-        if requireExisting {
-            for database in [historyRoot.appendingPathComponent("history.sqlite"), voiceURL] {
-                guard try MigrationFiles.attributes(database)?[.type] as? FileAttributeType == .typeRegular else {
-                    throw Failure.missingCommittedData(database)
-                }
-            }
-        }
         for directory in [historyRoot, voiceURL.deletingLastPathComponent()] {
             if try MigrationFiles.attributes(directory) != nil { try MigrationFiles.requireDirectory(directory) }
         }
         let history = SQLiteHistoryStore(root: historyRoot)
         try await history.validateStorage()
         let voice = try VoiceStore(url: voiceURL)
-        return Stores(history: history, voice: voice)
+        return Stores(history: history, voice: .success(voice))
     }
 }

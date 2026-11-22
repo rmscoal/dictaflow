@@ -30,17 +30,21 @@ nonisolated protocol HistoryStoreProtocol: Sendable {
 /// Synchronous GRDB/file calls run on this actor, never on MainActor or an audio tap.
 actor SQLiteHistoryStore: HistoryStoreProtocol {
     private let root: URL
+    private let requireExisting: Bool
     private let fileManager = FileManager()
     private var database: DatabaseQueue?
     private var hasRecovered = false
     private var audioUsers: [UUID: Int] = [:]
 
-    init(root: URL) {
+    init(root: URL, requireExisting: Bool = false) {
         self.root = root
+        self.requireExisting = requireExisting
     }
 
     private func open() throws -> DatabaseQueue {
         if let database { return database }
+        let databaseURL = root.appendingPathComponent("history.sqlite")
+        if requireExisting { try ApplicationSupportMigration.requireStoreDatabase(at: databaseURL) }
         for directory in [root, root.appendingPathComponent("Staging"), root.appendingPathComponent("Recordings")] {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let values = try directory.resourceValues(forKeys: [.isSymbolicLinkKey])
@@ -56,7 +60,7 @@ actor SQLiteHistoryStore: HistoryStoreProtocol {
             try db.execute(sql: "PRAGMA secure_delete = ON")
             try db.execute(sql: "PRAGMA synchronous = FULL")
         }
-        let queue = try DatabaseQueue(path: root.appendingPathComponent("history.sqlite").path, configuration: configuration)
+        let queue = try DatabaseQueue(path: databaseURL.path, configuration: configuration)
         var migrator = DatabaseMigrator()
         migrator.registerMigration("history-v1") { db in
             try db.execute(sql: """

@@ -147,6 +147,7 @@ final class AgentVoiceCoordinator: ObservableObject {
     private let beforePreviewCompletion: (() -> Void)?
     private let logger = Logger(subsystem: "com.dictaflow.agentvoice", category: "Coordinator")
     private var store: VoiceStore?
+    private var storageFailureMessage: String?
     private var bridge: LocalVoiceServer?
     private var worker: Task<Void, Never>?
     private var workerNeedsWake = false
@@ -161,7 +162,7 @@ final class AgentVoiceCoordinator: ObservableObject {
     private var stopped = false
 
     init(defaults: UserDefaults = .standard, player: AgentSpeechPlayerProtocol? = nil,
-         supportDirectory: URL, preparedStore: VoiceStore? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil,
+         supportDirectory: URL, preparedStore: Result<VoiceStore, any Error>? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil,
          limits: VoiceLimits = VoiceLimits(), beforeIdleRefresh: (() async -> Void)? = nil,
          beforeRetentionRefresh: ((VoiceHistoryRetention) async -> Void)? = nil,
          modelDownloader: (any LiquidAssetDownloading)? = nil, beforePreviewCompletion: (() -> Void)? = nil) {
@@ -180,10 +181,12 @@ final class AgentVoiceCoordinator: ObservableObject {
         let installation = defaults.string(forKey: "agentVoice.installationID").flatMap(UUID.init(uuidString:)) ?? UUID()
         installationID = installation; defaults.set(installation.uuidString, forKey: "agentVoice.installationID")
         isEnabled = defaults.bool(forKey: "agentVoice.enabled")
-        do { store = try preparedStore ?? VoiceStore(url: supportDirectory.appendingPathComponent("AgentVoice/voice.sqlite"), limits: limits) }
+        do { store = try preparedStore?.get() ?? VoiceStore(url: supportDirectory.appendingPathComponent("AgentVoice/voice.sqlite"), limits: limits) }
         catch {
-            status = "Agent Voice storage failed: \(error.localizedDescription)"
-            activeError = AgentVoiceError(scope: .setup, message: status)
+            let message = "Agent Voice storage failed: \(error.localizedDescription)"
+            storageFailureMessage = message
+            status = message
+            activeError = AgentVoiceError(scope: .setup, message: message)
             isEnabled = false
         }
         if isEnabled { startBridge() }
@@ -223,6 +226,11 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func setEnabled(_ enabled: Bool) {
         guard !stopped else { return }
+        if let storageFailureMessage {
+            status = storageFailureMessage
+            activeError = AgentVoiceError(scope: .setup, message: storageFailureMessage)
+            return
+        }
         // An explicit toggle supersedes every prior actionable error. Fresh
         // failures below set a new one; heartbeats and refreshes never clear.
         activeError = nil
