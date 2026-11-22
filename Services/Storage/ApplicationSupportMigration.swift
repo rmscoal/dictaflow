@@ -120,7 +120,7 @@ nonisolated enum MigrationFiles {
     }
 
     static func syncFile(_ url: URL) throws {
-        let handle = try FileHandle(forWritingTo: url)
+        let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         try handle.synchronize()
     }
@@ -171,6 +171,15 @@ nonisolated enum MigrationFiles {
             }
         }
         return result
+    }
+
+    static func syncTree(_ root: URL) throws {
+        let items = try snapshot(root)
+        for (relative, entry) in items.sorted(by: { $0.key.count > $1.key.count }) {
+            let url = relative.isEmpty ? root : root.appendingPathComponent(relative)
+            if entry.directory { try syncDirectory(url) }
+            else { try syncFile(url) }
+        }
     }
 
     static func requireSpace(_ bytes: Int64, at url: URL) throws {
@@ -352,7 +361,7 @@ nonisolated struct ApplicationSupportMigration: Sendable {
                 }
             }
             try markDestination(staging, journal: &pending)
-            try flushStagedTree(staging)
+            try MigrationFiles.syncTree(staging)
             guard !legacyIsRunning(), try source == snapshotSource() else { throw Failure.sourceChanged }
             pending.phase = .staged
             try save(pending, to: journalURL)
@@ -516,15 +525,6 @@ nonisolated struct ApplicationSupportMigration: Sendable {
             if try MigrationFiles.attributes(sidecar) != nil { try FileManager.default.removeItem(at: sidecar) }
         }
         guard rename(clean.path, url.path) == 0 else { throw MigrationFiles.posixError() }
-    }
-
-    private func flushStagedTree(_ root: URL) throws {
-        let items = try MigrationFiles.snapshot(root)
-        for (relative, entry) in items.sorted(by: { $0.key.count > $1.key.count }) {
-            let url = relative.isEmpty ? root : root.appendingPathComponent(relative)
-            if entry.directory { try MigrationFiles.syncDirectory(url) }
-            else { try MigrationFiles.syncFile(url) }
-        }
     }
 
     private static let storeDatabasePaths = ["History/history.sqlite", "AgentVoice/voice.sqlite"]

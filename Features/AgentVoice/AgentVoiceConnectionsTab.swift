@@ -179,6 +179,9 @@ struct AgentVoiceConnectionsTab: View {
             case .updateInterrupted:
                 return .updateInterrupted
             case .unsupportedVersion:
+                if host == .claudeCode {
+                    return .unsupportedVersion("Update Claude Code to 2.1.118 or later, then open Show setup for the manual instructions.")
+                }
                 return .unsupportedVersion("Update Codex to stable 0.156.0 or later, then run setup again. Agent Voice cannot work with this Codex version.")
             case .disabled:
                 return .disabledInHost

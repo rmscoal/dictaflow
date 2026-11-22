@@ -987,6 +987,7 @@ extension WhisperModelDownloadService {
         try files.copyItem(at: origin, to: temporary)
         guard try before == MigrationFiles.snapshot(origin) else { throw ApplicationSupportMigration.Failure.sourceChanged }
         guard try validate(temporary) else { return false }
+        try MigrationFiles.syncTree(temporary)
         guard try before == MigrationFiles.snapshot(origin) else { throw ApplicationSupportMigration.Failure.sourceChanged }
         do { try MigrationFiles.promote(temporary, to: destination) }
         catch let error as POSIXError where error.code == .EEXIST { return try validate(destination) }
