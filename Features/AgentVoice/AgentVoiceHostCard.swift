@@ -3,7 +3,9 @@ import SwiftUI
 /// Plain-words setup state for one host card. It reports CLI detection
 /// plus the configured server entry, and never claims a live connection.
 enum AgentVoiceHostCardStatus: Equatable {
-    case ready(hooksInstalled: Bool)
+    case configured(hooksInstalled: Bool)
+    case needsMigration
+    case updateInterrupted
     case needsSetup
     case disabledInHost
     case notFound
@@ -15,12 +17,16 @@ enum AgentVoiceHostCardStatus: Equatable {
 
     var accessibilityDescription: String {
         switch self {
-        case .ready(let hooksInstalled):
+        case .configured(let hooksInstalled):
             hooksInstalled
                 ? "MCP and voice hooks are configured."
                 : "MCP is configured but voice hooks are missing."
         case .unsupportedVersion(let requirement):
             requirement
+        case .needsMigration:
+            "The old DictaFlow registration needs to be migrated."
+        case .updateInterrupted:
+            "The Omdo update was interrupted and needs to be recovered."
         case .needsSetup:
             "Found on this Mac. Omdo entry not configured."
         case .disabledInHost:
@@ -68,8 +74,12 @@ struct AgentVoiceHostCard: View {
 
     private var guidance: String? {
         switch status {
-        case .ready(let hooksInstalled):
+        case .configured(let hooksInstalled):
             return hooksInstalled ? nil : "Update setup to add the missing voice hooks."
+        case .needsMigration:
+            return "Close the host before replacing the old DictaFlow registration."
+        case .updateInterrupted:
+            return "Close the host, then choose Recover setup."
         case .needsSetup, .manualOnly:
             return hint
         case .checking:

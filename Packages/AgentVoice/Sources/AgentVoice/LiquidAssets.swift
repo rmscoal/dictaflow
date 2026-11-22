@@ -124,7 +124,7 @@ public actor LiquidAssets: LiquidAssetDownloading {
         }
     }
 
-    private static func verify(_ url: URL, asset: LiquidAsset) throws -> Bool {
+    public static func verify(_ url: URL, asset: LiquidAsset) throws -> Bool {
         guard FileManager.default.fileExists(atPath: url.path) else { return false }
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         guard attributes[.type] as? FileAttributeType == .typeRegular,

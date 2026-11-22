@@ -114,6 +114,14 @@ without launching, or `make verify` to check the installed app’s signature and
 launch it. The main Xcode scheme is `DictaFlow Dev`; see the
 [verification guide](Tests/README.md) for tests and manual checks.
 
+## Upgrading from DictaFlow
+
+Omdo migrates local history, refinement prompts, Agent Voice history, and verified Liquid models before opening its normal interface. Quit older copies of the same build before upgrading. Release data goes from `~/Library/Application Support/DictaFlow` to `Omdo` under the same parent. Dev data goes from `DictaFlow Dev` to `Omdo Dev`. Use **Show previous DictaFlow data in Finder** from the Omdo menu to inspect the retained originals or a saved interrupted copy. Once Omdo has opened and committed the new stores, continue using Omdo. Relaunching an archived older app can write to the old folders separately.
+
+Omdo Dev continues using the shared legacy Whisper and refinement model cache in `DictaFlow/Models`. Production Omdo copies verified models into `Omdo/Models`. Keep the legacy model cache while any older app or preview still uses it.
+
+To update Agent Voice, close the host and use **Update** in **Agent Voice > General > Connections**. See the [Agent Voice setup guide](Docs/AgentVoice.md#setup-and-host-boundaries) for manual configuration and hook review.
+
 ## License
 
 Omdo is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE).

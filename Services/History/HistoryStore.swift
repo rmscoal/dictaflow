@@ -35,14 +35,8 @@ actor SQLiteHistoryStore: HistoryStoreProtocol {
     private var hasRecovered = false
     private var audioUsers: [UUID: Int] = [:]
 
-    init(root: URL = SQLiteHistoryStore.defaultDirectory) {
+    init(root: URL) {
         self.root = root
-    }
-
-    nonisolated static var defaultDirectory: URL {
-        let appName = Bundle.main.bundleIdentifier == "com.dictaflow" ? "DictaFlow" : "DictaFlow Dev"
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/\(appName)/History", isDirectory: true)
     }
 
     private func open() throws -> DatabaseQueue {
@@ -117,6 +111,10 @@ actor SQLiteHistoryStore: HistoryStoreProtocol {
 
     private func stagingURL(_ id: UUID) -> URL { root.appendingPathComponent("Staging/\(id.uuidString).m4a") }
     private func audioURL(_ id: UUID) -> URL { root.appendingPathComponent("Recordings/\(id.uuidString).m4a") }
+
+    func validateStorage() throws {
+        _ = try open()
+    }
 
     func initialize() throws {
         guard !hasRecovered else { return }

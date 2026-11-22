@@ -173,7 +173,11 @@ struct AgentVoiceConnectionsTab: View {
         if let state = hostState[host] {
             switch state.status {
             case .configured:
-                return .ready(hooksInstalled: state.hooksConfigured)
+                return .configured(hooksInstalled: state.hooksConfigured)
+            case .migrationRequired:
+                return .needsMigration
+            case .updateInterrupted:
+                return .updateInterrupted
             case .unsupportedVersion:
                 return .unsupportedVersion("Update Codex to stable 0.156.0 or later, then run setup again. Agent Voice cannot work with this Codex version.")
             case .disabled:
@@ -189,12 +193,14 @@ struct AgentVoiceConnectionsTab: View {
     }
 
     private func setupButtonTitle(for host: Host) -> String {
-        if hostState[host]?.status == .configured { return "Update" }
+        if hostState[host]?.status == .updateInterrupted { return "Recover setup" }
+        if let status = hostState[host]?.status, status == .configured || status == .migrationRequired { return "Update" }
         return "Set up"
     }
 
     private func canSetUp(_ host: Host) -> Bool {
         if host == .museCode { return true }
+        if host == .claudeCode { return false }
         return hostAvailability[host]?.isDetected == true
     }
 
@@ -271,23 +277,23 @@ struct AgentVoiceConnectionsTab: View {
         case .codex:
             return "Adds Omdo and its voice hooks to Codex."
         case .claudeCode:
-            return "Adds Omdo and its voice hooks to Claude Code."
+            return "Set up Omdo in your Claude Code user profile with the configuration below."
         case .museCode:
             return "Adds Omdo and its voice guard to your Muse settings."
         case .other:
-            return "Copy the command and register it as a stdio server named dictaflow."
+            return "Copy the command and register it as a stdio server named omdo. Close the host before replacing an older dictaflow entry."
         }
     }
 
     private static func hooksNote(for host: Host, hasHooks: Bool) -> String? {
         guard hasHooks else { return nil }
         if host == .codex {
-            return "With Codex 0.156.0 or later, merge into \(AgentVoiceHostInstaller.codexHooksURL().path), then review the hooks in Codex with /hooks."
+            return "With Codex 0.156.0 or later, replace only the old DictaFlow hooks in \(AgentVoiceHostInstaller.codexHooksURL().path). Keep existing server and per-tool policies when renaming the table to omdo. Start a new session and review the hooks with /hooks."
         }
         if host == .museCode {
-            return "Merge the hooks into ~/.config/muse/settings.json."
+            return "When upgrading, close Muse Code. Rename the old dictaflow entry to omdo, keep its settings, and replace only its voice guard in \(AgentVoiceHostInstaller.museSettingsURL().path)."
         }
-        return "With Claude Code 2.1.118 or later, merge the hooks into ~/.claude/settings.json."
+        return "With Claude Code 2.1.118 or later, close the host and replace only the DictaFlow hooks in \(AgentVoiceHostInstaller.claudeProfileDirectory().appendingPathComponent("settings.json").path). When upgrading, carry over the old server settings, approvals, and disabled state before removing its dictaflow entry. Check for workspace overrides before restarting."
     }
 
     private static func setupCopyKey(_ host: Host) -> String { "setup-\(host.rawValue)" }

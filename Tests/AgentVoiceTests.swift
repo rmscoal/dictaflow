@@ -8,6 +8,18 @@ import XCTest
 
 @MainActor
 final class AgentVoiceTests: XCTestCase {
+    func testInitialModelCheckPublishesReadinessBeforeReturning() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let voice = AgentVoiceCoordinator(defaults: defaults, player: VoicePlayerFixture(), supportDirectory: root,
+                                          runtime: VoiceRuntimeFixture(), modelDownloader: ReadyVoiceModelFixture())
+        defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+
+        await voice.waitForInitialModelCheck()
+        XCTAssertTrue(voice.isModelReady)
+    }
+
     func testVoiceChangesReplacePendingSynthesisAndRateChangesReachActivePlayback() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let suite = "DictaFlow.AgentVoiceTests.\(UUID().uuidString)"

@@ -10,7 +10,7 @@ The **Speech model** section offers Liquid’s **Female** and **Male** voices, *
 
 **Test speech** generates and plays a four-sentence English sample locally with the current voice, accent, and speed. The button is available when Agent Voice is enabled, the model is ready, and dictation and agent speech are idle. While the sample plays, changing its voice or accent generates a new sample. The same button becomes **Stop test** during generation and playback. Starting dictation also stops the test immediately. Samples are never added to History.
 
-Liquid downloads use the shared progress bar and toolbar Downloads list, with combined byte progress across both model files, a separate verification state, cancellation, and completion or failure notices. Opening the download returns to Agent Voice > General. Cancelling removes the partial transfer and any uninstalled temporary files. Previously checksum-verified and installed files remain available for retry. The model becomes ready only after both files pass verification and installation.
+Liquid downloads use the shared progress bar and toolbar Downloads list, with combined byte progress across both model files, a separate verification state, cancellation, and completion or failure notices. Opening the download returns to Agent Voice > General. Cancelling removes the partial transfer and any uninstalled temporary files. Previously checksum-verified and installed files remain available for retry. At launch, Omdo verifies the local files before showing the model’s status. The model becomes ready only after both files pass verification.
 
 The floating control identifies the speaking session and provides Stop and Dictate. Hover over the pill to expand it. It collapses after the pointer leaves. Hover uses the pill’s destination bounds during a resize, so the animation can finish under a stationary pointer. The control does not take keyboard focus from the target app. The existing dictation shortcut also interrupts speech. Interruption is a deliberate button or shortcut action; Omdo does not listen continuously for speech over the agent.
 
@@ -57,11 +57,11 @@ The updated Dev app was installed under `/Applications`, with the previous app p
 
 ## Setup and host boundaries
 
-The **Connections** section in General registers the bundled helper for the chosen host. Each host tab includes its logo. The host card has a **Set up** or **Update** action at the top right, and the external-link icon beside its name opens documentation. **Update** refreshes Omdo's integration configuration. Hosts without automatic setup offer **Show setup** for manual configuration.
+The **Connections** section in General registers the bundled helper under the host alias `omdo`. Close the target host before choosing **Set up**, **Update**, or **Recover setup**. Codex and Muse Code can update an app-owned user-level registration. Claude Code and other hosts provide manual setup. A configured connection requires a new host session. In Codex, use `/hooks` to review and trust the changed hooks.
 
-Codex and Claude Code lifecycle setup uses their user-level configuration; review the exact hooks in the host when prompted and start a new session. Existing unrelated configuration must be preserved. A configured server entry alone does not prove that a host has reviewed and activated hooks.
+An upgrade replaces the old `dictaflow` registration only when its helper and app, installation, and host arguments match. Codex uses the effective user profile, including `CODEX_HOME`. The rename carries across the server’s existing settings and per-tool approvals. A fresh Codex registration includes `default_tools_approval_mode = "approve"`. Muse Code honors `XDG_CONFIG_HOME`, preserves the enabled flag, and changes the registration and guard in one settings write. An ownership conflict, unsupported config form, or custom hook that references the alias requires manual review. Keep one managed Omdo registration per profile. Use different host profiles to connect Dev and release independently where the host supports profiles.
 
-Codex setup also pre-approves Omdo's own tools with `default_tools_approval_mode = "approve"` under `[mcp_servers.dictaflow]` in `~/.codex/config.toml`, so sessions are not interrupted by approval prompts for the speech tools. The key is only added when absent; an existing value is never overwritten. If setup edits the file, it re-runs `codex mcp list` as a parse check and restores the original bytes on failure, so a failed run never strands a broken config. Manual setup carries the same line. This mirrors what Codex writes for a manual Always-allow, but as one server default covering every Omdo tool, including the read-only status query. When pasting the manual snippet, if the `[mcp_servers.dictaflow]` table already exists, add only the missing lines; duplicating the table breaks the file.
+For manual migration, close sessions using the affected profile. Rename the old registration and its policy references in the same scope, update the executable path and arguments using the app’s snippet, replace only the related lifecycle hooks and command guard, and review workspace overrides before restarting. Preserve explicit approvals and disabled state. The helper binary and the server’s protocol identity are stable. Only the host alias and host-qualified tool names change.
 
 Codex's hooks can supply native session and turn IDs. Claude Code has different event fields and requires its own configuration. Other MCP hosts need a lifecycle integration or manual playback; do not assume they implement Codex hooks. Lifecycle setup and supported versions must be checked using isolated host fixtures before claiming end-to-end support.
 
@@ -72,32 +72,32 @@ Only the user-facing coordinating agent may open voice interactions, submit rend
 Enforcement uses host-supplied identity only, never model-supplied arguments:
 
 - Codex requires stable 0.156.0 or later. Direct MCP requests carry host-written `_meta.threadId` and `_meta.sessionId`: only equal IDs may act, and the `session_id` argument must match them. Missing or malformed identity is rejected before attachment, receipt lookup, or store access. Child, nested, and background native threads retain the root session ID but have a different thread ID.
-- Codex MCP lifecycle hooks instead carry the host-written `_meta.threadId` with `session_id` substituted from the hook payload. Only prompt, stop, and interrupt callbacks may use this hook form (without the direct-call `callId` or `sessionId` fields); their owning thread must match the hook session. Native children run `SubagentStop`, not `Stop`, and do not run `Interrupt`. The existing MCP hook definitions stay unchanged, using the same helper connection as direct calls. Do not add `${agent_id}` to these templates: Codex fails a hook if an optional field is absent, including at root.
+- Codex MCP lifecycle hooks instead carry the host-written `_meta.threadId` with `session_id` substituted from the hook payload. Only prompt, stop, and interrupt callbacks may use this hook form (without the direct-call `callId` or `sessionId` fields); their owning thread must match the hook session. Native children run `SubagentStop`, not `Stop`, and do not run `Interrupt`. The lifecycle hooks use the same helper connection as direct calls. Do not add `${agent_id}` to these templates: Codex fails a hook if an optional field is absent, including at root.
 - Claude Code lifecycle hooks substitute `${agent_id}` into `on_user_prompt_submit` and `on_stop`. The helper rejects a non-empty value before any attachment or store contact. Missing, empty, or literally unsubstituted values are the main session. `agent_type` alone never proves a child (a root `--agent` session sets it) and is ignored.
-- A PreToolUse command hook matching `mcp__dictaflow__.*` denies direct child model calls to every Omdo tool. The helper answers from the host's hook input (`agent_id` for Claude; `MUSE_SESSION_ID` versus `MUSE_THREAD_ID` for Muse) and exits 0 in all cases so the host always continues.
+- A PreToolUse command hook matching `mcp__omdo__.*` denies direct child model calls to every Omdo tool. The helper answers from the host's hook input (`agent_id` for Claude; `MUSE_SESSION_ID` versus `MUSE_THREAD_ID` for Muse) and exits 0 in all cases so the host always continues.
 - Muse documents command hooks only, so it receives the guard but no lifecycle hooks. Its lifecycle stays model-driven through direct MCP calls, which the same guard filters. A Muse hook without both session variables denies loudly with an update prompt instead of silently passing as root.
 
 Boundaries, not guarantees: external orchestrators that launch children as independent ordinary CLI sessions (for example T3) communicate no ancestry, so each looks top-level and filtering cannot apply; children spawned that way speak in their own sessions. Claude Code added `agent_id` to hook events in 2.1.69 and Omdo setup requires 2.1.118 or later, so every accepted release supplies child identity and no accepted release fails open for lack of it; a release predating 2.1.69 would fail open (voice works, filtering may not) but is below the minimum and setup refuses it. The PreToolUse guard uses shell form so it runs on every accepted release (the exec-form `args` array needs 2.1.139 or later). No live host sessions were used to qualify this; verification is isolated fixtures and deterministic tests only.
 
 The Codex contract was traced in the official [0.169.0 runtime](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/core/src/mcp_tool_call.rs), [hook executor](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/core/src/hook_mcp_executor.rs), and [session identity initialization](https://github.com/openai/codex/blob/rust-v0.156.0/codex-rs/core/src/session/session.rs). The MCP identity pair is present in 0.156.0 and absent in 0.155.0. Clients must preserve this common runtime metadata; no T3-specific integration or model-supplied role flag is used. Desktop and cloud client qualification remains separate. If `caller_identity_missing` appears, update the host and start a new session; do not substitute identity arguments to bypass it.
 
-Example Codex hooks for an MCP server named `dictaflow`:
+Example Codex hooks for an MCP server named `omdo`:
 
 ```json
 {
   "hooks": {
     "UserPromptSubmit": [{"hooks": [{
-      "type": "mcp_tool", "server": "dictaflow", "tool": "on_user_prompt_submit",
+      "type": "mcp_tool", "server": "omdo", "tool": "on_user_prompt_submit",
       "input": {"session_id": "${session_id}", "turn_id": "${turn_id}", "prompt": "${prompt}"},
       "timeout": 2, "statusMessage": "Omdo: Agent Voice"
     }]}],
     "Stop": [{"hooks": [{
-      "type": "mcp_tool", "server": "dictaflow", "tool": "on_stop",
+      "type": "mcp_tool", "server": "omdo", "tool": "on_stop",
       "input": {"session_id": "${session_id}", "turn_id": "${turn_id}"},
       "timeout": 2, "statusMessage": "Omdo: Agent Voice"
     }]}],
     "Interrupt": [{"hooks": [{
-      "type": "mcp_tool", "server": "dictaflow", "tool": "on_interrupt",
+      "type": "mcp_tool", "server": "omdo", "tool": "on_interrupt",
       "input": {"session_id": "${session_id}", "turn_id": "${turn_id}"},
       "timeout": 2, "statusMessage": "Omdo: Agent Voice"
     }]}]

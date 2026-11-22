@@ -10,7 +10,7 @@ final class AgentVoiceHostSetupTests: XCTestCase {
                                                      appID: "com.dictaflow.dev", installationID: installation)
         let configuration = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(snippet.utf8)) as? [String: Any])
         let servers = try XCTUnwrap(configuration["mcp_servers"] as? [String: [String: Any]])
-        let server = try XCTUnwrap(servers["dictaflow"])
+        let server = try XCTUnwrap(servers["omdo"])
         XCTAssertEqual(server["command"] as? String, path)
         XCTAssertEqual(server["args"] as? [String], ["--app-id", "com.dictaflow.dev", "--installation-id", installation.uuidString, "--host", "muse"])
         XCTAssertEqual(server["mode"] as? String, "optional")
@@ -61,9 +61,8 @@ final class AgentVoiceHostSetupTests: XCTestCase {
             case .claudeCode:
                 merged = try AgentVoiceHostInstaller.mergedClaudeSettings(existing: nil, executable: executable)
             case .museCode:
-                let root = try AgentVoiceHostInstaller.mergedMuseHooks(root: [:], executable: executable,
-                                                                       path: "snippet-check")
-                merged = try JSONSerialization.data(withJSONObject: root)
+                merged = try AgentVoiceHostInstaller.migratedMuseSettings(
+                    nil, path: "/fixture", executable: executable, arguments: [], ownsPath: { _ in false })
             case .other:
                 continue
             }
@@ -149,7 +148,7 @@ final class AgentVoiceHostSetupTests: XCTestCase {
     func testCodexSnippetPreApprovesTools() throws {
         let snippet = try AgentVoiceHostSetup.snippet(for: .codex, executable: "/bin/dictaflow-mcp",
                                                       appID: "com.dictaflow.dev", installationID: UUID())
-        XCTAssertTrue(snippet.contains("[mcp_servers.dictaflow]"))
+        XCTAssertTrue(snippet.contains("[mcp_servers.omdo]"))
         XCTAssertTrue(snippet.contains("default_tools_approval_mode = \"approve\""),
                       "Manual setup must carry the same pre-approval one-click setup writes.")
     }

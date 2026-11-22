@@ -3,12 +3,24 @@ import SwiftUI
 struct MenuBarView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var appState: DictaFlowAppState
+    var modelMigrationNotice: String?
+    var legacyDataLocations: [URL] = []
 
     var body: some View {
         VStack(spacing: 14) {
             header
             dictationControl
             quickControls
+            if let modelMigrationNotice {
+                Text(modelMigrationNotice).font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+            }
+            if !legacyDataLocations.isEmpty {
+                Button("Show previous DictaFlow data in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting(legacyDataLocations)
+                }
+                .buttonStyle(EmberInlineActionButtonStyle())
+                .help("These are the old private data folders. Keep using Omdo after upgrading.")
+            }
             footer
         }
         .padding(16)

@@ -170,7 +170,7 @@ final class DictaFlowAppState: ObservableObject {
     private var activeRefinementDownloadTokens: [RefinementModelDescriptor: UUID] = [:]
     private var activeWhisperEncoderDownloadTokens: [WhisperModelDescriptor: UUID] = [:]
 
-    convenience init() {
+    convenience init(paths: ApplicationSupportPaths, stores: ApplicationSupportMigration.Stores) {
         let audioRecorder = SystemAudioRecorderService()
         self.init(
             settingsStore: UserDefaultsSettingsStore(),
@@ -179,19 +179,19 @@ final class DictaFlowAppState: ObservableObject {
             audioOutputVolumeService: SystemAudioOutputVolumeService(),
             soundCueService: SoundCueService(),
             hotkeyService: CarbonHotkeyService(),
-            modelDownloadService: WhisperModelDownloadService(),
+            modelDownloadService: WhisperModelDownloadService(modelsDirectoryURL: paths.sharedModels),
             whisperService: WhisperCPPService(),
             transcriptRefinementService: LlamaCLITranscriptRefinementService(),
-            refinementPromptStore: FileRefinementPromptStore(),
+            refinementPromptStore: FileRefinementPromptStore(directoryURL: paths.current.appendingPathComponent("Prompts")),
             textInsertionService: SystemTextInsertionService(),
             localNotificationService: UserLocalNotificationService(),
             appUpdateService: GitHubReleaseUpdateService(),
-            historyStore: SQLiteHistoryStore()
+            historyStore: stores.history
         )
         // Hosted tests use isolated coordinator fixtures. Do not bind the user's socket
         // or recover/cancel speech from a separately running installed Dev app.
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
-        agentVoice = AgentVoiceCoordinator()
+        agentVoice = AgentVoiceCoordinator(supportDirectory: paths.current, preparedStore: stores.voice)
         observeAgentVoiceDownloads()
         if let agentVoice {
             agentVoiceOverlay = AgentVoiceOverlayCoordinator(voice: agentVoice) { [weak self] in

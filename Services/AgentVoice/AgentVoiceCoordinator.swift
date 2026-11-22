@@ -131,6 +131,7 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     let assets: LiquidAssets
     private let modelDownloader: any LiquidAssetDownloading
+    private var initialModelCheck: Task<Void, Never>?
     private var modelDownloadTask: Task<Void, Never>?
     private var modelDownloadGeneration = UUID()
     let runtime: any LiquidRuntimeProtocol
@@ -158,7 +159,7 @@ final class AgentVoiceCoordinator: ObservableObject {
     private var stopped = false
 
     init(defaults: UserDefaults = .standard, player: AgentSpeechPlayerProtocol? = nil,
-         supportDirectory: URL? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil,
+         supportDirectory: URL, preparedStore: VoiceStore? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil,
          limits: VoiceLimits = VoiceLimits(), beforeIdleRefresh: (() async -> Void)? = nil,
          beforeRetentionRefresh: ((VoiceHistoryRetention) async -> Void)? = nil,
          modelDownloader: (any LiquidAssetDownloading)? = nil, beforePreviewCompletion: (() -> Void)? = nil) {
@@ -171,15 +172,13 @@ final class AgentVoiceCoordinator: ObservableObject {
         self.beforeRetentionRefresh = beforeRetentionRefresh
         self.beforePreviewCompletion = beforePreviewCompletion
         appID = appIdentity ?? (Bundle.main.bundleIdentifier == "com.dictaflow" ? "com.dictaflow" : "com.dictaflow.dev")
-        let name = appID == "com.dictaflow" ? "DictaFlow" : "DictaFlow Dev"
-        let support = supportDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(name)
-        assets = LiquidAssets(directory: support.appendingPathComponent("Models/Liquid/\(LiquidAssets.revision)"))
+        assets = LiquidAssets(directory: supportDirectory.appendingPathComponent("Models/Liquid/\(LiquidAssets.revision)"))
         self.modelDownloader = modelDownloader ?? assets
         self.runtime = runtime ?? LiquidRuntime(executable: Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/AudioRuntime/llama-server"), assets: assets)
         let installation = defaults.string(forKey: "agentVoice.installationID").flatMap(UUID.init(uuidString:)) ?? UUID()
         installationID = installation; defaults.set(installation.uuidString, forKey: "agentVoice.installationID")
         isEnabled = defaults.bool(forKey: "agentVoice.enabled")
-        do { store = try VoiceStore(url: support.appendingPathComponent("AgentVoice/voice.sqlite"), limits: limits) }
+        do { store = try preparedStore ?? VoiceStore(url: supportDirectory.appendingPathComponent("AgentVoice/voice.sqlite"), limits: limits) }
         catch {
             status = "Agent Voice storage failed: \(error.localizedDescription)"
             activeError = AgentVoiceError(scope: .setup, message: status)
@@ -201,12 +200,17 @@ final class AgentVoiceCoordinator: ObservableObject {
                 }
             }
         }
-        Task { [weak self, modelDownloader = self.modelDownloader, generation = modelDownloadGeneration] in
+        initialModelCheck = Task { [weak self, modelDownloader = self.modelDownloader, generation = modelDownloadGeneration] in
             await self?.refresh()
             let ready = (try? await modelDownloader.isReady()) == true
-            guard self?.modelDownloadGeneration == generation else { return }
+            guard !Task.isCancelled, self?.modelDownloadGeneration == generation else { return }
             self?.isModelReady = ready
         }
+    }
+
+    func waitForInitialModelCheck() async {
+        await initialModelCheck?.value
+        initialModelCheck = nil
     }
 
     var connectionCommand: String {
@@ -575,12 +579,14 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func shutdown() {
         stopped = true; bridge?.stop(); bridge = nil
+        initialModelCheck?.cancel()
         cancelModelDownload()
         maintenance?.cancel(); maintenance = nil
         interruptActiveSpeech(stopAllInference: true)
     }
 
     func waitForShutdown() async {
+        await initialModelCheck?.value
         await modelDownloadTask?.value
         await resourceRelease?.value
     }

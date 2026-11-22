@@ -93,11 +93,11 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
     init(
         fileManager: FileManager = .default,
         session: URLSession = .shared,
-        modelsDirectoryURL: URL? = nil
+        modelsDirectoryURL: URL
     ) {
         self.fileManager = fileManager
         self.session = session
-        self.modelsDirectoryURL = modelsDirectoryURL ?? Self.makeModelsDirectoryURL(fileManager: fileManager)
+        self.modelsDirectoryURL = modelsDirectoryURL
     }
 
     func ensureModelAvailable(
@@ -552,14 +552,6 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         }
     }
 
-    nonisolated private static func makeModelsDirectoryURL(fileManager: FileManager) -> URL {
-        let applicationSupportURL = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("DictaFlow", isDirectory: true)
-        return applicationSupportURL.appendingPathComponent("Models", isDirectory: true)
-    }
-
     nonisolated private static func ensureModelsDirectoryExists(at directoryURL: URL, using fileManager: FileManager) throws {
         do {
             try fileManager.createDirectory(
@@ -876,5 +868,102 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
         }
 
         return size.int64Value
+    }
+}
+
+extension WhisperModelDownloadService {
+    /// Release seeds a separate cache. Preview and previous releases can still use the old cache.
+    nonisolated static func seedOmdoModels(paths: ApplicationSupportPaths) async throws {
+        guard paths.isRelease else { return }
+        let files = FileManager.default
+        let work = paths.migrationDirectory.appendingPathComponent("Shared Models")
+        let lock = try OmdoMigrationLock(at: work.appendingPathComponent("migration.lock"))
+        defer { withExtendedLifetime(lock) {} }
+        let done = work.appendingPathComponent("complete")
+        guard try MigrationFiles.attributes(done) == nil else { return }
+        let source = paths.legacySharedModels
+        let target = paths.sharedModels
+        guard try MigrationFiles.attributes(source) != nil else { return }
+        try MigrationFiles.requireDirectory(source.deletingLastPathComponent())
+        try MigrationFiles.requireDirectory(source)
+        let installed = try files.contentsOfDirectory(atPath: source.path)
+        var foundCandidate = false
+        var needsRetry = false
+        try Self.ensureModelsDirectoryExists(at: target, using: files)
+        for model in WhisperModelDescriptor.allCases {
+            try Task.checkCancellation()
+            let names = [model.encoderDirectoryName, model.encoderDisabledDirectoryName]
+            if installed.contains(model.filename) {
+                foundCandidate = true
+                if try !copyCachedModel(model, from: source, to: target, work: work) { needsRetry = true }
+            }
+            let candidates = names.filter { installed.contains($0) }
+            guard !candidates.isEmpty else { continue }
+            foundCandidate = true
+            guard candidates.count == 1, let name = candidates.first else { needsRetry = true; continue }
+            let origin = source.appendingPathComponent(name)
+            guard isValidEncoderDirectory(at: origin),
+                  isRegularModelFile(at: target.appendingPathComponent(model.filename)) else { needsRetry = true; continue }
+            // An existing encoder in Omdo takes precedence over the old cache's
+            // enabled setting. Never overwrite it or create both directories.
+            let installedEncoder = try names.first { try MigrationFiles.attributes(target.appendingPathComponent($0)) != nil }
+            if let installedEncoder {
+                if !isValidEncoderDirectory(at: target.appendingPathComponent(installedEncoder)) { needsRetry = true }
+                continue
+            }
+            let copied = try copyCacheItem(origin, to: target.appendingPathComponent(name), work: work) { copy in
+                let current = try names.filter { try MigrationFiles.attributes(source.appendingPathComponent($0)) != nil }
+                guard current == candidates else { throw ApplicationSupportMigration.Failure.sourceChanged }
+                return Self.isValidEncoderDirectory(at: copy)
+            }
+            if !copied { needsRetry = true }
+        }
+        for model in RefinementModelDescriptor.storedModels where installed.contains(model.filename) {
+            try Task.checkCancellation()
+            foundCandidate = true
+            if try !copyCachedModel(model, from: source, to: target, work: work) { needsRetry = true }
+        }
+        let latest = try files.contentsOfDirectory(atPath: source.path)
+        if Set(latest) != Set(installed) || latest.contains(where: { $0.hasSuffix(".download") || $0.hasSuffix(".extracting") }) {
+            throw ApplicationSupportMigration.Failure.sourceChanged
+        }
+        if needsRetry { throw ModelDownloadServiceError.checksumMismatch }
+        guard foundCandidate else { return }
+        try MigrationFiles.replaceDurably(Data(), at: done)
+    }
+
+    private nonisolated static func copyCachedModel<Model: LocalModelDescriptor>(
+        _ model: Model, from source: URL, to target: URL, work: URL
+    ) throws -> Bool {
+        let origin = source.appendingPathComponent(model.filename)
+        let destination = target.appendingPathComponent(model.filename)
+        if try MigrationFiles.attributes(destination) != nil {
+            return try isRegularModelFile(at: destination)
+                && Self.modelFileMatchesChecksum(at: destination, expectedChecksum: model.checksum)
+        }
+        guard isRegularModelFile(at: origin) else { return false }
+        return try copyCacheItem(origin, to: destination, work: work) {
+            try Self.modelFileMatchesChecksum(at: $0, expectedChecksum: model.checksum)
+        }
+    }
+
+    private nonisolated static func copyCacheItem(
+        _ origin: URL, to destination: URL, work: URL, validate: (URL) throws -> Bool
+    ) throws -> Bool {
+        let before = try MigrationFiles.snapshot(origin)
+        guard !before.isEmpty else { return false }
+        let temporary = work.appendingPathComponent("model-copy")
+        let files = FileManager.default
+        if try MigrationFiles.attributes(temporary) != nil { try files.removeItem(at: temporary) }
+        defer { try? files.removeItem(at: temporary) }
+        let bytes = before.values.filter { !$0.directory }.reduce(Int64(0)) { $0 + $1.length }
+        try MigrationFiles.requireSpace(bytes, at: work)
+        try files.copyItem(at: origin, to: temporary)
+        guard try before == MigrationFiles.snapshot(origin) else { throw ApplicationSupportMigration.Failure.sourceChanged }
+        guard try validate(temporary) else { return false }
+        guard try before == MigrationFiles.snapshot(origin) else { throw ApplicationSupportMigration.Failure.sourceChanged }
+        do { try MigrationFiles.promote(temporary, to: destination) }
+        catch let error as POSIXError where error.code == .EEXIST { return try validate(destination) }
+        return true
     }
 }
