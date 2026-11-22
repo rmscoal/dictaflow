@@ -146,6 +146,7 @@
 				FBD100002D11000100000003 /* Embed Frameworks */,
 				FBD100002D1100010000000B /* Resources */,
 				FBD100002D1100010000000E /* Bundle Llama Server Runtime */,
+				FBD100002D1100010000000F /* Use Classic App Icon */,
 			);
 			buildRules = (
 			);
@@ -175,6 +176,7 @@
 				FBE942B32D0A000100000009 /* Embed Frameworks */,
 				FB2958172F9A4FAA008AE621 /* Resources */,
                 DF4000000000000000000000B /* Bundle Llama Server Runtime */,
+				DF4000000000000000000000C /* Use Classic App Icon */,
 			);
 			buildRules = (
 			);
@@ -344,6 +346,40 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "set -eu\n\"$SRCROOT/script/ensure_llama_server.sh\" \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH\"\nbash \"$SRCROOT/script/bundle_agent_voice.sh\" \"$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH\"\n";
+		};
+		DF4000000000000000000000C /* Use Classic App Icon */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Use Classic App Icon";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+				"$(DERIVED_FILE_DIR)/UseClassicAppIcon.stamp",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nPLIST=\"$TARGET_BUILD_DIR/$INFOPLIST_PATH\"\n# Tahoe composites monochrome asset-catalog icons onto a system tile, so\n# resolve the app icon through the classic AppIcon.icns instead.\nif /usr/libexec/PlistBuddy -c \"Print :CFBundleIconName\" \"$PLIST\" >/dev/null 2>&1; then\n  /usr/libexec/PlistBuddy -c \"Delete :CFBundleIconName\" \"$PLIST\"\n  echo \"Removed CFBundleIconName; using AppIcon.icns.\"\nfi\ntouch \"$DERIVED_FILE_DIR/UseClassicAppIcon.stamp\"\n";
+		};
+		FBD100002D1100010000000F /* Use Classic App Icon */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Use Classic App Icon";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+				"$(DERIVED_FILE_DIR)/UseClassicAppIcon.stamp",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nPLIST=\"$TARGET_BUILD_DIR/$INFOPLIST_PATH\"\n# Tahoe composites monochrome asset-catalog icons onto a system tile, so\n# resolve the app icon through the classic AppIcon.icns instead.\nif /usr/libexec/PlistBuddy -c \"Print :CFBundleIconName\" \"$PLIST\" >/dev/null 2>&1; then\n  /usr/libexec/PlistBuddy -c \"Delete :CFBundleIconName\" \"$PLIST\"\n  echo \"Removed CFBundleIconName; using AppIcon.icns.\"\nfi\ntouch \"$DERIVED_FILE_DIR/UseClassicAppIcon.stamp\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
