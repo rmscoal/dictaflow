@@ -11,10 +11,15 @@ struct DownloadCompletionNotification: View {
     var body: some View {
         let failed = notice.kind == .failed
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: failed ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                .font(.system(size: 17))
-                .foregroundStyle(failed ? AppTheme.errorText : AppTheme.modelActive)
-                .accessibilityHidden(true)
+            Group {
+                if failed { EmberWarningIcon() }
+                else {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(AppTheme.modelActive)
+                        .accessibilityHidden(true)
+                }
+            }
+            .font(.system(size: 17))
 
             Button {
                 appState.dismissDownloadCompletionNotice()

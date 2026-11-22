@@ -1,8 +1,19 @@
+import AgentVoice
 import os
 import XCTest
 @testable import DictaFlow_Dev
 
 final class OmdoMigrationTests: XCTestCase {
+    private actor ProgressLog {
+        var values: [ApplicationSupportMigration.Progress] = []
+        func append(_ value: ApplicationSupportMigration.Progress) { values.append(value) }
+    }
+
+    private actor CopyAttempts {
+        var count = 0
+        func record() { count += 1 }
+    }
+
     private let legacyHelper = "/Applications/DictaFlow Dev.app/Contents/MacOS/dictaflow-mcp"
     private let currentHelper = "/Applications/Omdo Dev.app/Contents/MacOS/dictaflow-mcp"
     private let installation = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
@@ -37,6 +48,73 @@ final class OmdoMigrationTests: XCTestCase {
         try Data("old app later wrote here".utf8).write(to: prompt)
         _ = try await migration.prepare { false }
         XCTAssertEqual(try String(contentsOf: newPrompt, encoding: .utf8), "legacy fixture")
+    }
+
+    func testCleanAndCommittedLaunchesDoNotReportMigrationProgress() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
+        let migration = ApplicationSupportMigration(paths: paths)
+        let progress = ProgressLog()
+        let clean = try await migration.prepare(report: { await progress.append($0) }) { false }
+        XCTAssertTrue(clean.isNewStorage)
+
+        try FileManager.default.createDirectory(at: paths.legacy.appendingPathComponent("Prompts"), withIntermediateDirectories: true)
+        let reopened = try await migration.prepare(report: { await progress.append($0) }) { false }
+        XCTAssertFalse(reopened.isNewStorage)
+        let events = await progress.values
+        XCTAssertTrue(events.isEmpty)
+    }
+
+    func testUpgradeReportsStagesAndIncompleteSpeechModels() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
+        let assetDirectory = paths.legacy.appendingPathComponent("Models/Liquid/\(LiquidAssets.revision)")
+        try FileManager.default.createDirectory(at: assetDirectory, withIntermediateDirectories: true)
+        try Data("invalid model".utf8).write(to: assetDirectory.appendingPathComponent(LiquidAssets.files[0].name))
+        let progress = ProgressLog()
+        _ = try await ApplicationSupportMigration(paths: paths).prepare(report: { await progress.append($0) }) { false }
+        let events = await progress.values
+        XCTAssertEqual(events, [.started(resuming: false), .copyingData, .checkingSpeechModels, .speechModelsIncomplete, .openingStores])
+    }
+
+    func testInterruptedUpgradeReportsResumeAndWaitsForLegacyApp() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
+        try FileManager.default.createDirectory(at: paths.storageWork, withIntermediateDirectories: true)
+        let journal = paths.storageWork.appendingPathComponent("storage.json")
+        try JSONEncoder().encode(["phase": "copying", "stagingName": UUID().uuidString]).write(to: journal)
+        let progress = ProgressLog()
+        let migration = ApplicationSupportMigration(paths: paths)
+        do {
+            _ = try await migration.prepare(report: { await progress.append($0) }) { true }
+            XCTFail("Expected the active DictaFlow process to block migration")
+        } catch ApplicationSupportMigration.Failure.legacyRunning {}
+        let blockedEvents = await progress.values
+        XCTAssertEqual(blockedEvents, [.started(resuming: true)])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.current.path))
+
+        _ = try await migration.prepare(report: { await progress.append($0) }) { false }
+        let allEvents = await progress.values
+        XCTAssertEqual(allEvents, [.started(resuming: true), .started(resuming: true), .copyingData, .checkingSpeechModels, .openingStores])
+    }
+
+    func testConcurrentMigrationReportsAnActionableFailure() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
+        let lock = try OmdoMigrationLock(at: paths.storageWork.appendingPathComponent("storage.lock"))
+        defer { withExtendedLifetime(lock) {} }
+        do {
+            _ = try await ApplicationSupportMigration(paths: paths).prepare { false }
+            XCTFail("Expected an active migration to hold the lock")
+        } catch ApplicationSupportMigration.Failure.migrationInProgress {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.current.path))
+    }
+
+    @MainActor
+    func testMigrationWindowCanCloseOnlyAfterWorkSettles() {
+        var state = MigrationWindowState(stage: .copyingData)
+        XCTAssertFalse(state.canClose)
+        state.error = "Test failure"
+        XCTAssertTrue(state.canClose)
+        state.error = nil
+        state.isComplete = true
+        XCTAssertTrue(state.canClose)
     }
 
     func testCommittedLegacyJournalRecoversAfterDeviceNumberChanges() async throws {
@@ -163,16 +241,23 @@ final class OmdoMigrationTests: XCTestCase {
     func testSharedModelImportRetriesMissingOrCorruptLegacyCache() async throws {
         let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow")
         let marker = paths.migrationDirectory.appendingPathComponent("Shared Models/complete")
-        try await WhisperModelDownloadService.seedOmdoModels(paths: paths)
+        let attempts = CopyAttempts()
+        try await WhisperModelDownloadService.seedOmdoModels(paths: paths) { await attempts.record() }
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
         try FileManager.default.createDirectory(at: paths.legacySharedModels, withIntermediateDirectories: true)
+        try Data().write(to: paths.legacySharedModels.appendingPathComponent("unrecognized-model.bin"))
+        try await WhisperModelDownloadService.seedOmdoModels(paths: paths) { await attempts.record() }
+        let beforeCandidate = await attempts.count
+        XCTAssertEqual(beforeCandidate, 0)
         let model = try XCTUnwrap(WhisperModelDescriptor.allCases.first)
         let source = paths.legacySharedModels.appendingPathComponent(model.filename)
         try Data("invalid model".utf8).write(to: source)
         do {
-            try await WhisperModelDownloadService.seedOmdoModels(paths: paths)
+            try await WhisperModelDownloadService.seedOmdoModels(paths: paths) { await attempts.record() }
             XCTFail("Expected the copy to report the bad checksum")
         } catch ModelDownloadServiceError.checksumMismatch {}
+        let withCandidate = await attempts.count
+        XCTAssertEqual(withCandidate, 1)
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: paths.sharedModels.appendingPathComponent(model.filename).path))
         XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "invalid model")

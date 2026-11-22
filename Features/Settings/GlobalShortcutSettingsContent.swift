@@ -32,14 +32,18 @@ struct GlobalShortcutSettingsContent: View {
             }
             if appState.isEditingGlobalShortcut {
                 HStack(alignment: .top, spacing: 12) {
-                    Text(appState.globalShortcutEditingMessage ?? "Use Command, Control, Option, or Shift. Escape cancels.")
-                        .foregroundStyle(appState.globalShortcutEditingMessage == nil ? AppTheme.secondaryText : AppTheme.errorText)
+                    if let message = appState.globalShortcutEditingMessage {
+                        EmberWarningLabel(message).foregroundStyle(AppTheme.errorText)
+                    } else {
+                        Text("Use Command, Control, Option, or Shift. Escape cancels.")
+                            .foregroundStyle(AppTheme.secondaryText)
+                    }
                     Spacer(minLength: 0)
                     Button("Cancel", role: .cancel) { appState.cancelGlobalShortcutEditing() }.buttonStyle(EmberButtonStyle(appearance: .plain))
                 }
                 .font(.system(size: 11))
             } else if !appState.isHotkeyRegistered {
-                Text("Shortcut unavailable. Choose another key combination.")
+                EmberWarningLabel("Shortcut unavailable. Choose another key combination.")
                     .font(.system(size: 11)).foregroundStyle(AppTheme.errorText)
             }
         }

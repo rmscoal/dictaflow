@@ -111,6 +111,8 @@ final class AgentVoiceCoordinator: ObservableObject {
     @Published private(set) var isEnabled: Bool
     @Published private(set) var status = "Agent Voice is off."
     @Published private(set) var isModelReady = false
+    @Published private(set) var isCheckingSpeechModel = true
+    static let checkingSpeechModelText = "Checking speech model…"
     @Published private(set) var modelDownloadProgress: ModelDownloadProgress?
     var isDownloading: Bool { modelDownloadProgress != nil }
     var onModelDownloadFinished: ((Result<Void, Error>) -> Void)?
@@ -201,6 +203,7 @@ final class AgentVoiceCoordinator: ObservableObject {
             }
         }
         initialModelCheck = Task { [weak self, modelDownloader = self.modelDownloader, generation = modelDownloadGeneration] in
+            defer { self?.isCheckingSpeechModel = false }
             await self?.refresh()
             let ready = (try? await modelDownloader.isReady()) == true
             guard !Task.isCancelled, self?.modelDownloadGeneration == generation else { return }
@@ -244,6 +247,7 @@ final class AgentVoiceCoordinator: ObservableObject {
         if activeError?.scope == .models { activeError = nil }
         let generation = UUID()
         modelDownloadGeneration = generation
+        initialModelCheck?.cancel()
         modelDownloadProgress = ModelDownloadProgress(progress: nil, statusText: "Starting download")
         status = "Downloading and verifying Liquid audio (1.4 GB)…"
         modelDownloadTask = Task { [weak self, modelDownloader] in

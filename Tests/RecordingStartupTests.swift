@@ -1382,6 +1382,21 @@ final class AgentVoiceDownloadTests: XCTestCase {
         // Let the startup task consume its stale result.
         try await Task.sleep(for: .milliseconds(20))
         XCTAssertTrue(fixture.voice.isModelReady)
+        XCTAssertFalse(fixture.voice.isCheckingSpeechModel)
+    }
+
+    func testRecordingDuringLiquidCheckDoesNotShowTheMissingModelWarning() async throws {
+        let fixture = try VoiceDownloadTestFixture(pausesReadiness: true)
+        defer { fixture.cleanup() }
+        let state = fixture.app.state
+        state.updateSpeechToLiquid()
+        try await waitUntil { fixture.downloader.isCheckingReadiness }
+        XCTAssertEqual(state.modelStatusText, AgentVoiceCoordinator.checkingSpeechModelText)
+        state.toggleDictation()
+        try await waitUntil { state.interfaceIssue != nil }
+        XCTAssertEqual(state.interfaceIssue?.title, AgentVoiceCoordinator.checkingSpeechModelText)
+        XCTAssertEqual(state.interfaceIssue?.severity, .information)
+        XCTAssertEqual(state.recordingState, .idle)
     }
 
     func testProgressVerificationNavigationAndCompletionUseSharedDownloads() async throws {

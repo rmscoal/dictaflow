@@ -77,8 +77,8 @@ struct RefinementModelsView: View {
                 EmberDownloadProgress(value: appState.refinementDownloadProgress(for: model))
                 Text(appState.refinementDownloadStatusText(for: model)).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
             }
-            if let error { Text(error).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
-            if let unsupported { Text(unsupported).font(.system(size: 12)).foregroundStyle(AppTheme.errorText) }
+            if let error { EmberWarningLabel(error).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
+            if let unsupported { EmberWarningLabel(unsupported).font(.system(size: 12)).foregroundStyle(AppTheme.errorText) }
         }
         .padding(.vertical, 17).padding(.horizontal, error != nil || unsupported != nil ? 12 : 0)
         .background(error != nil || unsupported != nil ? AppTheme.errorFill : .clear, in: RoundedRectangle(cornerRadius: 16))

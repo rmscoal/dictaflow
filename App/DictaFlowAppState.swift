@@ -321,7 +321,8 @@ final class DictaFlowAppState: ObservableObject {
 
     private func observeAgentVoiceDownloads() {
         guard let agentVoice else { return }
-        agentVoiceModelObservation = agentVoice.$isModelReady.combineLatest(agentVoice.$modelDownloadProgress, agentVoice.$activeError)
+        agentVoiceModelObservation = agentVoice.$isModelReady.combineLatest(agentVoice.$modelDownloadProgress, agentVoice.$activeError,
+                                                                          agentVoice.$isCheckingSpeechModel)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
         agentVoice.onModelDownloadFinished = { [weak self] result in
@@ -518,6 +519,7 @@ final class DictaFlowAppState: ObservableObject {
         switch transcriptionState {
         case .idle:
             if whisperConfiguration.recognitionProvider == .liquid {
+                if agentVoice?.isCheckingSpeechModel == true { return AgentVoiceCoordinator.checkingSpeechModelText }
                 return agentVoice?.isModelReady == true ? "Liquid LFM3-Audio is ready." : "Download Liquid audio in Agent Voice, under Models."
             }
             if isWhisperModelPrepared(whisperConfiguration.model) {
@@ -860,7 +862,7 @@ final class DictaFlowAppState: ObservableObject {
         updateRecordingOverlay()
     }
 
-    func handleApplicationLaunch() {
+    func handleApplicationLaunch(showMainWindowAfterUpgrade: Bool = false) {
         history.start()
         removeIncompleteModelDownloads()
         refreshInstalledLocalModelFiles()
@@ -877,6 +879,8 @@ final class DictaFlowAppState: ObservableObject {
             showMainWindow()
         } else if microphonePermissionState != .granted || accessibilityPermissionState != .granted {
             onboardingPresentation = .permissionRecovery
+            showMainWindow()
+        } else if showMainWindowAfterUpgrade {
             showMainWindow()
         }
 
@@ -2894,6 +2898,11 @@ final class DictaFlowAppState: ObservableObject {
         guard usesLiquid ? agentVoice?.isModelReady == true : isWhisperModelPrepared(whisperConfiguration.model) else {
             releaseRecordingAudioLease()
             isOnboardingPracticeSession = false
+            if usesLiquid, agentVoice?.isCheckingSpeechModel == true {
+                setPreservedStatusMessage("Omdo is checking the existing speech model. Try recording again when the check finishes.",
+                                          issueTitle: AgentVoiceCoordinator.checkingSpeechModelText, severity: .information)
+                return
+            }
             setPreservedStatusMessage("\(whisperConfiguration.speechModelName) is not prepared. Download it before recording.", issueTitle: "Speech model is missing")
             if usesLiquid {
                 agentVoiceTab = .general

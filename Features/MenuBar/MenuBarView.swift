@@ -12,7 +12,8 @@ struct MenuBarView: View {
             dictationControl
             quickControls
             if let modelMigrationNotice {
-                Text(modelMigrationNotice).font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+                Label { Text(modelMigrationNotice).foregroundStyle(AppTheme.secondaryText) } icon: { EmberWarningIcon() }
+                    .font(.system(size: 12))
             }
             if !legacyDataLocations.isEmpty {
                 Button("Show previous DictaFlow data in Finder") {
@@ -263,10 +264,11 @@ private struct MenuBarAgentVoiceRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Agent Voice").font(.system(size: 12, weight: .medium))
                     if let detail {
-                        Text(detail)
-                            .font(.system(size: 11))
-                            .foregroundStyle(voice.activeError?.scope == .setup ? AppTheme.errorText : AppTheme.secondaryText)
-                            .lineLimit(2)
+                        Group {
+                            if voice.activeError?.scope == .setup { EmberWarningLabel(detail).foregroundStyle(AppTheme.errorText) }
+                            else { Text(detail).foregroundStyle(AppTheme.secondaryText) }
+                        }
+                        .font(.system(size: 11)).lineLimit(2)
                     }
                 }
                 Spacer(minLength: 0)
@@ -280,6 +282,8 @@ private struct MenuBarAgentVoiceRow: View {
     private var detail: String? {
         if let error = voice.activeError, error.scope == .setup { return error.message }
         guard voice.isEnabled, !voice.isModelReady else { return nil }
-        return voice.isDownloading ? "Downloading speech model…" : "Speech model needed"
+        if voice.isDownloading { return "Downloading speech model…" }
+        if voice.isCheckingSpeechModel { return AgentVoiceCoordinator.checkingSpeechModelText }
+        return "Speech model needed"
     }
 }

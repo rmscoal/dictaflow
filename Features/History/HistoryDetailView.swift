@@ -171,10 +171,10 @@ struct HistoryDetailView: View {
             Text("Processes the saved audio again. Previous results are kept. Text will not be inserted automatically.")
                 .foregroundStyle(AppTheme.secondaryText)
             if !appState.isWhisperModelPrepared(selectedModel) {
-                Text("Download this model in Dictation → Transcription before retrying.").foregroundStyle(AppTheme.errorText)
+                EmberWarningLabel("Download this model in Dictation → Transcription before retrying.").foregroundStyle(AppTheme.errorText)
             }
             if appState.refinementConfiguration.isEnabled && !appState.isSelectedRefinementModelPrepared {
-                Text("The refinement model is unavailable. This retry will use the transcript with your selected tone.")
+                EmberWarningLabel("The refinement model is unavailable. This retry will use the transcript with your selected tone.")
                     .foregroundStyle(AppTheme.errorText)
             }
             HStack {

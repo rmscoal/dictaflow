@@ -205,9 +205,9 @@ struct OnboardingView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4)
                 } else if let downloadError = modelDownloadError {
-                    Label(downloadError, systemImage: "exclamationmark.circle.fill")
+                    EmberWarningLabel(downloadError)
                         .font(.system(size: 11))
-                        .foregroundStyle(OnboardingTheme.warning)
+                        .foregroundStyle(OnboardingTheme.primaryText)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 4)
                 }
@@ -271,9 +271,9 @@ struct OnboardingView: View {
                 }
 
                 if let message = appState.globalShortcutEditingMessage {
-                    Text(message)
+                    EmberWarningLabel(message)
                         .font(.system(size: 11))
-                        .foregroundStyle(OnboardingTheme.warning)
+                        .foregroundStyle(OnboardingTheme.primaryText)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
@@ -516,7 +516,7 @@ struct OnboardingView: View {
         case .transcription:
             return "checkmark.circle.fill"
         case .noSpeech:
-            return "exclamationmark.circle.fill"
+            return EmberWarningIcon.symbol
         case nil:
             break
         }
@@ -726,7 +726,7 @@ private struct WaveformDecoration: View {
     }
 }
 
-private struct PrimaryOnboardingButtonStyle: ButtonStyle {
+struct PrimaryOnboardingButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
@@ -741,7 +741,7 @@ private struct PrimaryOnboardingButtonStyle: ButtonStyle {
     }
 }
 
-private struct SecondaryOnboardingButtonStyle: ButtonStyle {
+struct SecondaryOnboardingButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .medium))

@@ -466,6 +466,7 @@ struct AgentVoiceHistoryTab: View {
             return "Queued"
         }
         if !voice.isEnabled { return "Enable Agent Voice in General to play." }
+        if voice.isCheckingSpeechModel { return AgentVoiceCoordinator.checkingSpeechModelText }
         if !voice.isModelReady { return "Download the speech model in General to play." }
         if let latest = attempts.max(by: { $0.createdAt < $1.createdAt }), latest.state == .failed {
             return "Playback failed" + (latest.failure.map { ": \($0)" } ?? ". Try again.")

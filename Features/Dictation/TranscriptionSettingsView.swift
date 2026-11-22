@@ -8,11 +8,19 @@ struct TranscriptionSettingsView: View {
     private var isLiquid: Bool { appState.whisperConfiguration.recognitionProvider == .liquid }
     private var liquidReady: Bool { appState.agentVoice?.isModelReady == true }
     private var liquidDownloading: Bool { appState.agentVoice?.isDownloading == true }
+    private var liquidChecking: Bool { appState.agentVoice?.isCheckingSpeechModel == true }
+
+    private var liquidStatus: String {
+        if liquidReady { return "Ready" }
+        if liquidDownloading { return "Downloading…" }
+        if liquidChecking { return AgentVoiceCoordinator.checkingSpeechModelText }
+        return "Download needed"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if isLiquid {
-                if !liquidReady {
+                if !liquidReady && !liquidChecking && !liquidDownloading {
                     EmberErrorBanner(title: "Download your speech model", message: "Liquid LFM3-Audio-2B is selected, but its shared assets are missing. Download them in Agent Voice, under Models.", actionTitle: "Open Agent Voice") {
                         appState.showMainWindowPage(.agentVoice)
                     }
@@ -27,18 +35,15 @@ struct TranscriptionSettingsView: View {
             EmberSectionHeading(title: "Speech model")
             SelectedModelCard(name: appState.whisperConfiguration.speechModelName,
                               providerAsset: appState.whisperConfiguration.recognitionProvider.iconName,
-                              status: isLiquid ? (liquidReady ? "Ready" : liquidDownloading ? "Downloading…" : "Download needed") : (prepared ? "Ready" : "Download needed"),
+                              status: isLiquid ? liquidStatus : (prepared ? "Ready" : "Download needed"),
                               size: isLiquid ? "1.4 GB" : model.approximateDiskSizeDescription + (appState.isWhisperEncoderPrepared(model) ? " · Neural Engine" : ""),
-                              hasError: isLiquid ? !liquidReady : !prepared,
-                              actionTitle: (isLiquid ? liquidReady : prepared) ? "Change…" : "Download…",
+                              hasError: isLiquid ? !liquidReady && !liquidChecking && !liquidDownloading : !prepared,
+                              isPreparing: isLiquid && !liquidReady && (liquidChecking || liquidDownloading),
+                              actionTitle: (isLiquid ? liquidReady || liquidChecking || liquidDownloading : prepared) ? "Change…" : "Download…",
                               disabled: appState.whisperSettingsLocked) {
                 if isLiquid { appState.showSpeechModels() } else { appState.showSpeechModels(focusing: model) }
             }
             .padding(.bottom, 18)
-            if isLiquid {
-                Text("Liquid LFM3-Audio-2B uses the same press-to-start, press-to-stop recording flow. Download its shared ASR/TTS assets in Agent Voice, under Models. Vocabulary replacements still apply; Whisper decoding hints are not used.")
-                    .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText).padding(.bottom, 18)
-            }
             EmberPanel {
                 EmberRow(title: "Task") {
                     EmberSelectionMenu(label: "Task", title: appState.whisperConfiguration.taskMode == .transcribe ? "Transcribe" : "Translate to English") {

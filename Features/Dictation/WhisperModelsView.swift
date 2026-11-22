@@ -91,8 +91,8 @@ struct WhisperModelsView: View {
                 }
                 EmberDownloadProgress(value: appState.whisperEncoderDownloadProgress(for: model))
             }
-            if let error { Text(error).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
-            if let encoderError { Text(encoderError).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
+            if let error { EmberWarningLabel(error).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
+            if let encoderError { EmberWarningLabel(encoderError).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
         }
         .padding(.vertical, 17).padding(.horizontal, error != nil || encoderError != nil ? 12 : 0)
         .background(error != nil || encoderError != nil ? AppTheme.errorFill : .clear, in: RoundedRectangle(cornerRadius: 16))

@@ -23,11 +23,16 @@ private struct MenuBarLaunchContent: View {
                         legacyDataLocations: appDelegate.legacyDataLocations)
         } else {
             VStack(alignment: .leading, spacing: 12) {
-                if let error = appDelegate.launchError {
-                    Text("Omdo could not open its local data").font(.headline)
-                    Text(error)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Try again", action: appDelegate.prepareApplication)
+                if let migration = appDelegate.migration {
+                    Button(action: appDelegate.showMigrationWindow) {
+                        Label {
+                            Text(migration.error == nil ? "Show upgrade window" : "Show startup issue")
+                        } icon: {
+                            if migration.error != nil { EmberWarningIcon() }
+                            else { Image(systemName: "macwindow") }
+                        }
+                    }
+                    .buttonStyle(EmberButtonStyle())
                 } else {
                     ProgressView("Preparing local data…")
                 }

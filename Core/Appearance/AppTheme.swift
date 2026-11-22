@@ -16,7 +16,7 @@ enum AppTheme {
     static let actionText = ThemeColor.adaptive(light: 0xFFFFFF, dark: 0x161616)
     static let ready = ThemeColor.adaptive(light: 0x161616, dark: 0x4ADE80)
     static let modelActive = primaryText
-    static let warning = primaryText
+    static let warning = ThemeColor.adaptive(light: 0xA84B00, dark: 0xFFAA55)
     static let destructive = ThemeColor.adaptive(light: 0xA32828, dark: 0xFFA9A9)
     static let border = ThemeColor.adaptive(light: 0xB0B0B0, dark: 0x5D5D5D)
     static let primaryText = ThemeColor.adaptive(light: 0x161616, dark: 0xF8F8F8)

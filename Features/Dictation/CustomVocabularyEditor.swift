@@ -262,7 +262,7 @@ struct VocabularyEntryEditorView: View {
                             .foregroundStyle(AppTheme.secondaryText)
                     }
                     if let errorMessage {
-                        Text(errorMessage)
+                        EmberWarningLabel(errorMessage)
                             .font(.system(size: 12))
                             .foregroundStyle(AppTheme.errorText)
                             .fixedSize(horizontal: false, vertical: true)

@@ -6,6 +6,7 @@ struct SelectedModelCard: View {
     let status: String
     let size: String
     var hasError = false
+    var isPreparing = false
     var actionTitle = "Change…"
     var disabled = false
     let action: () -> Void
@@ -43,8 +44,10 @@ struct SelectedModelCard: View {
     @ViewBuilder
     private var statusLabel: some View {
         if hasError {
-            Label(status, systemImage: "exclamationmark.circle")
+            EmberWarningLabel(status)
                 .foregroundStyle(AppTheme.errorText)
+        } else if isPreparing {
+            Text(status).foregroundStyle(AppTheme.secondaryText)
         } else {
             EmberReadyBadge(title: status)
         }

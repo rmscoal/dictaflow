@@ -130,8 +130,8 @@ struct AgentVoiceHostCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.circle")
-                        .font(.system(size: 12)).foregroundStyle(AppTheme.destructive)
+                    EmberWarningLabel(errorMessage)
+                        .font(.system(size: 12)).foregroundStyle(AppTheme.primaryText)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityLabel("Setup failed. \(errorMessage)")
                 }

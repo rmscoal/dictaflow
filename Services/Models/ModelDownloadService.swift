@@ -873,7 +873,8 @@ actor WhisperModelDownloadService: ModelDownloadServiceProtocol {
 
 extension WhisperModelDownloadService {
     /// Release seeds a separate cache. Preview and previous releases can still use the old cache.
-    nonisolated static func seedOmdoModels(paths: ApplicationSupportPaths) async throws {
+    @concurrent nonisolated static func seedOmdoModels(paths: ApplicationSupportPaths,
+                                                       onCopy: @Sendable () async -> Void = {}) async throws {
         guard paths.isRelease else { return }
         let files = FileManager.default
         let work = paths.migrationDirectory.appendingPathComponent("Shared Models")
@@ -887,19 +888,22 @@ extension WhisperModelDownloadService {
         try MigrationFiles.requireDirectory(source.deletingLastPathComponent())
         try MigrationFiles.requireDirectory(source)
         let installed = try files.contentsOfDirectory(atPath: source.path)
-        var foundCandidate = false
+        let whisperCandidates = WhisperModelDescriptor.allCases.flatMap {
+            [$0.filename, $0.encoderDirectoryName, $0.encoderDisabledDirectoryName]
+        }
+        let refinementCandidates = RefinementModelDescriptor.storedModels.map(\.filename)
+        guard !Set(installed).isDisjoint(with: whisperCandidates + refinementCandidates) else { return }
+        await onCopy()
         var needsRetry = false
         try Self.ensureModelsDirectoryExists(at: target, using: files)
         for model in WhisperModelDescriptor.allCases {
             try Task.checkCancellation()
             let names = [model.encoderDirectoryName, model.encoderDisabledDirectoryName]
             if installed.contains(model.filename) {
-                foundCandidate = true
                 if try !copyCachedModel(model, from: source, to: target, work: work) { needsRetry = true }
             }
             let candidates = names.filter { installed.contains($0) }
             guard !candidates.isEmpty else { continue }
-            foundCandidate = true
             guard candidates.count == 1, let name = candidates.first else { needsRetry = true; continue }
             let origin = source.appendingPathComponent(name)
             guard isValidEncoderDirectory(at: origin),
@@ -920,7 +924,6 @@ extension WhisperModelDownloadService {
         }
         for model in RefinementModelDescriptor.storedModels where installed.contains(model.filename) {
             try Task.checkCancellation()
-            foundCandidate = true
             if try !copyCachedModel(model, from: source, to: target, work: work) { needsRetry = true }
         }
         let latest = try files.contentsOfDirectory(atPath: source.path)
@@ -928,7 +931,6 @@ extension WhisperModelDownloadService {
             throw ApplicationSupportMigration.Failure.sourceChanged
         }
         if needsRetry { throw ModelDownloadServiceError.checksumMismatch }
-        guard foundCandidate else { return }
         try MigrationFiles.replaceDurably(Data(), at: done)
     }
 

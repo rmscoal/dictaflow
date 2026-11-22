@@ -17,6 +17,10 @@ struct AgentVoiceModelsTab: View {
                     } else if voice.isModelReady {
                         EmberReadyBadge()
                             .font(.system(size: 12))
+                    } else if voice.isCheckingSpeechModel {
+                        ProgressView(AgentVoiceCoordinator.checkingSpeechModelText)
+                            .controlSize(.small)
+                            .font(.system(size: 12))
                     } else {
                         Button("Download…") { voice.downloadModel() }
                             .buttonStyle(EmberButtonStyle(primary: true))
@@ -134,10 +138,12 @@ struct AgentVoiceModelsTab: View {
             .disabled(voice.previewState == .stopping || (!isPreviewActive && !voice.canPreviewVoice))
             .accessibilityIdentifier("agent-voice-preview")
 
-            Text(previewStatus)
-                .font(.system(size: 12))
-                .foregroundStyle(previewFailed ? AppTheme.errorText : AppTheme.secondaryText)
-                .accessibilityIdentifier("agent-voice-preview-status")
+            Group {
+                if previewFailed { EmberWarningLabel(previewStatus).foregroundStyle(AppTheme.errorText) }
+                else { Text(previewStatus).foregroundStyle(AppTheme.secondaryText) }
+            }
+            .font(.system(size: 12))
+            .accessibilityIdentifier("agent-voice-preview-status")
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 20)
@@ -164,6 +170,7 @@ struct AgentVoiceModelsTab: View {
         case .failed(let message): return message
         case .idle:
             if !voice.isEnabled { return "Enable Agent Voice to play a sample." }
+            if voice.isCheckingSpeechModel { return AgentVoiceCoordinator.checkingSpeechModelText }
             if !voice.isModelReady { return "Download the speech model to play a sample." }
             if !voice.canPreviewVoice { return "Test speech is available when dictation and agent speech are idle." }
             return "Hear a sample with the current speech settings."

@@ -150,6 +150,8 @@ struct ModelPickerSheet: View {
                 VStack(alignment: .trailing, spacing: 8) {
                     if downloading {
                         Text("Downloading…").font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+                    } else if appState.agentVoice?.isCheckingSpeechModel == true {
+                        Text(AgentVoiceCoordinator.checkingSpeechModelText).font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
                     } else if selected && ready {
                         Label("Selected", systemImage: "checkmark").font(.system(size: 11)).foregroundStyle(AppTheme.accent)
                     } else if ready {

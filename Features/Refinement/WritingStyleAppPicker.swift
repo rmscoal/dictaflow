@@ -45,7 +45,7 @@ struct WritingStyleAppPicker: View {
                         Text("No applications match this search.").font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
                     }
                     Button("Browse applications…") { browse() }.buttonStyle(EmberButtonStyle())
-                    if let browseError { Text(browseError).font(.system(size: 12)).foregroundStyle(AppTheme.errorText) }
+                    if let browseError { EmberWarningLabel(browseError).font(.system(size: 12)).foregroundStyle(AppTheme.errorText) }
                 }.padding(.horizontal, 22).padding(.bottom, 20)
             }
             EmberDivider()

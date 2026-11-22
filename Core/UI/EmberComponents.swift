@@ -274,6 +274,27 @@ struct ShortcutKeycaps: View {
     }
 }
 
+struct EmberWarningIcon: View {
+    static let symbol = "exclamationmark.triangle.fill"
+
+    var body: some View {
+        Image(systemName: Self.symbol)
+            .symbolRenderingMode(.monochrome)
+            .foregroundStyle(AppTheme.warning)
+            .accessibilityHidden(true)
+    }
+}
+
+struct EmberWarningLabel: View {
+    let message: String
+
+    init(_ message: String) { self.message = message }
+
+    var body: some View {
+        Label { Text(message) } icon: { EmberWarningIcon() }
+    }
+}
+
 struct EmberErrorBanner: View {
     let title: String
     let message: String
@@ -282,7 +303,7 @@ struct EmberErrorBanner: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.circle").font(.system(size: 15))
+            EmberWarningIcon().font(.system(size: 15))
             VStack(alignment: .leading, spacing: 5) {
                 Text(title).font(.system(size: 12, weight: .semibold))
                 Text(message).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)

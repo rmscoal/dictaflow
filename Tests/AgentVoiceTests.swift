@@ -16,7 +16,10 @@ final class AgentVoiceTests: XCTestCase {
                                           runtime: VoiceRuntimeFixture(), modelDownloader: ReadyVoiceModelFixture())
         defer { voice.shutdown(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
 
+        XCTAssertTrue(voice.isCheckingSpeechModel)
+        XCTAssertFalse(voice.isModelReady)
         await voice.waitForInitialModelCheck()
+        XCTAssertFalse(voice.isCheckingSpeechModel)
         XCTAssertTrue(voice.isModelReady)
     }
 
