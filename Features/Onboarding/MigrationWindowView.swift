@@ -71,8 +71,6 @@ struct MigrationWindowView: View {
                             EmberWarningLabel(notice)
                                 .font(.system(size: 12))
                         }
-                        Text("Your original DictaFlow data is still on this Mac.")
-                            .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
                     } else if state.stage == .checkingSpeechModels || state.stage == .copyingOfflineModels {
                         Text("Omdo is checking model files already on this Mac. This may take a moment.")
                             .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
