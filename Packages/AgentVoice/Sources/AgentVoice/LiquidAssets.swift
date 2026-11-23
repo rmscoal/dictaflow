@@ -6,8 +6,16 @@ public struct LiquidAsset: Sendable {
     public let name: String
     public let bytes: Int64
     public let sha256: String
+
+    public init(name: String, bytes: Int64, sha256: String) {
+        self.name = name
+        self.bytes = bytes
+        self.sha256 = sha256
+    }
+
     public var url: URL {
-        URL(string: "https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF/resolve/\(LiquidAssets.revision)/\(name)")!
+        URL(string: "https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF/resolve/\(LiquidAssets.revision)/")!
+            .appending(component: name, directoryHint: .notDirectory)
     }
 }
 
@@ -124,7 +132,7 @@ public actor LiquidAssets: LiquidAssetDownloading {
         }
     }
 
-    private static func verify(_ url: URL, asset: LiquidAsset) throws -> Bool {
+    public static func verify(_ url: URL, asset: LiquidAsset) throws -> Bool {
         guard FileManager.default.fileExists(atPath: url.path) else { return false }
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         guard attributes[.type] as? FileAttributeType == .typeRegular,

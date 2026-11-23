@@ -23,7 +23,7 @@ enum RefinementPromptStoreError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .couldNotCreateDirectory:
-            return "DictaFlow could not create its local prompt folder."
+            return "Omdo could not create its local prompt folder."
         case .invalidPromptFile:
             return "The local prompt file is not a regular private text file."
         case .emptyPrompt:
@@ -38,17 +38,10 @@ final class FileRefinementPromptStore: RefinementPromptStoreProtocol {
 
     private let fileManager: FileManager
 
-    init(fileManager: FileManager = .default, directoryURL: URL? = nil) {
+    init(fileManager: FileManager = .default, directoryURL: URL) {
         self.fileManager = fileManager
-        self.promptsDirectoryURL = directoryURL ?? Self.makePromptsDirectoryURL(fileManager: fileManager)
+        self.promptsDirectoryURL = directoryURL
         do {
-            // Earlier Dev builds shared the release prompt folder. Copy once, never remove it.
-            if directoryURL == nil, Bundle.main.bundleIdentifier != "com.dictaflow" {
-                let legacy = fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/DictaFlow/Prompts/refinement.txt")
-                if !fileManager.fileExists(atPath: promptURL.path), Self.isRegularPromptFile(at: legacy) {
-                    try savePromptTemplate(String(contentsOf: legacy, encoding: .utf8))
-                }
-            }
             try migrateLegacyStandardPromptIfNeeded()
         } catch {
             loadError = "Could not migrate the local prompt. " + error.localizedDescription
@@ -150,14 +143,6 @@ final class FileRefinementPromptStore: RefinementPromptStoreProtocol {
         }
 
         try savePromptTemplate(prompt)
-    }
-
-    private static func makePromptsDirectoryURL(fileManager: FileManager) -> URL {
-        fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent(Bundle.main.bundleIdentifier == "com.dictaflow" ? "DictaFlow" : "DictaFlow Dev", isDirectory: true)
-            .appendingPathComponent("Prompts", isDirectory: true)
     }
 
     private static func ensurePromptsDirectoryExists(at directoryURL: URL, using fileManager: FileManager) throws {

@@ -59,7 +59,7 @@ private struct CopyFallbackPanelView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("DictaFlow couldn’t insert the transcript automatically.")
+            Text("Omdo couldn’t insert the transcript automatically.")
                 .font(.system(size: 17, weight: .medium))
 
             Text(descriptionText)

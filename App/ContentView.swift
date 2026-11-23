@@ -48,11 +48,23 @@ struct ContentView: View {
         }
         .frame(minWidth: AppLayout.windowMinWidth, minHeight: AppLayout.windowMinHeight)
         .foregroundStyle(AppTheme.primaryText)
-        .background(AppTheme.background)
+        .omdoWindowTint(in: RoundedRectangle(cornerRadius: 12))
         .tint(AppTheme.accent)
         .ignoresSafeArea(.container, edges: .top)
         .sheet(item: $appState.modelPickerPresentation) { presentation in
             ModelPickerSheet(appState: appState, presentation: presentation)
+        }
+        .sheet(isPresented: $appState.showsSpeechModelsDuringOnboarding) {
+            if let voice = appState.agentVoice {
+                VStack(alignment: .trailing, spacing: 14) {
+                    AgentVoiceModelsTab(appState: appState, voice: voice)
+                    Button("Done") { appState.showsSpeechModelsDuringOnboarding = false }
+                        .buttonStyle(EmberButtonStyle())
+                        .keyboardShortcut(.defaultAction)
+                }
+                .padding(24)
+                .frame(width: 560)
+            }
         }
         .alert("Recording failed", isPresented: Binding(
             get: { appState.recordingFailureMessage != nil },

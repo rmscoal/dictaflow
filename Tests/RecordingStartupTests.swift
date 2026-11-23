@@ -30,6 +30,41 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertEqual(state.dictationSettingsTab, .transcription)
         XCTAssertEqual(state.modelPickerPresentation?.kind, .speech)
         XCTAssertEqual(state.modelPickerPresentation?.modelIdentifier, WhisperModelDescriptor.small.modelIdentifier)
+        state.agentVoiceTab = .history
+        state.showAgentVoiceSpeechModels()
+        XCTAssertEqual(state.mainWindowPage, .agentVoice)
+        XCTAssertEqual(state.agentVoiceTab, .general)
+        XCTAssertNotNil(state.agentVoiceSpeechModelRequest)
+        XCTAssertNil(state.modelPickerPresentation)
+    }
+
+    func testLiquidRecoverySwitchesOnlyToAVerifiedWhisperModel() async throws {
+        let directory = FileManager.default.temporaryDirectory
+        let models = PipelineModelDownloadService(modelsDirectoryURL: directory)
+        let fixture = try RecordingStartupFixture(modelDownloadService: models)
+        defer { fixture.cleanup() }
+        let state = fixture.state
+        let selected = state.whisperConfiguration.model
+        let alternate = try XCTUnwrap(WhisperModelDescriptor.allCases.first { $0 != selected })
+        models.preparedModels = [selected, alternate]
+        models.unverifiedModels = [selected]
+        state.updateSpeechToLiquid()
+
+        let fallback = await state.verifiedWhisperFallback(from: state.whisperFallbackCandidates)
+        XCTAssertEqual(fallback, alternate)
+        XCTAssertEqual(state.whisperConfiguration.recognitionProvider, .liquid)
+        let unavailable = await state.useWhisperFallback(selected)
+        XCTAssertTrue(try XCTUnwrap(unavailable).contains(selected.displayName))
+        XCTAssertEqual(state.whisperConfiguration.recognitionProvider, .liquid)
+        models.unverifiedModels.insert(alternate)
+        let stale = await state.useWhisperFallback(alternate)
+        XCTAssertTrue(try XCTUnwrap(stale).contains(alternate.displayName))
+        XCTAssertEqual(state.whisperConfiguration.recognitionProvider, .liquid)
+        models.unverifiedModels.remove(alternate)
+        let switched = await state.useWhisperFallback(alternate)
+        XCTAssertNil(switched)
+        XCTAssertEqual(state.whisperConfiguration.recognitionProvider, .whisper)
+        XCTAssertEqual(state.whisperConfiguration.model, alternate)
     }
 
     func testMissingSpeechModelOpensItsPickerWithoutStartingCapture() async throws {
@@ -1379,9 +1414,27 @@ final class AgentVoiceDownloadTests: XCTestCase {
         try await waitUntil { !fixture.voice.isDownloading }
         XCTAssertTrue(fixture.voice.isModelReady)
         fixture.downloader.finishReadiness()
-        // Let the startup task consume its stale result.
-        try await Task.sleep(for: .milliseconds(20))
+        try await waitUntil { !fixture.voice.isCheckingSpeechModel }
         XCTAssertTrue(fixture.voice.isModelReady)
+        XCTAssertFalse(fixture.voice.isCheckingSpeechModel)
+    }
+
+    func testRecordingDuringLiquidCheckDoesNotShowTheMissingModelWarning() async throws {
+        let fixture = try VoiceDownloadTestFixture(pausesReadiness: true)
+        defer { fixture.cleanup() }
+        let state = fixture.app.state
+        state.updateSpeechToLiquid()
+        try await waitUntil { fixture.downloader.isCheckingReadiness }
+        XCTAssertEqual(state.modelStatusText, AgentVoiceCoordinator.checkingSpeechModelText)
+        state.toggleDictation()
+        try await waitUntil { state.interfaceIssue != nil }
+        XCTAssertEqual(state.interfaceIssue?.title, AgentVoiceCoordinator.checkingSpeechModelText)
+        XCTAssertEqual(state.interfaceIssue?.severity, .information)
+        XCTAssertEqual(state.recordingState, .idle)
+        let checkingStatus = state.statusMessage
+        fixture.downloader.finishReadiness()
+        try await waitUntil { state.interfaceIssue == nil }
+        XCTAssertNotEqual(state.statusMessage, checkingStatus)
     }
 
     func testProgressVerificationNavigationAndCompletionUseSharedDownloads() async throws {
@@ -1821,6 +1874,7 @@ private actor PipelineRefinementService: TranscriptRefinementServiceProtocol {
 private final class PipelineModelDownloadService: ModelDownloadServiceProtocol {
     let modelsDirectoryURL: URL
     var preparedModels: Set<WhisperModelDescriptor>?
+    var unverifiedModels: Set<WhisperModelDescriptor> = []
     var downloadRequests: [String] = []
     var cancelledIdentifiers: [String] = []
     var onModelDownload: (() async throws -> Void)?
@@ -1833,7 +1887,7 @@ private final class PipelineModelDownloadService: ModelDownloadServiceProtocol {
     func removeIncompleteDownloads() -> Int64 { 0 }
     func isWhisperModelPrepared(_ model: WhisperModelDescriptor) -> Bool { preparedModels?.contains(model) ?? true }
     func verifiedWhisperModelURL(for model: WhisperModelDescriptor) async -> URL? {
-        modelsDirectoryURL.appendingPathComponent(model.filename)
+        unverifiedModels.contains(model) ? nil : modelsDirectoryURL.appendingPathComponent(model.filename)
     }
     func ensureModelAvailable(_ model: WhisperModelDescriptor, progressHandler: @escaping @Sendable (ModelDownloadEvent) -> Void) async throws -> URL {
         downloadRequests.append(model.modelIdentifier)

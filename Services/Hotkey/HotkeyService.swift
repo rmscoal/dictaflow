@@ -18,11 +18,11 @@ enum HotkeyServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unableToInstallHandler:
-            return "DictaFlow could not install its global hotkey handler."
+            return "Omdo could not install its global hotkey handler."
         case .invalidShortcut:
             return "Choose a shortcut with at least one modifier and a key."
         case .unableToRegisterShortcut(let shortcut, let status):
-            return "DictaFlow could not register \(shortcut.displayValue) as a global shortcut. It may already be in use. (OSStatus \(status))."
+            return "Omdo could not register \(shortcut.displayValue) as a global shortcut. It may already be in use. (OSStatus \(status))."
         }
     }
 }

@@ -87,12 +87,12 @@ struct WhisperModelsView: View {
                 HStack {
                     Text("Encoder · \(appState.whisperEncoderDownloadStatusText(for: model))").font(.system(size: 11))
                     Spacer()
-                    Button("Cancel encoder") { appState.cancelWhisperEncoderDownload(model) }.buttonStyle(.plain).font(.system(size: 12))
+                    Button("Cancel encoder") { appState.cancelWhisperEncoderDownload(model) }.buttonStyle(EmberButtonStyle(appearance: .plain)).font(.system(size: 12))
                 }
                 EmberDownloadProgress(value: appState.whisperEncoderDownloadProgress(for: model))
             }
-            if let error { Text(error).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
-            if let encoderError { Text(encoderError).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
+            if let error { EmberWarningLabel(error).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
+            if let encoderError { EmberWarningLabel(encoderError).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
         }
         .padding(.vertical, 17).padding(.horizontal, error != nil || encoderError != nil ? 12 : 0)
         .background(error != nil || encoderError != nil ? AppTheme.errorFill : .clear, in: RoundedRectangle(cornerRadius: 16))
@@ -125,7 +125,7 @@ struct WhisperModelsView: View {
             } else if appState.isWhisperEncoderDownloaded(model) {
                 HStack {
                     Toggle("Use encoder", isOn: Binding(get: { appState.isWhisperEncoderEnabled(model) }, set: { appState.setWhisperEncoderEnabled($0, for: model) }))
-                        .toggleStyle(.switch).controlSize(.mini)
+                        .toggleStyle(EmberSwitchStyle()).controlSize(.mini)
                     Spacer(minLength: 12)
                     if !appState.isWhisperEncoderEnabled(model) {
                         Button("Remove encoder…") { encoderPendingRemoval = model }.buttonStyle(EmberButtonStyle())

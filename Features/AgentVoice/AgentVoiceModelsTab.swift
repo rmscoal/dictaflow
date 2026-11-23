@@ -3,8 +3,25 @@ import SwiftUI
 
 /// Speech model section in General. Liquid is shared with dictation.
 struct AgentVoiceModelsTab: View {
+    @ObservedObject var appState: DictaFlowAppState
     @ObservedObject var voice: AgentVoiceCoordinator
     @State private var confirmsCancellation = false
+    @State private var whisperFallback: WhisperModelDescriptor?
+    @State private var whisperFallbackError: String?
+    @State private var isSwitchingToWhisper = false
+
+    private var fallbackCandidates: [WhisperModelDescriptor] {
+        voice.isModelReady || voice.isCheckingSpeechModel ? [] : appState.whisperFallbackCandidates
+    }
+
+    private var availableWhisperFallback: WhisperModelDescriptor? {
+        guard let whisperFallback, fallbackCandidates.contains(whisperFallback) else { return nil }
+        return whisperFallback
+    }
+
+    private var hasRecoveryButtons: Bool {
+        voice.canRestoreLegacyModel || availableWhisperFallback != nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -15,8 +32,12 @@ struct AgentVoiceModelsTab: View {
                         Button("Cancel") { confirmsCancellation = true }
                             .buttonStyle(EmberButtonStyle())
                     } else if voice.isModelReady {
-                        Label("Ready", systemImage: "checkmark.circle.fill")
-                            .font(.system(size: 12)).foregroundStyle(AppTheme.modelActive)
+                        EmberReadyBadge()
+                            .font(.system(size: 12))
+                    } else if voice.isCheckingSpeechModel || voice.isRestoringLegacyModel {
+                        ProgressView(voice.isRestoringLegacyModel ? "Restoring Liquid…" : AgentVoiceCoordinator.checkingSpeechModelText)
+                            .controlSize(.small)
+                            .font(.system(size: 12))
                     } else {
                         Button("Download…") { voice.downloadModel() }
                             .buttonStyle(EmberButtonStyle(primary: true))
@@ -38,6 +59,10 @@ struct AgentVoiceModelsTab: View {
                     }
                     .padding(.horizontal, 20).padding(.bottom, 18)
                 }
+                if !voice.isModelReady && !voice.isCheckingSpeechModel,
+                   hasRecoveryButtons || voice.legacyModelRestoreError != nil || whisperFallbackError != nil {
+                    recoveryActions
+                }
                 EmberDivider()
                 voicePicker
                 EmberDivider()
@@ -53,11 +78,69 @@ struct AgentVoiceModelsTab: View {
                     .accessibilityLabel("Liquid download failed. \(error.message)")
             }
         }
+        .task(id: fallbackCandidates) {
+            whisperFallback = nil
+            let verified = await appState.verifiedWhisperFallback(from: fallbackCandidates)
+            if !Task.isCancelled { whisperFallback = verified }
+        }
         .alert("Cancel download?", isPresented: $confirmsCancellation) {
             Button("Keep downloading", role: .cancel) {}
             Button("Cancel download", role: .destructive) { voice.cancelModelDownload() }
         } message: {
             Text("The partial file will be removed. Any verified model files will be kept for retry.")
+        }
+    }
+
+    private var recoveryActions: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            if let error = voice.legacyModelRestoreError {
+                EmberWarningLabel(error)
+                    .font(.system(size: 12))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if voice.canRestoreLegacyModel {
+                Text("Reuse model files from your previous DictaFlow installation.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(AppTheme.secondaryText)
+            }
+            if let error = whisperFallbackError {
+                EmberWarningLabel(error)
+                    .font(.system(size: 12))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if hasRecoveryButtons {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { recoveryButtons }
+                    VStack(alignment: .leading, spacing: 8) { recoveryButtons }
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var recoveryButtons: some View {
+        if voice.canRestoreLegacyModel {
+            Button("Restore from DictaFlow") { voice.restoreLegacyModel() }
+                .buttonStyle(EmberButtonStyle())
+                .disabled(voice.isRestoringLegacyModel || voice.isDownloading)
+        }
+        if let model = availableWhisperFallback {
+            Button("Use Whisper") {
+                isSwitchingToWhisper = true
+                whisperFallbackError = nil
+                Task {
+                    defer { isSwitchingToWhisper = false }
+                    if let error = await appState.useWhisperFallback(model) {
+                        whisperFallback = nil
+                        whisperFallbackError = error
+                        whisperFallback = await appState.verifiedWhisperFallback(from: fallbackCandidates.filter { $0 != model })
+                    }
+                }
+            }
+            .buttonStyle(EmberButtonStyle())
+            .disabled(appState.whisperSettingsLocked || isSwitchingToWhisper)
+            .help("Use the verified \(model.displayName) model for dictation")
         }
     }
 
@@ -134,10 +217,12 @@ struct AgentVoiceModelsTab: View {
             .disabled(voice.previewState == .stopping || (!isPreviewActive && !voice.canPreviewVoice))
             .accessibilityIdentifier("agent-voice-preview")
 
-            Text(previewStatus)
-                .font(.system(size: 12))
-                .foregroundStyle(previewFailed ? AppTheme.errorText : AppTheme.secondaryText)
-                .accessibilityIdentifier("agent-voice-preview-status")
+            Group {
+                if previewFailed { EmberWarningLabel(previewStatus).foregroundStyle(AppTheme.errorText) }
+                else { Text(previewStatus).foregroundStyle(AppTheme.secondaryText) }
+            }
+            .font(.system(size: 12))
+            .accessibilityIdentifier("agent-voice-preview-status")
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 20)
@@ -164,6 +249,7 @@ struct AgentVoiceModelsTab: View {
         case .failed(let message): return message
         case .idle:
             if !voice.isEnabled { return "Enable Agent Voice to play a sample." }
+            if voice.isCheckingSpeechModel { return AgentVoiceCoordinator.checkingSpeechModelText }
             if !voice.isModelReady { return "Download the speech model to play a sample." }
             if !voice.canPreviewVoice { return "Test speech is available when dictation and agent speech are idle." }
             return "Hear a sample with the current speech settings."

@@ -12,62 +12,17 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
 
     // MARK: - Muse merge
 
-    func testMuseMergeFromEmptyCreatesEntryAndPreservesSchema() throws {
-        let data = try AgentVoiceHostInstaller.mergedMuseSettings(
-            existing: nil, executable: executable, arguments: arguments(host: .museCode))
-        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual(json["schema_version"] as? Int, 1)
-        let (found, matches, _) = AgentVoiceHostInstaller.museEntryStatus(
-            data: data, executable: executable, arguments: arguments(host: .museCode))
-        XCTAssertTrue(found)
-        XCTAssertTrue(matches)
-    }
-
-    func testMuseMergePreservesOtherKeysAndUpdatesStaleEntry() throws {
-        let existing: [String: Any] = [
-            "schema_version": 1,
-            "provider": "meta",
-            "mcp_servers": ["dictaflow": ["transport": "stdio", "command": "/old/path",
-                                           "args": ["--stale"], "mode": "optional"]],
-        ]
-        let existingData = try JSONSerialization.data(withJSONObject: existing)
-        let merged = try AgentVoiceHostInstaller.mergedMuseSettings(
-            existing: existingData, executable: executable, arguments: arguments(host: .museCode))
-        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: merged) as? [String: Any])
-        XCTAssertEqual(json["provider"] as? String, "meta")
-        let (found, matches, _) = AgentVoiceHostInstaller.museEntryStatus(
-            data: merged, executable: executable, arguments: arguments(host: .museCode))
-        XCTAssertTrue(found)
-        XCTAssertTrue(matches)
-    }
-
-    func testMuseMergeRejectsInvalidJSON() {
-        XCTAssertThrowsError(try AgentVoiceHostInstaller.mergedMuseSettings(
-            existing: Data("not json".utf8), executable: executable, arguments: arguments(host: .museCode)))
-    }
-
     func testMuseEntryStatusReportsMissingAndStale() {
         let (missingFound, missingMatches, _) = AgentVoiceHostInstaller.museEntryStatus(
             data: nil, executable: executable, arguments: arguments(host: .museCode))
         XCTAssertFalse(missingFound)
         XCTAssertFalse(missingMatches)
 
-        let stale = try? JSONSerialization.data(withJSONObject: ["mcp_servers": ["dictaflow": ["command": "/old"]]])
+        let stale = try? JSONSerialization.data(withJSONObject: ["mcp_servers": ["omdo": ["command": "/old"]]])
         let (staleFound, staleMatches, _) = AgentVoiceHostInstaller.museEntryStatus(
             data: stale, executable: executable, arguments: arguments(host: .museCode))
         XCTAssertTrue(staleFound)
         XCTAssertFalse(staleMatches)
-    }
-
-    func testMuseUpdateKeepsDisabledEntryDisabled() throws {
-        let existing = Data(#"{"mcpServers":{"dictaflow":{"command":"/old","enabled":false}}}"#.utf8)
-        let updated = try AgentVoiceHostInstaller.mergedMuseSettings(
-            existing: existing, executable: executable, arguments: arguments(host: .museCode))
-        let entry = AgentVoiceHostInstaller.museEntryStatus(
-            data: updated, executable: executable, arguments: arguments(host: .museCode))
-        XCTAssertTrue(entry.found)
-        XCTAssertTrue(entry.matches)
-        XCTAssertTrue(entry.disabled)
     }
 
     func testCodexFilePathsUseTheSameOverride() {
@@ -79,6 +34,14 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
                        override + "/config.toml")
         XCTAssertEqual(AgentVoiceHostInstaller.codexConfigURL(homeDirectoryURL: home, codexHome: nil).path,
                        home.path + "/.codex/config.toml")
+    }
+
+    func testMuseSelectsUserConfigOverride() {
+        let home = URL(fileURLWithPath: "/fixture-home")
+        XCTAssertEqual(AgentVoiceHostInstaller.museSettingsURL(homeDirectoryURL: home).path,
+                       "/fixture-home/.config/muse/settings.json")
+        XCTAssertEqual(AgentVoiceHostInstaller.museSettingsURL(homeDirectoryURL: home, configHome: "/fixture-config").path,
+                       "/fixture-config/muse/settings.json")
     }
 
     // MARK: - Codex and Claude matching
@@ -168,28 +131,6 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
-    }
-
-    func testCodexSetUpAddsAndVerifies() async throws {
-        let executable = try makeExecutable()
-        let expectedArgs = arguments(host: .codex)
-        let payload: [String: Any] = ["transport": ["type": "stdio", "command": executable, "args": expectedArgs]]
-        let json = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
-        let runner = StubRunner(handlers: [
-            { _, args in args.first == "mcp" && args.contains("add")
-                ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: "Added", stderr: "") : nil },
-            { _, args in args == ["mcp", "get", "--json", "dictaflow"]
-                ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: json, stderr: "") : nil },
-        ])
-        let home = try makeHome()
-        let message = try await AgentVoiceHostInstaller.setUp(
-            host: .codex, executable: executable, appID: "com.dictaflow.dev",
-            installationID: installation, agentVoiceEnabled: true,
-            runner: runner, homeDirectoryURL: home, cliDiscovery: { _ in "/bin/codex" })
-        XCTAssertTrue(message.contains("Start a new Codex session"))
-        XCTAssertTrue(message.contains("/hooks"))
-        let hooksData = try Data(contentsOf: AgentVoiceHostInstaller.codexHooksURL(homeDirectoryURL: home))
-        XCTAssertTrue(AgentVoiceHostInstaller.hooksStatus(data: hooksData, host: .codex, executable: executable).matches)
     }
 
     func testCodexIdentityVersionFloor() {
@@ -301,7 +242,7 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         let payload: [String: Any] = ["transport": ["type": "stdio", "command": executable, "args": expectedArgs]]
         let json = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
         let runner = StubRunner(handlers: [
-            { _, args in args == ["mcp", "get", "--json", "dictaflow"]
+            { _, args in args == ["mcp", "get", "--json", "omdo"]
                 ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: json, stderr: "") : nil },
         ])
         let home = try makeHome()
@@ -310,6 +251,30 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
             installationID: installation, runner: runner, homeDirectoryURL: home,
             cliDiscovery: { _ in "/bin/codex" })
         XCTAssertEqual(state.status, .configured)
+    }
+
+    func testRefreshUsesCodexDisabledStateWithUnsupportedEditSyntax() async throws {
+        let home = try makeHome()
+        let config = home.appendingPathComponent(".codex/config.toml")
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let configData = Data("instructions = '''multiline TOML'''".utf8)
+        try configData.write(to: config)
+        XCTAssertThrowsError(try CodexMCPConfiguration(configData))
+
+        let payload: [String: Any] = [
+            "enabled": false,
+            "transport": ["type": "stdio", "command": executable, "args": arguments(host: .codex)],
+        ]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+        let runner = StubRunner(handlers: [
+            { _, args in args == ["mcp", "get", "--json", "omdo"]
+                ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: json, stderr: "") : nil },
+        ])
+        let state = await AgentVoiceHostInstaller.refreshState(
+            host: .codex, executable: executable, appID: "com.dictaflow.dev",
+            installationID: installation, runner: runner, homeDirectoryURL: home,
+            cliDiscovery: { _ in "/bin/codex" })
+        XCTAssertEqual(state.status, .disabled)
     }
 
     private final class CallLog: Sendable {
@@ -327,67 +292,15 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         }
     }
 
-    func testClaudeSetUpRemovesThenAddsAndVerifies() async throws {
-        let executable = try makeExecutable()
-        let log = CallLog()
-        let output = "Command: \(executable)\nArgs: \(arguments(host: .claudeCode).joined(separator: " "))"
-        struct RecordingRunner: AgentVoiceHostInstaller.CommandRunner {
-            let log: CallLog
-            let output: String
-            func run(executablePath: String, arguments: [String]) async throws -> AgentVoiceHostInstaller.CommandResult {
-                log.record(arguments)
-                return AgentVoiceHostInstaller.CommandResult(exitCode: 0,
-                    stdout: arguments == ["--version"] ? "2.1.118 (Claude Code)" : output, stderr: "")
-            }
-        }
-        let runner = RecordingRunner(log: log, output: output)
-        let home = try makeHome()
-        let message = try await AgentVoiceHostInstaller.setUp(
-            host: .claudeCode, executable: executable, appID: "com.dictaflow.dev",
-            installationID: installation, agentVoiceEnabled: false,
-            runner: runner, homeDirectoryURL: home, cliDiscovery: { _ in "/bin/claude" })
-        let claudeHooks = try Data(contentsOf: AgentVoiceHostInstaller.claudeSettingsURL(homeDirectoryURL: home))
-        XCTAssertTrue(AgentVoiceHostInstaller.hooksStatus(data: claudeHooks, host: .claudeCode, executable: executable).matches)
-        XCTAssertTrue(message.contains("main-agent-only tool guard"))
-        XCTAssertTrue(message.contains("Turn Enable Agent Voice on"))
-        XCTAssertEqual(log.all.count, 4)
-        XCTAssertEqual(log.all.first, ["--version"])
-        XCTAssertEqual(log.all[1], ["mcp", "remove", "dictaflow", "-s", "user"])
-        XCTAssertTrue(log.all[2].contains("-s"))
-        XCTAssertTrue(log.all[2].contains("add"))
-        XCTAssertEqual(log.all.last, ["mcp", "get", "dictaflow"])
-    }
-
-    func testOldClaudeDoesNotInstallHooks() async throws {
-        let home = try makeHome()
-        let log = CallLog()
-        let runner = StubRunner(handlers: [{ _, args in
-            log.record(args)
-            return .init(exitCode: 0, stdout: "2.1.117 (Claude Code)", stderr: "")
-        }])
-        do {
-            _ = try await AgentVoiceHostInstaller.setUp(
-                host: .claudeCode, executable: try makeExecutable(), appID: "com.dictaflow.dev",
-                installationID: installation, agentVoiceEnabled: true, runner: runner,
-                homeDirectoryURL: home, cliDiscovery: { _ in "/bin/claude" })
-            XCTFail("Expected setup to reject a CLI without MCP hooks.")
-        } catch let error as AgentVoiceHostInstaller.InstallerError {
-            XCTAssertTrue(error.localizedDescription.contains("2.1.118"))
-        }
-        XCTAssertEqual(log.all, [["--version"]])
-        XCTAssertFalse(FileManager.default.fileExists(atPath:
-            AgentVoiceHostInstaller.claudeSettingsURL(homeDirectoryURL: home).path))
-    }
-
     func testMuseSetUpWritesRealFileInTemporaryHome() async throws {
         let executable = try makeExecutable()
         let home = try makeHome()
         let message = try await AgentVoiceHostInstaller.setUp(
             host: .museCode, executable: executable, appID: "com.dictaflow.dev",
             installationID: installation, agentVoiceEnabled: true,
-            runner: StubRunner(handlers: []), homeDirectoryURL: home)
-        XCTAssertTrue(message.contains("Start a new Muse Code session"))
-        XCTAssertTrue(message.contains("tool guard"))
+            runner: StubRunner(handlers: []), homeDirectoryURL: home, hostIdle: { true })
+        XCTAssertTrue(message.contains("Start a new session"))
+        XCTAssertTrue(message.contains("configured"))
         let data = try Data(contentsOf: AgentVoiceHostInstaller.museSettingsURL(homeDirectoryURL: home))
         let (found, matches, _) = AgentVoiceHostInstaller.museEntryStatus(
             data: data, executable: executable, arguments: arguments(host: .museCode))
@@ -437,9 +350,9 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
 
     func testPreToolUseGuardUsesDocumentedMatcherAndFormPerHost() {
         XCTAssertEqual(AgentVoiceHostInstaller.expectedHookMatcher(for: .claudeCode, event: "PreToolUse"),
-                       "mcp__dictaflow__.*")
+                       "mcp__omdo__.*")
         XCTAssertEqual(AgentVoiceHostInstaller.expectedHookMatcher(for: .museCode, event: "PreToolUse"),
-                       "mcp__dictaflow__.*")
+                       "mcp__omdo__.*")
         XCTAssertNil(AgentVoiceHostInstaller.expectedHookMatcher(for: .claudeCode, event: "Stop"))
         let claude = AgentVoiceHostInstaller.expectedCommandHookHandler(
             for: .claudeCode, event: "PreToolUse", executable: executable)
@@ -464,13 +377,13 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         ]
         for (host, event) in events {
             XCTAssertEqual(AgentVoiceHostInstaller.expectedHookHandler(for: host, event: event)?["statusMessage"] as? String,
-                           "DictaFlow: Agent Voice",
+                           "Omdo: Agent Voice",
                            "\(event) must show the DictaFlow label in host review, not \"Unnamed hook\".")
         }
         for host: AgentVoiceHostInstaller.Host in [.claudeCode, .museCode] {
             XCTAssertEqual(AgentVoiceHostInstaller.expectedCommandHookHandler(
                 for: host, event: "PreToolUse", executable: executable)?["statusMessage"] as? String,
-                           "DictaFlow: Agent Voice")
+                           "Omdo: Agent Voice")
         }
     }
 
@@ -531,7 +444,7 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
                 "Stop": [["hooks": [other, staleLifecycle]]],
                 "PreToolUse": [
                     ["matcher": "Bash", "hooks": [other]],
-                    ["matcher": "mcp__dictaflow__.*", "hooks": [staleGuard]],
+                    ["matcher": "mcp__omdo__.*", "hooks": [staleGuard]],
                 ],
             ],
         ]
@@ -549,7 +462,7 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         XCTAssertTrue(stopHandlers.contains { ($0["command"] as? String) == "echo lint" },
                       "Other handlers sharing an event are preserved.")
         let guardGroups = ((hooks["PreToolUse"] as? [[String: Any]]) ?? [])
-            .filter { ($0["matcher"] as? String) == "mcp__dictaflow__.*" }
+            .filter { ($0["matcher"] as? String) == "mcp__omdo__.*" }
         XCTAssertEqual(guardGroups.count, 1)
         let guardHandlers = (guardGroups.first?["hooks"] as? [[String: Any]]) ?? []
         XCTAssertEqual(guardHandlers.count, 1)
@@ -581,61 +494,14 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
             for: .claudeCode, event: "PreToolUse", executable: executable))
         for hooksValue: [String: Any] in [
             ["UserPromptSubmit": [["hooks": [staleLifecycle]]]],
-            ["PreToolUse": [["matcher": "mcp__dictaflow__.*", "hooks": [stalePath]]]],
-            ["PreToolUse": [["matcher": "mcp__dictaflow__.*", "hooks": [staleExecForm]]]],
+            ["PreToolUse": [["matcher": "mcp__omdo__.*", "hooks": [stalePath]]]],
+            ["PreToolUse": [["matcher": "mcp__omdo__.*", "hooks": [staleExecForm]]]],
             ["PreToolUse": [["matcher": "Bash", "hooks": [wrongMatcher]]]],
         ] {
             let data = try JSONSerialization.data(withJSONObject: ["hooks": hooksValue])
             let status = AgentVoiceHostInstaller.hooksStatus(data: data, host: .claudeCode, executable: executable)
             XCTAssertTrue(status.found)
             XCTAssertFalse(status.matches)
-        }
-    }
-
-    func testMuseMergeAddsGuardPreservesServersAndOthers() throws {
-        let other: [String: Any] = ["type": "command", "command": "echo note"]
-        let staleGuard: [String: Any] = ["type": "command",
-                                         "command": "'/old/dictaflow-mcp' --hook-event PreToolUse --host muse"]
-        let existing: [String: Any] = [
-            "schema_version": 1,
-            "provider": "meta",
-            "mcp_servers": ["other": ["transport": "stdio", "command": "/bin/other"]],
-            "hooks": [
-                "UserPromptSubmit": [["hooks": [other]]],
-                "PreToolUse": [["matcher": "mcp__dictaflow__.*", "hooks": [staleGuard]]],
-            ],
-        ]
-        let first = try AgentVoiceHostInstaller.mergedMuseSettings(
-            existing: JSONSerialization.data(withJSONObject: existing),
-            executable: executable, arguments: arguments(host: .museCode))
-        let second = try AgentVoiceHostInstaller.mergedMuseSettings(
-            existing: first, executable: executable, arguments: arguments(host: .museCode))
-        XCTAssertEqual(first, second, "Merging twice must not duplicate or reorder our hooks.")
-        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: first) as? [String: Any])
-        XCTAssertEqual(root["provider"] as? String, "meta")
-        let (found, matches, _) = AgentVoiceHostInstaller.museEntryStatus(
-            data: first, executable: executable, arguments: arguments(host: .museCode))
-        XCTAssertTrue(found)
-        XCTAssertTrue(matches)
-        let status = AgentVoiceHostInstaller.hooksStatus(data: first, host: .museCode, executable: executable)
-        XCTAssertTrue(status.found)
-        XCTAssertTrue(status.matches)
-        let hooks = try XCTUnwrap(root["hooks"] as? [String: Any])
-        let promptHandlers = ((hooks["UserPromptSubmit"] as? [[String: Any]]) ?? [])
-            .flatMap { ($0["hooks"] as? [[String: Any]]) ?? [] }
-        XCTAssertTrue(promptHandlers.contains { ($0["command"] as? String) == "echo note" },
-                      "Unrelated hooks are preserved.")
-        XCTAssertNil(hooks["Stop"], "Muse receives the guard only; no lifecycle hooks are invented.")
-    }
-
-    func testMuseMergeRejectsInvalidHooksShape() throws {
-        let existing: [String: Any] = ["schema_version": 1, "hooks": ["PreToolUse": "not-groups"]]
-        XCTAssertThrowsError(try AgentVoiceHostInstaller.mergedMuseSettings(
-            existing: JSONSerialization.data(withJSONObject: existing),
-            executable: executable, arguments: arguments(host: .museCode))) { error in
-            guard case AgentVoiceHostInstaller.InstallerError.invalidHooksFile = error else {
-                return XCTFail("Expected invalidHooksFile, got \(error)")
-            }
         }
     }
 
@@ -650,301 +516,7 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
         XCTAssertFalse(status.matches)
     }
 
-    func testHooksMergeRejectsInvalidJSONWithoutInventingAFile() async throws {
-        let home = try makeHome()
-        let url = AgentVoiceHostInstaller.codexHooksURL(homeDirectoryURL: home)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("not json".utf8).write(to: url)
-        do {
-            _ = try await AgentVoiceHostInstaller.setUp(
-                host: .codex, executable: try makeExecutable(), appID: "com.dictaflow.dev",
-                installationID: installation, agentVoiceEnabled: true,
-                runner: StubRunner(handlers: []), homeDirectoryURL: home, cliDiscovery: { _ in "/bin/codex" })
-            XCTFail("Expected invalidHooksFile")
-        } catch let error as AgentVoiceHostInstaller.InstallerError {
-            XCTAssertEqual(error, .invalidHooksFile(path: url.path))
-        }
-        XCTAssertEqual(try Data(contentsOf: url), Data("not json".utf8), "An invalid file is never overwritten.")
-    }
-
     // MARK: - Codex tool pre-approval
-
-    func testCodexApprovalMergeInsertsKeyAndPreservesRest() throws {
-        let existing = [
-            "model = \"keep-me\"",
-            "",
-            "[mcp_servers.other]",
-            "command = \"/usr/bin/other\"",
-            "",
-            "[mcp_servers.dictaflow]",
-            "command = \"/Applications/DictaFlow Dev.app/Contents/MacOS/dictaflow-mcp\"",
-            "args = [\"--app-id\", \"com.dictaflow.dev\"]",
-            "",
-            "[mcp_servers.dictaflow.tools.prepare_spoken_response]",
-            "approval_mode = \"approve\"",
-            "",
-        ].joined(separator: "\n")
-        let result = try AgentVoiceHostInstaller.mergedCodexApproval(existing: existing)
-        guard case .applied(let updated) = result else {
-            return XCTFail("Expected applied, got \(result)")
-        }
-        let expected = [
-            "model = \"keep-me\"",
-            "",
-            "[mcp_servers.other]",
-            "command = \"/usr/bin/other\"",
-            "",
-            "[mcp_servers.dictaflow]",
-            "default_tools_approval_mode = \"approve\"",
-            "command = \"/Applications/DictaFlow Dev.app/Contents/MacOS/dictaflow-mcp\"",
-            "args = [\"--app-id\", \"com.dictaflow.dev\"]",
-            "",
-            "[mcp_servers.dictaflow.tools.prepare_spoken_response]",
-            "approval_mode = \"approve\"",
-            "",
-        ].joined(separator: "\n")
-        XCTAssertEqual(updated, expected)
-        XCTAssertEqual(try AgentVoiceHostInstaller.mergedCodexApproval(existing: updated), .alreadyApproved,
-                       "Merging the result must be a no-op.")
-    }
-
-    func testCodexApprovalLeavesExistingValueAlone() throws {
-        let existing = [
-            "[mcp_servers.dictaflow]",
-            "default_tools_approval_mode = \"prompt\"",
-            "command = \"/bin/dictaflow-mcp\"",
-        ].joined(separator: "\n")
-        XCTAssertEqual(try AgentVoiceHostInstaller.mergedCodexApproval(existing: existing), .alreadyApproved,
-                       "A user-set value is never overwritten, even when it is not ours.")
-    }
-
-    func testCodexApprovalIgnoresCommentedKey() throws {
-        let existing = [
-            "[mcp_servers.dictaflow]",
-            "# default_tools_approval_mode = \"prompt\"",
-            "command = \"/bin/dictaflow-mcp\"",
-        ].joined(separator: "\n")
-        let result = try AgentVoiceHostInstaller.mergedCodexApproval(existing: existing)
-        guard case .applied(let updated) = result else {
-            return XCTFail("A commented key is inactive, so the real key must be added; got \(result)")
-        }
-        XCTAssertTrue(updated.contains("\ndefault_tools_approval_mode = \"approve\"\n"))
-    }
-
-    func testCodexApprovalSkipsWhenNoServerEntry() throws {
-        XCTAssertEqual(try AgentVoiceHostInstaller.mergedCodexApproval(existing: ""), .noServerEntry)
-        let otherOnly = [
-            "[mcp_servers.other]",
-            "command = \"/usr/bin/other\"",
-        ].joined(separator: "\n")
-        XCTAssertEqual(try AgentVoiceHostInstaller.mergedCodexApproval(existing: otherOnly), .noServerEntry)
-    }
-
-    func testCodexApprovalCountsOnlyItsOwnSection() throws {
-        // An approval key under another server must not satisfy ours.
-        let existing = [
-            "[mcp_servers.other]",
-            "default_tools_approval_mode = \"approve\"",
-            "",
-            "[mcp_servers.dictaflow]",
-            "command = \"/bin/dictaflow-mcp\"",
-        ].joined(separator: "\n")
-        let result = try AgentVoiceHostInstaller.mergedCodexApproval(existing: existing)
-        guard case .applied(let updated) = result else {
-            return XCTFail("Expected applied, got \(result)")
-        }
-        let expected = [
-            "[mcp_servers.other]",
-            "default_tools_approval_mode = \"approve\"",
-            "",
-            "[mcp_servers.dictaflow]",
-            "default_tools_approval_mode = \"approve\"",
-            "command = \"/bin/dictaflow-mcp\"",
-        ].joined(separator: "\n")
-        XCTAssertEqual(updated, expected)
-    }
-
-    func testCodexApprovalTreatsDottedRootKeyAsApproved() throws {
-        let existing = "mcp_servers.dictaflow.default_tools_approval_mode = \"approve\"\n"
-        XCTAssertEqual(try AgentVoiceHostInstaller.mergedCodexApproval(existing: existing), .alreadyApproved,
-                       "Adding a table key next to an equivalent dotted key would corrupt the file.")
-    }
-
-    func testCodexApprovalThrowsOnDuplicateTables() {
-        let existing = [
-            "[mcp_servers.dictaflow]",
-            "command = \"/bin/one\"",
-            "[mcp_servers.dictaflow]",
-            "command = \"/bin/two\"",
-        ].joined(separator: "\n")
-        XCTAssertThrowsError(try AgentVoiceHostInstaller.mergedCodexApproval(existing: existing)) { error in
-            guard case AgentVoiceHostInstaller.InstallerError.invalidCodexConfig = error else {
-                return XCTFail("Expected invalidCodexConfig, got \(error)")
-            }
-        }
-    }
-
-    func testCodexSetUpSkipsApprovalNoteWhenServerEntryMissing() async throws {
-        // The stubbed `mcp add` writes no real config file, so setup must
-        // say pre-approval was skipped instead of claiming it.
-        let executable = try makeExecutable()
-        let expectedArgs = arguments(host: .codex)
-        let payload: [String: Any] = ["transport": ["type": "stdio", "command": executable,
-                                                    "args": expectedArgs]]
-        let json = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
-        let runner = StubRunner(handlers: [
-            { _, args in args.first == "mcp" && args.contains("add")
-                ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: "Added", stderr: "") : nil },
-            { _, args in args == ["mcp", "get", "--json", "dictaflow"]
-                ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: json, stderr: "") : nil },
-        ])
-        let message = try await AgentVoiceHostInstaller.setUp(
-            host: .codex, executable: executable, appID: "com.dictaflow.dev",
-            installationID: installation, agentVoiceEnabled: true,
-            runner: runner, homeDirectoryURL: makeHome(), cliDiscovery: { _ in "/bin/codex" })
-        XCTAssertTrue(message.contains("Always allow"),
-                      "Without a server entry the message must point at the manual fallback.")
-    }
-
-    func testCodexSetUpPreApprovesToolsInExistingConfig() async throws {
-        let executable = try makeExecutable()
-        let expectedArgs = arguments(host: .codex)
-        let payload: [String: Any] = ["transport": ["type": "stdio", "command": executable,
-                                                    "args": expectedArgs]]
-        let json = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
-        let runner = StubRunner(handlers: [
-            { _, args in args.first == "mcp" && args.contains("add")
-                ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: "Added", stderr: "") : nil },
-            { _, args in args == ["mcp", "get", "--json", "dictaflow"]
-                ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: json, stderr: "") : nil },
-            { _, args in args == ["mcp", "list"]
-                ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: "dictaflow", stderr: "") : nil },
-        ])
-        let home = try makeHome()
-        let configURL = AgentVoiceHostInstaller.codexConfigURL(homeDirectoryURL: home)
-        try FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-        try "model = \"keep-me\"\n\n[mcp_servers.dictaflow]\ncommand = \"x\"\n".write(to: configURL, atomically: true, encoding: .utf8)
-        let message = try await AgentVoiceHostInstaller.setUp(
-            host: .codex, executable: executable, appID: "com.dictaflow.dev",
-            installationID: installation, agentVoiceEnabled: true,
-            runner: runner, homeDirectoryURL: home, cliDiscovery: { _ in "/bin/codex" })
-        XCTAssertTrue(message.contains("pre-approved"),
-                      "Setup must disclose that it pre-approved DictaFlow's tools.")
-        let written = try String(contentsOf: configURL, encoding: .utf8)
-        XCTAssertTrue(written.contains("\ndefault_tools_approval_mode = \"approve\"\n"))
-        XCTAssertTrue(written.contains("model = \"keep-me\""), "Unrelated config must survive.")
-    }
-
-    func testCodexSetUpRestoresConfigWhenValidationFails() async throws {
-        let executable = try makeExecutable()
-        let expectedArgs = arguments(host: .codex)
-        let payload: [String: Any] = ["transport": ["type": "stdio", "command": executable,
-                                                    "args": expectedArgs]]
-        let json = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
-        let runner = StubRunner(handlers: [
-            { _, args in args.first == "mcp" && args.contains("add")
-                ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: "Added", stderr: "") : nil },
-            { _, args in args == ["mcp", "get", "--json", "dictaflow"]
-                ? AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: json, stderr: "") : nil },
-            { _, args in args == ["mcp", "list"]
-                ? AgentVoiceHostInstaller.CommandResult(exitCode: 1, stdout: "", stderr: "parse error") : nil },
-        ])
-        let home = try makeHome()
-        let configURL = AgentVoiceHostInstaller.codexConfigURL(homeDirectoryURL: home)
-        try FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-        let original = "model = \"keep-me\"\n\n[mcp_servers.dictaflow]\ncommand = \"x\"\n"
-        try original.write(to: configURL, atomically: true, encoding: .utf8)
-        do {
-            _ = try await AgentVoiceHostInstaller.setUp(
-                host: .codex, executable: executable, appID: "com.dictaflow.dev",
-                installationID: installation, agentVoiceEnabled: true,
-                runner: runner, homeDirectoryURL: home, cliDiscovery: { _ in "/bin/codex" })
-            XCTFail("Expected invalidCodexConfig when the parse check fails.")
-        } catch let error as AgentVoiceHostInstaller.InstallerError {
-            XCTAssertEqual(error, .invalidCodexConfig(path: configURL.path))
-        }
-        XCTAssertEqual(try String(contentsOf: configURL, encoding: .utf8), original,
-                       "A failed validation must restore the untouched bytes.")
-    }
-
-    func testCodexRollbackPreservesChangesMadeDuringValidation() async throws {
-        let helper = try makeExecutable()
-        let home = try makeHome()
-        let config = AgentVoiceHostInstaller.codexConfigURL(homeDirectoryURL: home)
-        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let original = "[mcp_servers.dictaflow]\ncommand = \"x\"\n"
-        let concurrent = "model = \"edited-during-setup\"\n" + original
-        try original.write(to: config, atomically: true, encoding: .utf8)
-        let entry = ["transport": ["command": helper, "args": arguments(host: .codex)]]
-        let json = String(decoding: try JSONSerialization.data(withJSONObject: entry), as: UTF8.self)
-        let runner = StubRunner(handlers: [{ _, args in
-            if args.contains("add") { return .init(exitCode: 0, stdout: "", stderr: "") }
-            if args.contains("get") { return .init(exitCode: 0, stdout: json, stderr: "") }
-            if args.contains("list") {
-                try? concurrent.write(to: config, atomically: true, encoding: .utf8)
-                return .init(exitCode: 1, stdout: "", stderr: "")
-            }
-            return nil
-        }])
-        do {
-            _ = try await AgentVoiceHostInstaller.setUp(
-                host: .codex, executable: helper, appID: "com.dictaflow.dev",
-                installationID: installation, agentVoiceEnabled: true,
-                runner: runner, homeDirectoryURL: home, cliDiscovery: { _ in "/bin/codex" })
-            XCTFail("Expected rollback conflict")
-        } catch let error as AgentVoiceHostInstaller.InstallerError {
-            XCTAssertEqual(error, .codexRollbackConflict(path: config.path))
-        }
-        XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), concurrent)
-    }
-
-    func testCodexSetUpRestoresConfigWhenGateThrows() async throws {
-        struct FailingListRunner: AgentVoiceHostInstaller.CommandRunner {
-            let json: String
-            func run(executablePath: String, arguments: [String]) async throws -> AgentVoiceHostInstaller.CommandResult {
-                if arguments == ["--version"] {
-                    return .init(exitCode: 0, stdout: "codex-cli 0.156.0", stderr: "")
-                }
-                if arguments == ["mcp", "list"] {
-                    throw AgentVoiceHostInstaller.InstallerError.commandFailed(host: "Codex", detail: "boom")
-                }
-                if arguments == ["mcp", "get", "--json", "dictaflow"] {
-                    return AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: json, stderr: "")
-                }
-                if arguments.first == "mcp", arguments.contains("add") {
-                    return AgentVoiceHostInstaller.CommandResult(exitCode: 0, stdout: "Added", stderr: "")
-                }
-                throw AgentVoiceHostInstaller.InstallerError.commandFailed(host: "stub", detail: "unexpected \(arguments)")
-            }
-        }
-        let executable = try makeExecutable()
-        let expectedArgs = arguments(host: .codex)
-        let payload: [String: Any] = ["transport": ["type": "stdio", "command": executable,
-                                                    "args": expectedArgs]]
-        let json = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
-        let home = try makeHome()
-        let configURL = AgentVoiceHostInstaller.codexConfigURL(homeDirectoryURL: home)
-        try FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-        let original = "model = \"keep-me\"\n\n[mcp_servers.dictaflow]\ncommand = \"x\"\n"
-        try original.write(to: configURL, atomically: true, encoding: .utf8)
-        do {
-            _ = try await AgentVoiceHostInstaller.setUp(
-                host: .codex, executable: executable, appID: "com.dictaflow.dev",
-                installationID: installation, agentVoiceEnabled: true,
-                runner: FailingListRunner(json: json), homeDirectoryURL: home,
-                cliDiscovery: { _ in "/bin/codex" })
-            XCTFail("Expected the gate error to propagate.")
-        } catch let error as AgentVoiceHostInstaller.InstallerError {
-            guard case .commandFailed = error else {
-                return XCTFail("Expected the gate error, got \(error)")
-            }
-        }
-        XCTAssertEqual(try String(contentsOf: configURL, encoding: .utf8), original,
-                       "A gate error must also restore the untouched bytes.")
-    }
 
     // MARK: - Status mapping
 

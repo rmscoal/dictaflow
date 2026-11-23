@@ -19,7 +19,7 @@ enum SoundCueServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingAsset:
-            return "A sound cue is missing. Reinstall DictaFlow to restore its sound files."
+            return "A sound cue is missing. Reinstall Omdo to restore its sound files."
         case .playbackFailed:
             return "The sound cue could not play. Check your Mac's sound output or turn off sound cues in Dictation settings."
         }

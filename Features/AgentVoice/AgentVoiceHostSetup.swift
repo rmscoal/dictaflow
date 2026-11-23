@@ -11,13 +11,13 @@ enum AgentVoiceHostSetup {
         case .codex:
             let command = try stringLiteral(executable)
             let args = try arguments.map(stringLiteral).joined(separator: ", ")
-            return "[mcp_servers.dictaflow]\ncommand = \(command)\nargs = [\(args)]\ndefault_tools_approval_mode = \"approve\""
+            return "[mcp_servers.omdo]\ncommand = \(command)\nargs = [\(args)]\ndefault_tools_approval_mode = \"approve\""
         case .claudeCode:
-            return "claude mcp add --transport stdio dictaflow --scope user -- " + ([executable] + arguments).map(shellQuoted).joined(separator: " ")
+            return "claude mcp add --transport stdio omdo --scope user -- " + ([executable] + arguments).map(shellQuoted).joined(separator: " ")
         case .museCode:
             let configuration: [String: Any] = [
                 "schema_version": 1,
-                "mcp_servers": ["dictaflow": ["transport": "stdio", "command": executable, "args": arguments, "mode": "optional"]]
+                "mcp_servers": ["omdo": ["transport": "stdio", "command": executable, "args": arguments, "mode": "optional"]]
             ]
             let data = try JSONSerialization.data(withJSONObject: configuration, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
             return String(decoding: data, as: UTF8.self)
@@ -30,7 +30,7 @@ enum AgentVoiceHostSetup {
     /// with documented hooks. Returns nil where no hook support is
     /// documented (other hosts): nothing is invented for them.
     /// Codex users merge this into ~/.codex/hooks.json and then review and
-    /// trust the DictaFlow hooks with /hooks. Claude Code users merge the
+    /// trust the Omdo hooks with /hooks. Claude Code users merge the
     /// `hooks` value into ~/.claude/settings.json. Muse Code users merge the
     /// `hooks` value into ~/.config/muse/settings.json.
     static func hooksSnippet(for host: AgentVoiceHostAvailability.Host, executable: String) throws -> String? {

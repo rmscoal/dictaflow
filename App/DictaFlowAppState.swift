@@ -33,6 +33,8 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isSettingsWindowVisible = false
     @Published private(set) var appAppearance: AppAppearance
     @Published var agentVoiceTab: AgentVoiceTab = .general
+    @Published var agentVoiceSpeechModelRequest: UUID?
+    @Published var showsSpeechModelsDuringOnboarding = false
     @Published var dictationSettingsTab: DictationSettingsTab = .transcription
     @Published private(set) var textTone: TextTone
     private var recordingTone: TextTone = .original
@@ -170,7 +172,7 @@ final class DictaFlowAppState: ObservableObject {
     private var activeRefinementDownloadTokens: [RefinementModelDescriptor: UUID] = [:]
     private var activeWhisperEncoderDownloadTokens: [WhisperModelDescriptor: UUID] = [:]
 
-    convenience init() {
+    convenience init(paths: ApplicationSupportPaths, stores: ApplicationSupportMigration.Stores) {
         let audioRecorder = SystemAudioRecorderService()
         self.init(
             settingsStore: UserDefaultsSettingsStore(),
@@ -179,19 +181,20 @@ final class DictaFlowAppState: ObservableObject {
             audioOutputVolumeService: SystemAudioOutputVolumeService(),
             soundCueService: SoundCueService(),
             hotkeyService: CarbonHotkeyService(),
-            modelDownloadService: WhisperModelDownloadService(),
+            modelDownloadService: WhisperModelDownloadService(modelsDirectoryURL: paths.sharedModels),
             whisperService: WhisperCPPService(),
             transcriptRefinementService: LlamaCLITranscriptRefinementService(),
-            refinementPromptStore: FileRefinementPromptStore(),
+            refinementPromptStore: FileRefinementPromptStore(directoryURL: paths.current.appendingPathComponent("Prompts")),
             textInsertionService: SystemTextInsertionService(),
             localNotificationService: UserLocalNotificationService(),
             appUpdateService: GitHubReleaseUpdateService(),
-            historyStore: SQLiteHistoryStore()
+            historyStore: stores.history
         )
         // Hosted tests use isolated coordinator fixtures. Do not bind the user's socket
         // or recover/cancel speech from a separately running installed Dev app.
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
-        agentVoice = AgentVoiceCoordinator()
+        agentVoice = AgentVoiceCoordinator(supportDirectory: paths.current, preparedStore: stores.voice,
+                                           legacyModels: LiquidModelMigration(legacy: paths.legacy))
         observeAgentVoiceDownloads()
         if let agentVoice {
             agentVoiceOverlay = AgentVoiceOverlayCoordinator(voice: agentVoice) { [weak self] in
@@ -319,11 +322,26 @@ final class DictaFlowAppState: ObservableObject {
         applyInitialVoiceHistoryRetention()
     }
 
+    private static let recordingDuringLiquidCheck = "Omdo is checking the existing speech model. Try recording again when the check finishes."
+
     private func observeAgentVoiceDownloads() {
         guard let agentVoice else { return }
-        agentVoiceModelObservation = agentVoice.$isModelReady.combineLatest(agentVoice.$modelDownloadProgress, agentVoice.$activeError)
+        let preparingSpeechModel = agentVoice.$isCheckingSpeechModel.combineLatest(agentVoice.$isRestoringLegacyModel)
+            .map { checking, restoring in checking || restoring }
+        agentVoiceModelObservation = agentVoice.$isModelReady.combineLatest(agentVoice.$modelDownloadProgress, agentVoice.$activeError,
+                                                                          preparingSpeechModel)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .sink { [weak self] _, _, _, checking in
+                guard let self else { return }
+                if !checking {
+                    if self.interfaceIssue?.message == Self.recordingDuringLiquidCheck { self.interfaceIssue = nil }
+                    if self.preservedStatusMessage == Self.recordingDuringLiquidCheck {
+                        self.clearPreservedStatusMessage()
+                        self.updateStatusMessage()
+                    }
+                }
+                self.objectWillChange.send()
+            }
         agentVoice.onModelDownloadFinished = { [weak self] result in
             switch result {
             case .success:
@@ -368,7 +386,7 @@ final class DictaFlowAppState: ObservableObject {
     }
 
     var appDisplayNameText: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "DictaFlow"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Omdo"
     }
 
     var updateStatusText: String {
@@ -385,7 +403,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         if automaticallyChecksForUpdates {
-            return "DictaFlow checks GitHub for a new release at most once per day."
+            return "Omdo checks GitHub for a new release at most once per day."
         }
 
         return "Automatic update checks are off."
@@ -518,6 +536,8 @@ final class DictaFlowAppState: ObservableObject {
         switch transcriptionState {
         case .idle:
             if whisperConfiguration.recognitionProvider == .liquid {
+                if agentVoice?.isRestoringLegacyModel == true { return "Restoring Liquid…" }
+                if agentVoice?.isCheckingSpeechModel == true { return AgentVoiceCoordinator.checkingSpeechModelText }
                 return agentVoice?.isModelReady == true ? "Liquid LFM3-Audio is ready." : "Download Liquid audio in Agent Voice, under Models."
             }
             if isWhisperModelPrepared(whisperConfiguration.model) {
@@ -860,7 +880,7 @@ final class DictaFlowAppState: ObservableObject {
         updateRecordingOverlay()
     }
 
-    func handleApplicationLaunch() {
+    func handleApplicationLaunch(showMainWindowAfterUpgrade: Bool = false) {
         history.start()
         removeIncompleteModelDownloads()
         refreshInstalledLocalModelFiles()
@@ -877,6 +897,8 @@ final class DictaFlowAppState: ObservableObject {
             showMainWindow()
         } else if microphonePermissionState != .granted || accessibilityPermissionState != .granted {
             onboardingPresentation = .permissionRecovery
+            showMainWindow()
+        } else if showMainWindowAfterUpgrade {
             showMainWindow()
         }
 
@@ -918,6 +940,39 @@ final class DictaFlowAppState: ObservableObject {
         showMainWindowPage(.dictation)
         refreshInstalledLocalModelFiles()
         modelPickerPresentation = ModelPickerPresentation(kind: .speech, modelIdentifier: model?.modelIdentifier)
+    }
+
+    func showAgentVoiceSpeechModels() {
+        agentVoiceTab = .general
+        agentVoiceSpeechModelRequest = UUID()
+        showsSpeechModelsDuringOnboarding = onboardingPresentation != nil
+        showMainWindowPage(.agentVoice)
+    }
+
+    var whisperFallbackCandidates: [WhisperModelDescriptor] {
+        guard whisperConfiguration.recognitionProvider == .liquid else { return [] }
+        let selected = whisperConfiguration.model
+        return ([selected] + WhisperModelDescriptor.allCases.filter { $0 != selected }).filter(isWhisperModelPrepared)
+    }
+
+    func verifiedWhisperFallback(from candidates: [WhisperModelDescriptor]) async -> WhisperModelDescriptor? {
+        for model in candidates {
+            guard !Task.isCancelled else { return nil }
+            if await modelDownloadService.verifiedWhisperModelURL(for: model) != nil { return model }
+        }
+        return nil
+    }
+
+    func useWhisperFallback(_ model: WhisperModelDescriptor) async -> String? {
+        guard !whisperSettingsLocked, whisperConfiguration.recognitionProvider == .liquid else { return nil }
+        let verified = await modelDownloadService.verifiedWhisperModelURL(for: model) != nil
+        guard !Task.isCancelled, !isTerminating, !whisperSettingsLocked,
+              whisperConfiguration.recognitionProvider == .liquid else { return nil }
+        guard verified else {
+            return "Couldn’t verify \(model.displayName). Move the old model file out of the models folder, then download a fresh copy in Dictation."
+        }
+        updateWhisperModel(model)
+        return nil
     }
 
     func showRefinementModels(focusing model: RefinementModelDescriptor? = nil) {
@@ -2816,33 +2871,33 @@ final class DictaFlowAppState: ObservableObject {
 
     private var missingRefinementRuntimeStatusText: String {
         #if DEBUG
-            return "Install llama.cpp so DictaFlow can run llama-server for local refinement. Preparing only downloads the selected LLM model."
+            return "Install llama.cpp so Omdo can run llama-server for local refinement. Preparing only downloads the selected LLM model."
         #else
-            return "DictaFlow could not find its bundled local refinement runtime. Reinstall DictaFlow, then try local cleanup again."
+            return "Omdo could not find its bundled local refinement runtime. Reinstall Omdo, then try local cleanup again."
         #endif
     }
 
     private var missingRefinementRuntimeActionMessage: String {
         #if DEBUG
-            return "Install llama.cpp so DictaFlow can run llama-server before preparing LLM refinement."
+            return "Install llama.cpp so Omdo can run llama-server before preparing LLM refinement."
         #else
-            return "DictaFlow could not find its bundled local refinement runtime. Reinstall DictaFlow before preparing LLM refinement."
+            return "Omdo could not find its bundled local refinement runtime. Reinstall Omdo before preparing LLM refinement."
         #endif
     }
 
     private var missingRefinementRuntimeEnableMessage: String {
         #if DEBUG
-            return "Install llama.cpp so DictaFlow can run llama-server before turning on local refinement."
+            return "Install llama.cpp so Omdo can run llama-server before turning on local refinement."
         #else
-            return "DictaFlow could not find its bundled local refinement runtime. Reinstall DictaFlow before turning on local refinement."
+            return "Omdo could not find its bundled local refinement runtime. Reinstall Omdo before turning on local refinement."
         #endif
     }
 
     private var missingRefinementRuntimeDisabledMessage: String {
         #if DEBUG
-            return "Refinement was turned off because DictaFlow could not find llama-server. Install llama.cpp, then turn refinement back on."
+            return "Refinement was turned off because Omdo could not find llama-server. Install llama.cpp, then turn refinement back on."
         #else
-            return "Refinement was turned off because DictaFlow could not find its bundled local refinement runtime. Reinstall DictaFlow, then turn refinement back on."
+            return "Refinement was turned off because Omdo could not find its bundled local refinement runtime. Reinstall Omdo, then turn refinement back on."
         #endif
     }
 
@@ -2894,6 +2949,11 @@ final class DictaFlowAppState: ObservableObject {
         guard usesLiquid ? agentVoice?.isModelReady == true : isWhisperModelPrepared(whisperConfiguration.model) else {
             releaseRecordingAudioLease()
             isOnboardingPracticeSession = false
+            if usesLiquid, agentVoice?.isCheckingSpeechModel == true || agentVoice?.isRestoringLegacyModel == true {
+                setPreservedStatusMessage(Self.recordingDuringLiquidCheck,
+                                          issueTitle: AgentVoiceCoordinator.checkingSpeechModelText, severity: .information)
+                return
+            }
             setPreservedStatusMessage("\(whisperConfiguration.speechModelName) is not prepared. Download it before recording.", issueTitle: "Speech model is missing")
             if usesLiquid {
                 agentVoiceTab = .general
@@ -3496,7 +3556,7 @@ final class DictaFlowAppState: ObservableObject {
                 "Could not delete temporary recording \(captureURL.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)"
             )
             if shouldSurfaceFailure {
-                setPreservedStatusMessage("DictaFlow could not delete its temporary recording. Check the temporary recordings folder if you need to remove it manually.", issueTitle: "Could not remove temporary audio")
+                setPreservedStatusMessage("Omdo could not delete its temporary recording. Check the temporary recordings folder if you need to remove it manually.", issueTitle: "Could not remove temporary audio")
                 updateStatusMessage()
             }
             return
@@ -3537,7 +3597,7 @@ final class DictaFlowAppState: ObservableObject {
             var skippedTranscription = transcription
             skippedTranscription.refinementStatus = .skipped(reason: message)
             lastTranscription = skippedTranscription
-            setPreservedStatusMessage("Could not refine the transcript locally, so DictaFlow will use the transcript with your selected tone. \(message)", issueTitle: "Refinement was skipped")
+            setPreservedStatusMessage("Could not refine the transcript locally, so Omdo will use the transcript with your selected tone. \(message)", issueTitle: "Refinement was skipped")
             playSoundCue(.error)
             showMainWindow()
             updateStatusMessage()
@@ -3604,7 +3664,7 @@ final class DictaFlowAppState: ObservableObject {
             }
             guard !isTerminating else { return transcription }
             if forceEnabled { history.report(error) }
-            let message = "Could not refine the transcript locally, so DictaFlow will use the transcript with your selected tone. \(error.localizedDescription)"
+            let message = "Could not refine the transcript locally, so Omdo will use the transcript with your selected tone. \(error.localizedDescription)"
             var failedTranscription = transcription
             failedTranscription.refinementStatus = .failed(
                 model: model,
@@ -3615,7 +3675,7 @@ final class DictaFlowAppState: ObservableObject {
             setPreservedStatusMessage(message, issueTitle: "Refinement failed")
             playSoundCue(.error)
             localNotificationService.show(
-                title: "DictaFlow refinement failed",
+                title: "Omdo refinement failed",
                 body: "Using the transcript with your selected tone instead."
             )
             showMainWindowPage(forceEnabled ? .history : .dictation)
@@ -3750,7 +3810,7 @@ final class DictaFlowAppState: ObservableObject {
 
         guard let installedAppVersion else {
             if userInitiated {
-                updateCheckMessage = "DictaFlow could not read its installed version."
+                updateCheckMessage = "Omdo could not read its installed version."
             }
             return
         }
@@ -3780,7 +3840,7 @@ final class DictaFlowAppState: ObservableObject {
 
                 if userInitiated {
                     self.updateCheckMessage = newerRelease == nil
-                        ? "DictaFlow is up to date."
+                        ? "Omdo is up to date."
                         : nil
                 } else {
                     self.updateCheckMessage = nil
@@ -3863,7 +3923,7 @@ final class DictaFlowAppState: ObservableObject {
     private func updateStatusMessage() {
         switch recordingState {
         case .requestingPermission:
-            statusMessage = "DictaFlow is requesting microphone access before starting local dictation."
+            statusMessage = "Omdo is requesting microphone access before starting local dictation."
             return
         case .starting:
             statusMessage = "Preparing the microphone before recording."
@@ -3896,7 +3956,7 @@ final class DictaFlowAppState: ObservableObject {
         case .idle:
             break
         case .requestingAccessibilityPermission(let targetApplicationName):
-            statusMessage = "DictaFlow is requesting Accessibility permission before inserting into \(targetApplicationName ?? "the target app")."
+            statusMessage = "Omdo is requesting Accessibility permission before inserting into \(targetApplicationName ?? "the target app")."
             return
         case .inserting(let targetApplicationName):
             statusMessage = "Inserting the latest transcript into \(targetApplicationName ?? "the focused app")."
@@ -3952,7 +4012,7 @@ final class DictaFlowAppState: ObservableObject {
         }
 
         if !isHotkeyRegistered {
-            statusMessage = "DictaFlow could not register the global shortcut. Open the app window to troubleshoot."
+            statusMessage = "Omdo could not register the global shortcut. Open the app window to troubleshoot."
             return
         }
 
@@ -3965,7 +4025,7 @@ final class DictaFlowAppState: ObservableObject {
         case .firstLaunch where onboardingPresentation != nil:
             statusMessage = "First-launch session. Open Dictation to prepare a Whisper model for offline use."
         case .firstLaunch, .returningUser:
-            statusMessage = "DictaFlow is ready in the menu bar. Press \(hotkeyDisplayText) to start recording."
+            statusMessage = "Omdo is ready in the menu bar. Press \(hotkeyDisplayText) to start recording."
         }
     }
 }

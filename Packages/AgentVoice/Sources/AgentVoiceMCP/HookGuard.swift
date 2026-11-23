@@ -29,20 +29,20 @@ public enum HookGuard {
         switch host {
         case "claude":
             guard stdinAgentID(stdin) != nil else { return nil }
-            return deny(event: event, reason: "DictaFlow voice is main-agent only, so this child call was not sent. Finish the written answer normally.")
+            return deny(event: event, reason: "Omdo voice is main-agent only, so this child call was not sent. Finish the written answer normally.")
         case "muse":
             // A future Muse payload may also carry agent_id on this event;
             // the main session never has one under either host's spec, so a
             // non-empty value is always a child, whatever the environment says.
             if stdinAgentID(stdin) != nil {
-                return deny(event: event, reason: "DictaFlow voice is main-agent only, so this child call was not sent. Finish the written answer normally.")
+                return deny(event: event, reason: "Omdo voice is main-agent only, so this child call was not sent. Finish the written answer normally.")
             }
             guard let session = environment["MUSE_SESSION_ID"], !session.isEmpty,
                   let thread = environment["MUSE_THREAD_ID"], !thread.isEmpty else {
-                return deny(event: event, reason: "DictaFlow could not verify the calling agent because the host session identity is missing. Update Muse Code and start a new session; the written answer is unaffected.")
+                return deny(event: event, reason: "Omdo could not verify the calling agent because the host session identity is missing. Update Muse Code and start a new session; the written answer is unaffected.")
             }
             guard session != thread else { return nil }
-            return deny(event: event, reason: "DictaFlow voice is main-agent only, so this child call was not sent. Finish the written answer normally.")
+            return deny(event: event, reason: "Omdo voice is main-agent only, so this child call was not sent. Finish the written answer normally.")
         default:
             return nil
         }

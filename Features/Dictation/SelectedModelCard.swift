@@ -6,6 +6,7 @@ struct SelectedModelCard: View {
     let status: String
     let size: String
     var hasError = false
+    var isPreparing = false
     var actionTitle = "Change…"
     var disabled = false
     let action: () -> Void
@@ -36,12 +37,19 @@ struct SelectedModelCard: View {
             .font(.system(size: 11))
             .padding(.horizontal, 20).padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.background, in: Rectangle())
+            .omdoGlassBackground(in: Rectangle(), tint: AppTheme.background, showsRim: false)
         }
     }
 
+    @ViewBuilder
     private var statusLabel: some View {
-        Label(status, systemImage: hasError ? "exclamationmark.circle" : "checkmark")
-            .foregroundStyle(hasError ? AppTheme.errorText : AppTheme.modelActive)
+        if hasError {
+            EmberWarningLabel(status)
+                .foregroundStyle(AppTheme.errorText)
+        } else if isPreparing {
+            Text(status).foregroundStyle(AppTheme.secondaryText)
+        } else {
+            EmberReadyBadge(title: status)
+        }
     }
 }

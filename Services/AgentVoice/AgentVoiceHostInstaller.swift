@@ -1,15 +1,18 @@
 import Darwin
 import Foundation
 
-/// One-click host setup for Agent Voice. Registers the bundled dictaflow-mcp
-/// helper with Codex, Claude Code, or Muse Code, then verifies the entry.
+/// Host setup for Agent Voice. Installs and verifies the bundled helper in
+/// Codex and Muse Code, and supplies manual setup for Claude Code.
 /// Codex and Claude also receive user-level lifecycle hook definitions, and
 /// Claude and Muse receive a main-agent-only PreToolUse guard so child
-/// agents cannot use DictaFlow voice tools. A configured entry means the
+/// agents cannot use Omdo voice tools. A configured entry means the
 /// host can find the server, not that a live MCP connection exists: the
 /// connection happens inside a new host session.
 enum AgentVoiceHostInstaller {
     typealias Host = AgentVoiceHostAvailability.Host
+
+    nonisolated static let serverAlias = "omdo"
+    nonisolated static let legacyAlias = "dictaflow"
 
     // MARK: - State
 
@@ -27,6 +30,8 @@ enum AgentVoiceHostInstaller {
         /// (Codex 0.156.0 for caller identity). The helper rejects every call
         /// from such a host, so no entry state may report it ready.
         var versionUnsupported: Bool = false
+        var legacyEntryFound = false
+        var updateInterrupted = false
 
         var hooksConfigured: Bool { hooksEntryFound && hooksMatchCurrent }
 
@@ -37,10 +42,14 @@ enum AgentVoiceHostInstaller {
             case configured
             case disabled
             case unsupportedVersion
+            case migrationRequired
+            case updateInterrupted
         }
 
         var status: Status {
+            if updateInterrupted { return .updateInterrupted }
             if versionUnsupported { return .unsupportedVersion }
+            if legacyEntryFound { return .migrationRequired }
             if entryDisabled { return .disabled }
             if configuredEntryFound, entryMatchesCurrent { return .configured }
             if cliPath != nil { return .foundNotConfigured }
@@ -64,14 +73,18 @@ enum AgentVoiceHostInstaller {
         func run(executablePath: String, arguments: [String]) async throws -> CommandResult
     }
 
-    struct ProcessCommandRunner: CommandRunner {
+    nonisolated struct ProcessCommandRunner: CommandRunner {
+        var overrides: [String: String] = [:]
+        var workingDirectory: URL?
+
         func run(executablePath: String, arguments: [String]) async throws -> CommandResult {
             try Task.checkCancellation()
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executablePath)
             process.arguments = arguments
             // GUI launches may need the CLI's own directory to find node.
-            var environment = ProcessInfo.processInfo.environment
+            var environment = ProcessInfo.processInfo.environment.merging(overrides) { _, override in override }
+            process.currentDirectoryURL = workingDirectory
             let cliDirectory = URL(fileURLWithPath: executablePath).deletingLastPathComponent().path
             let inherited = environment["PATH"] ?? ""
             if !inherited.split(separator: ":").contains(Substring(cliDirectory)) {
@@ -135,29 +148,23 @@ enum AgentVoiceHostInstaller {
         case commandFailed(host: String, detail: String)
         case invalidSettings(path: String)
         case invalidHooksFile(path: String)
-        case invalidCodexConfig(path: String)
-        case codexRollbackConflict(path: String)
         case verificationFailed(host: String)
         case timedOut(host: String)
 
         var errorDescription: String? {
             switch self {
             case .helperMissing(let path):
-                return "DictaFlow helper not found at \(path). Reinstall the app, then try again."
+                return "Omdo helper not found at \(path). Reinstall the app, then try again."
             case .hostCLIMissing(let host):
                 return "\(host) was not found on this Mac, so automatic setup cannot run. Install the host CLI first, or use the manual setup below."
             case .commandFailed(let host, let detail):
                 return "\(host) setup failed: \(detail) You can still use the manual setup below."
             case .invalidSettings(let path):
-                return "Muse settings at \(path) is not valid JSON. Fix or move it aside, then try again."
+                return "The settings at \(path) could not be read safely. Review the JSON and try again."
             case .invalidHooksFile(let path):
-                return "The hooks file at \(path) is not valid JSON, so DictaFlow hooks were not changed. Fix or move it aside, then try again."
-            case .invalidCodexConfig(let path):
-                return "The Codex config at \(path) could not be safely updated with DictaFlow tool pre-approval, so it was left unchanged. In Codex, choose Always allow when prompted for DictaFlow tools."
-            case .codexRollbackConflict(let path):
-                return "Codex could not verify tool pre-approval. DictaFlow could not safely restore the earlier config at \(path). Review it before trying again."
+                return "The hooks file at \(path) is not valid JSON, so Omdo hooks were not changed. Fix or move it aside, then try again."
             case .verificationFailed(let host):
-                return "\(host) ran but the entry could not be verified. Start a new session; if tools are missing, use the manual setup below."
+                return "Omdo could not verify the \(host) configuration. Review the profile or use manual configuration."
             case .timedOut(let host):
                 return "\(host) setup timed out. Try again, or use the manual setup below."
             }
@@ -170,8 +177,11 @@ enum AgentVoiceHostInstaller {
         ["--app-id", appID, "--installation-id", installationID.uuidString, "--host", host.hostFlag]
     }
 
-    static func museSettingsURL(homeDirectoryURL: URL) -> URL {
-        homeDirectoryURL.appendingPathComponent(".config/muse/settings.json")
+    static func museSettingsURL(homeDirectoryURL: URL? = nil, configHome: String? = nil) -> URL {
+        let override = configHome ?? (homeDirectoryURL == nil ? ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"] : nil)
+        let root = override.flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0, isDirectory: true) : nil }
+            ?? (homeDirectoryURL ?? defaultHomeDirectoryURL()).appendingPathComponent(".config", isDirectory: true)
+        return root.appendingPathComponent("muse/settings.json")
     }
 
     /// Resolves the effective Codex home, honoring an explicit override or `CODEX_HOME`.
@@ -203,216 +213,189 @@ enum AgentVoiceHostInstaller {
         URL(fileURLWithPath: NSHomeDirectory())
     }
 
-    // MARK: - Status
+    // MARK: - Status and setup
+
+    private static func migration(for host: Host, home: URL?) -> AgentVoiceHostMigration? {
+        let base = home ?? defaultHomeDirectoryURL()
+        switch host {
+        case .codex:
+            let directory = codexDirectoryURL(homeDirectoryURL: home, codexHome: nil).resolvingSymlinksInPath()
+            return AgentVoiceHostMigration(host: host, configuration: directory.appendingPathComponent("config.toml"),
+                                           hooks: directory.appendingPathComponent("hooks.json"),
+                                           applicationSupport: base.appendingPathComponent("Library/Application Support"))
+        case .museCode:
+            let settings = museSettingsURL(homeDirectoryURL: home)
+            let directory = settings.deletingLastPathComponent().resolvingSymlinksInPath()
+            return AgentVoiceHostMigration(host: host, configuration: directory.appendingPathComponent(settings.lastPathComponent),
+                                           hooks: nil, applicationSupport: base.appendingPathComponent("Library/Application Support"))
+        case .claudeCode, .other: return nil
+        }
+    }
 
     static func refreshState(host: Host, executable: String, appID: String, installationID: UUID,
                              runner: any CommandRunner = ProcessCommandRunner(),
                              homeDirectoryURL: URL? = nil,
                              cliDiscovery: @Sendable (Host) -> String? = { AgentVoiceHostAvailability.check($0).foundCLI }) async -> HostState {
         let cliPath = cliDiscovery(host)
-        let home = homeDirectoryURL ?? defaultHomeDirectoryURL()
+        var state = HostState(cliPath: cliPath, configuredEntryFound: false, entryMatchesCurrent: false)
         let arguments = serverArguments(appID: appID, installationID: installationID, host: host)
+        let migration = migration(for: host, home: homeDirectoryURL)
+        if migration?.hasPendingUpdate == true { state.updateInterrupted = true; return state }
         switch host {
         case .other:
             return .manualOnly(cliPath: cliPath)
-        case .codex:
-            guard let cliPath else { return HostState(cliPath: nil, configuredEntryFound: false, entryMatchesCurrent: false) }
-            // Setup refuses Codex below 0.156.0 and the helper rejects every
-            // call from it, so readiness requires a successful version probe:
-            // a matching entry never proves version compatibility, and a
-            // failed probe is unverified rather than ready.
-            guard let version = try? await withTimeout(seconds: 30, host: host.name, operation: {
-                try await runner.run(executablePath: cliPath, arguments: ["--version"])
-            }) else {
-                return HostState(cliPath: cliPath, configuredEntryFound: false, entryMatchesCurrent: false)
-            }
-            guard version.exitCode == 0, supportsCodexIdentity(version.stdout) else {
-                return HostState(cliPath: cliPath, configuredEntryFound: false,
-                                 entryMatchesCurrent: false, versionUnsupported: true)
-            }
-            guard let output = try? await withTimeout(seconds: 30, host: host.name, operation: {
-                try await runner.run(executablePath: cliPath, arguments: ["mcp", "get", "--json", "dictaflow"])
-            }) else { return HostState(cliPath: cliPath, configuredEntryFound: false, entryMatchesCurrent: false) }
-            guard output.exitCode == 0 else {
-                return HostState(cliPath: cliPath, configuredEntryFound: false, entryMatchesCurrent: false)
-            }
-            let matches = codexEntryMatches(json: Data(output.stdout.utf8), executable: executable, arguments: arguments)
-            return withHookStatus(HostState(cliPath: cliPath, configuredEntryFound: true, entryMatchesCurrent: matches),
-                                  host: host, url: codexHooksURL(homeDirectoryURL: homeDirectoryURL),
-                                  executable: executable)
-        case .claudeCode:
-            guard let cliPath else { return HostState(cliPath: nil, configuredEntryFound: false, entryMatchesCurrent: false) }
-            guard let output = try? await withTimeout(seconds: 30, host: host.name, operation: {
-                try await runner.run(executablePath: cliPath, arguments: ["mcp", "get", "dictaflow"])
-            }) else { return HostState(cliPath: cliPath, configuredEntryFound: false, entryMatchesCurrent: false) }
-            guard output.exitCode == 0 else {
-                return HostState(cliPath: cliPath, configuredEntryFound: false, entryMatchesCurrent: false)
-            }
-            let matches = claudeOutputMatches(output: output.stdout, executable: executable, arguments: arguments)
-            return withHookStatus(HostState(cliPath: cliPath, configuredEntryFound: true, entryMatchesCurrent: matches),
-                                  host: host, url: claudeSettingsURL(homeDirectoryURL: home),
-                                  executable: executable)
         case .museCode:
-            let url = museSettingsURL(homeDirectoryURL: home)
-            let data = try? Data(contentsOf: url)
+            guard let url = migration?.configuration, let data = try? AgentVoiceHostMigration.read(url) else { return state }
             let entry = museEntryStatus(data: data, executable: executable, arguments: arguments)
-            return withHookStatus(HostState(cliPath: cliPath, configuredEntryFound: entry.found,
-                                            entryMatchesCurrent: entry.matches, entryDisabled: entry.disabled),
-                                  host: host, url: url, executable: executable)
+            state.configuredEntryFound = entry.found
+            state.entryMatchesCurrent = entry.matches
+            state.entryDisabled = entry.disabled
+            state.legacyEntryFound = museServerAliases(data).contains(legacyAlias)
+            return withHookStatus(state, host: host, url: url, executable: executable)
+        case .codex, .claudeCode:
+            guard let cliPath else { return state }
+            let probe = migration.map { scopedRunner(runner, codexDirectory: $0.configuration.deletingLastPathComponent()) } ?? runner
+            guard let version = try? await run(probe, cli: cliPath, host: host, args: ["--version"]) else { return state }
+            let supported = host == .codex ? supportsCodexIdentity(version.stdout) : supportsClaudeHooks(version.stdout)
+            guard version.exitCode == 0, supported else { state.versionUnsupported = true; return state }
+            let query = host == .codex ? ["mcp", "get", "--json"] : ["mcp", "get"]
+            let legacy = try? await run(probe, cli: cliPath, host: host, args: query + [legacyAlias])
+            state.legacyEntryFound = legacy?.exitCode == 0
+            guard let current = try? await run(probe, cli: cliPath, host: host, args: query + [serverAlias]),
+                  current.exitCode == 0 else { return state }
+            state.configuredEntryFound = true
+            if host == .codex {
+                if let entry = try? JSONDecoder().decode(CodexEntry.self, from: Data(current.stdout.utf8)) {
+                    state.entryMatchesCurrent = entry.matches(executable: executable, arguments: arguments)
+                    state.entryDisabled = entry.enabled == false
+                }
+            } else {
+                state.entryMatchesCurrent = claudeOutputMatches(output: current.stdout, executable: executable, arguments: arguments)
+            }
+            let hooks = migration?.hooks ?? claudeProfileDirectory(homeDirectoryURL).appendingPathComponent("settings.json")
+            return withHookStatus(state, host: host, url: hooks, executable: executable)
         }
     }
 
-    // MARK: - Setup
-
-    @discardableResult
     static func setUp(host: Host, executable: String, appID: String, installationID: UUID,
                       agentVoiceEnabled: Bool, runner: any CommandRunner = ProcessCommandRunner(),
                       homeDirectoryURL: URL? = nil,
-                      cliDiscovery: @Sendable (Host) -> String? = { AgentVoiceHostAvailability.check($0).foundCLI }) async throws -> String {
-        guard FileManager.default.isExecutableFile(atPath: executable) else {
-            throw InstallerError.helperMissing(executable)
-        }
-        let home = homeDirectoryURL ?? defaultHomeDirectoryURL()
+                      cliDiscovery: @Sendable (Host) -> String? = { AgentVoiceHostAvailability.check($0).foundCLI },
+                      hostIdle: (@Sendable () async throws -> Bool)? = nil) async throws -> String {
+        guard FileManager.default.isExecutableFile(atPath: executable) else { throw InstallerError.helperMissing(executable) }
+        guard let migration = migration(for: host, home: homeDirectoryURL) else { throw AgentVoiceHostMigration.Failure.manual }
         let arguments = serverArguments(appID: appID, installationID: installationID, host: host)
-        let codexHooks = codexHooksURL(homeDirectoryURL: homeDirectoryURL)
-        let codexConfig = codexConfigURL(homeDirectoryURL: homeDirectoryURL)
-        var codexApproval: CodexApprovalMerge?
-        var museDisabled = false
-        switch host {
-        case .other:
-            throw InstallerError.commandFailed(host: host.name, detail: "Manual setup only.")
-        case .codex:
-            let cli = try requireCLI(for: host, discovery: cliDiscovery)
-            let version = try await withTimeout(seconds: 30, host: host.name, operation: {
-                try await runner.run(executablePath: cli, arguments: ["--version"])
-            })
+        let config = migration.configuration
+        let ownsPath: (String) -> Bool = {
+            AgentVoiceHostMigration.isOwnedHelper($0, current: executable, appID: appID)
+        }
+        var disabled = false
+        let cli: String?
+        if host == .codex {
+            guard let path = cliDiscovery(host) else { throw InstallerError.hostCLIMissing(host.name) }
+            let version = try await run(runner, cli: path, host: host, args: ["--version"])
             guard version.exitCode == 0, supportsCodexIdentity(version.stdout) else {
-                throw InstallerError.commandFailed(host: host.name,
-                    detail: "Update to stable Codex 0.156.0 or later for main-agent-only Agent Voice.")
+                throw InstallerError.commandFailed(host: host.name, detail: "Update to stable Codex 0.156.0 or later.")
             }
-            _ = try mergedHooksData(existing: readIfPresent(codexHooks), host: host, path: codexHooks.path,
-                                    executable: executable)
-            let result = try await withTimeout(seconds: 60, host: host.name, operation: {
-                try await runner.run(executablePath: cli, arguments: ["mcp", "add", "dictaflow", "--", executable] + arguments)
-            })
-            guard result.exitCode == 0 else {
-                throw InstallerError.commandFailed(host: host.name, detail: nonempty(result.stderr, fallback: result.stdout))
+            cli = path
+        } else {
+            cli = nil
+        }
+        try await migration.apply(executable: executable, arguments: arguments) {
+            let original = try AgentVoiceHostMigration.read(config)
+            if let hooks = migration.hooks {
+                let configuration = try CodexMCPConfiguration(original)
+                let candidate = try configuration.candidate(executable: executable, arguments: arguments, ownsPath: ownsPath)
+                let originalHooks = try AgentVoiceHostMigration.read(hooks)
+                let root = try configurationObject(originalHooks, path: hooks.path)
+                let updated = try migratedHooks(root: root, host: host, executable: executable, ownsPath: ownsPath)
+                return [try AgentVoiceHostMigration.change(at: config, original: original, candidate: candidate),
+                        try AgentVoiceHostMigration.change(at: hooks, original: originalHooks, candidate: encodeJSON(updated))]
             }
-            guard await isCodexConfigured(executable: executable, arguments: arguments, cliPath: cli, runner: runner) else {
-                throw InstallerError.verificationFailed(host: host.name)
-            }
-            try writeHooks(host: host, url: codexHooks, executable: executable)
-            guard hooksStatus(data: try Data(contentsOf: codexHooks), host: host, executable: executable).matches else {
-                throw InstallerError.verificationFailed(host: host.name)
-            }
-            let originalConfig = try readIfPresent(codexConfig)
-            codexApproval = try writeCodexApproval(original: originalConfig, to: codexConfig)
-            if case .applied(let updated) = codexApproval, let originalConfig {
-                // The `mcp add` success above proves the file parsed before
-                // our edit. A failed check restores that snapshot only
-                // if the current file still contains exactly our edit.
-                do {
-                    let list = try await withTimeout(seconds: 30, host: host.name, operation: {
-                        try await runner.run(executablePath: cli, arguments: ["mcp", "list"])
-                    })
-                    guard list.exitCode == 0 else {
-                        throw InstallerError.invalidCodexConfig(path: codexConfig.path)
-                    }
-                } catch {
-                    do {
-                        guard try readIfPresent(codexConfig) == Data(updated.utf8) else {
-                            throw InstallerError.codexRollbackConflict(path: codexConfig.path)
-                        }
-                        try originalConfig.write(to: codexConfig, options: .atomic)
-                    } catch {
-                        throw InstallerError.codexRollbackConflict(path: codexConfig.path)
-                    }
-                    throw error
+            let candidate = try migratedMuseSettings(original, path: config.path, executable: executable,
+                                                     arguments: arguments, ownsPath: ownsPath)
+            return [try AgentVoiceHostMigration.change(at: config, original: original, candidate: candidate)]
+        } verify: { changes, directory in
+            if let cli {
+                let isolated = directory.appendingPathComponent("verification-\(UUID().uuidString)")
+                try MigrationFiles.makePrivateDirectory(isolated)
+                defer { try? FileManager.default.removeItem(at: isolated) }
+                let scoped = scopedRunner(runner, codexDirectory: isolated)
+                try MigrationFiles.replaceDurably(changes[0].candidate, at: isolated.appendingPathComponent("config.toml"))
+                let list = try await run(scoped, cli: cli, host: host, args: ["mcp", "list"])
+                let entry = try await run(scoped, cli: cli, host: host, args: ["mcp", "get", "--json", serverAlias])
+                let configuration = try CodexMCPConfiguration(changes[0].candidate)
+                guard list.exitCode == 0, !configuration.aliases.contains(legacyAlias), entry.exitCode == 0,
+                      codexEntryMatches(json: Data(entry.stdout.utf8), executable: executable, arguments: arguments),
+                      hooksStatus(data: changes[1].candidate, host: host, executable: executable).matches else {
+                    throw InstallerError.verificationFailed(host: host.name)
                 }
+                disabled = configuration.isDisabled(alias: serverAlias)
+            } else {
+                let data = changes[0].candidate
+                let entry = museEntryStatus(data: data, executable: executable, arguments: arguments)
+                guard entry.matches, !museServerAliases(data).contains(legacyAlias),
+                      hooksStatus(data: data, host: host, executable: executable).matches else {
+                    throw InstallerError.verificationFailed(host: host.name)
+                }
+                disabled = entry.disabled
             }
-        case .claudeCode:
-            let cli = try requireCLI(for: host, discovery: cliDiscovery)
-            let version = try await withTimeout(seconds: 30, host: host.name) {
-                try await runner.run(executablePath: cli, arguments: ["--version"])
-            }
-            guard version.exitCode == 0, supportsClaudeHooks(version.stdout) else {
-                throw InstallerError.commandFailed(host: host.name, detail: "Update Claude Code to 2.1.118 or later to install Agent Voice hooks.")
-            }
-            let settingsURL = claudeSettingsURL(homeDirectoryURL: home)
-            _ = try mergedHooksData(existing: readIfPresent(settingsURL), host: host, path: settingsURL.path,
-                                    executable: executable)
-            // Remove-then-add: adding over an existing server reports "already exists".
-            _ = try? await withTimeout(seconds: 60, host: host.name, operation: {
-                try await runner.run(executablePath: cli, arguments: ["mcp", "remove", "dictaflow", "-s", "user"])
-            })
-            let result = try await withTimeout(seconds: 60, host: host.name, operation: {
-                try await runner.run(executablePath: cli,
-                                     arguments: ["mcp", "add", "--transport", "stdio", "dictaflow", "-s", "user",
-                                                 "--", executable] + arguments)
-            })
-            guard result.exitCode == 0, !result.stdout.contains("already exists") else {
-                let detail = result.stdout.contains("already exists")
-                    ? "the entry already exists and could not be replaced"
-                    : nonempty(result.stderr, fallback: result.stdout)
-                throw InstallerError.commandFailed(host: host.name, detail: detail)
-            }
-            guard await isClaudeConfigured(executable: executable, arguments: arguments,
-                                           cliPath: cli, runner: runner) else {
-                throw InstallerError.verificationFailed(host: host.name)
-            }
-            try writeHooks(host: host, url: settingsURL, executable: executable)
-            guard hooksStatus(data: try Data(contentsOf: settingsURL), host: host, executable: executable).matches else {
-                throw InstallerError.verificationFailed(host: host.name)
-            }
-        case .museCode:
-            try writeMuseSettings(executable: executable, arguments: arguments, homeDirectoryURL: home)
-            let settingsURL = museSettingsURL(homeDirectoryURL: home)
-            let data = try? Data(contentsOf: settingsURL)
-            let entry = museEntryStatus(data: data, executable: executable, arguments: arguments)
-            guard entry.matches,
-                  hooksStatus(data: data, host: host, executable: executable).matches else {
-                throw InstallerError.verificationFailed(host: host.name)
-            }
-            museDisabled = entry.disabled
+        } checkIdle: {
+            let idle: Bool
+            if let hostIdle { idle = try await hostIdle() }
+            else { idle = try await isHostIdle(host) }
+            guard idle else { throw AgentVoiceHostMigration.Failure.hostRunning(host.name) }
         }
-        if museDisabled {
-            return "Muse Code settings updated. The DictaFlow server is still disabled. Enable it in Muse Code settings before starting a new session."
-        }
-        var message = "\(host.name) setup complete."
-        switch host {
-        case .codex:
-            message += " DictaFlow hooks were added to \(codexHooks.path) alongside the server. Open /hooks in Codex and review and trust the three DictaFlow hooks. Start a new Codex session so it picks up the server."
-            switch codexApproval {
-            case .applied:
-                message += " DictaFlow's own tools are pre-approved in \(codexConfig.path), so Codex will not prompt for them."
-            case .alreadyApproved:
-                message += " DictaFlow tool approval in \(codexConfig.path) is already set and was left untouched; Codex honors that value."
-            case .noServerEntry:
-                message += " The DictaFlow server entry was not found in \(codexConfig.path), so tool pre-approval was skipped. In Codex, choose Always allow when prompted for DictaFlow tools."
-            case .none:
-                break
-            }
-        case .claudeCode:
-            message += " DictaFlow hooks were added to ~/.claude/settings.json alongside your other settings: voice lifecycle plus a main-agent-only tool guard. Start a new Claude Code session so it picks up the server and hooks."
-        case .museCode:
-            message += " DictaFlow's main-agent-only tool guard was added to ~/.config/muse/settings.json alongside the server. Start a new Muse Code session so it picks up the server and guard."
-        default:
-            message += " Start a new \(host.name) session so it picks up the server."
-        }
-        if !agentVoiceEnabled {
-            message += " Turn Enable Agent Voice on above; the server needs it."
-        }
+        if disabled { return "Omdo is configured in \(host.name) and remains disabled in the host settings." }
+        var message = "Omdo is configured in \(host.name). Start a new session to use it."
+        if host == .codex { message += " In the new session, open /hooks and review and trust the Omdo hooks." }
+        if !agentVoiceEnabled { message += " Turn on Enable Agent Voice to use it." }
         return message
+    }
+
+    static func claudeProfileDirectory(_ home: URL? = nil) -> URL {
+        if home == nil, let override = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return claudeSettingsURL(homeDirectoryURL: home ?? defaultHomeDirectoryURL()).deletingLastPathComponent()
+    }
+
+    private static func scopedRunner(_ runner: any CommandRunner, codexDirectory: URL) -> any CommandRunner {
+        guard var process = runner as? ProcessCommandRunner else { return runner }
+        process.overrides["CODEX_HOME"] = codexDirectory.path
+        process.workingDirectory = URL(fileURLWithPath: "/", isDirectory: true)
+        return process
+    }
+
+    private static func run(_ runner: any CommandRunner, cli: String, host: Host, args: [String]) async throws -> CommandResult {
+        try await withTimeout(seconds: 30, host: host.name) {
+            try await runner.run(executablePath: cli, arguments: args)
+        }
+    }
+
+    private static func isHostIdle(_ host: Host) async throws -> Bool {
+        let process = ProcessCommandRunner()
+        let names = host == .codex ? "codex|Codex|codex-app-server" : "muse|Muse|muse-code|Muse Code"
+        let result = try await run(process, cli: "/usr/bin/pgrep", host: host, args: ["-u", String(getuid()), "-x", names])
+        if result.exitCode == 0 { return false }
+        if result.exitCode == 1 { return true }
+        throw AgentVoiceHostMigration.Failure.manual
     }
 
     // MARK: - Verification helpers
 
-    static func codexEntryMatches(json: Data, executable: String, arguments: [String]) -> Bool {
+    private struct CodexEntry: Decodable {
         struct Transport: Decodable { var command: String; var args: [String]? }
-        struct Entry: Decodable { var transport: Transport }
-        guard let entry = try? JSONDecoder().decode(Entry.self, from: json) else { return false }
-        guard entry.transport.command == executable else { return false }
-        return entry.transport.args == arguments
+        let transport: Transport
+        let enabled: Bool?
+
+        func matches(executable: String, arguments: [String]) -> Bool {
+            transport.command == executable && transport.args == arguments
+        }
+    }
+
+    static func codexEntryMatches(json: Data, executable: String, arguments: [String]) -> Bool {
+        (try? JSONDecoder().decode(CodexEntry.self, from: json))?.matches(executable: executable, arguments: arguments) == true
     }
 
     /// Checks that `mcp get` output names the exact helper command and arguments.
@@ -445,39 +428,101 @@ enum AgentVoiceHostInstaller {
         guard let data, !data.isEmpty,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let servers = (json["mcp_servers"] ?? json["mcpServers"]) as? [String: Any],
-              let entry = servers["dictaflow"] as? [String: Any] else { return (false, false, false) }
+              let entry = servers[serverAlias] as? [String: Any] else { return (false, false, false) }
         let matches = (entry["command"] as? String) == executable && (entry["args"] as? [String]) == arguments
             && (entry["transport"] ?? entry["type"]) as? String == "stdio"
         return (true, matches, (entry["enabled"] as? Bool) == false)
     }
 
-    /// Merges the DictaFlow server into Muse settings, preserving the existing `enabled` flag.
-    /// The same write also merges the main-agent-only PreToolUse guard into
-    /// the file's `hooks` member, preserving every other hook.
-    static func mergedMuseSettings(existing: Data?, executable: String, arguments: [String],
-                                   path: String = museSettingsURL(homeDirectoryURL: defaultHomeDirectoryURL()).path) throws -> Data {
-        var json: [String: Any]
+    private static func configurationObject(_ data: Data?, path: String) throws -> [String: Any] {
+        guard let data else { return [:] }
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw InstallerError.invalidSettings(path: path)
+        }
+        return root
+    }
+
+    private static func encodeJSON(_ root: [String: Any]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+    }
+
+    private static func museServerAliases(_ data: Data) -> Set<String> {
+        guard let root = try? configurationObject(data, path: "") else { return [] }
+        let regular = (root["mcp_servers"] as? [String: Any]) ?? [:]
+        let alternate = (root["mcpServers"] as? [String: Any]) ?? [:]
+        return Set(regular.keys).union(alternate.keys)
+    }
+
+    static func migratedMuseSettings(_ original: Data?, path: String, executable: String,
+                                    arguments: [String], ownsPath: (String) -> Bool) throws -> Data {
+        var root = try configurationObject(original, path: path)
+        let key = root["mcpServers"] == nil ? "mcp_servers" : "mcpServers"
+        guard !(root["mcp_servers"] != nil && root["mcpServers"] != nil),
+              root[key] == nil || root[key] is [String: Any] else { throw InstallerError.invalidSettings(path: path) }
+        var entries = (root[key] as? [String: Any]) ?? [:]
+        guard entries[legacyAlias] == nil || entries[serverAlias] == nil else { throw AgentVoiceHostMigration.Failure.conflict }
+        let existing = entries[legacyAlias] ?? entries[serverAlias]
+        var entry: [String: Any]
         if let existing {
-            guard let parsed = try? JSONSerialization.jsonObject(with: existing) as? [String: Any] else {
-                throw InstallerError.invalidSettings(path: path)
+            guard let owned = existing as? [String: Any],
+                  let command = owned["command"] as? String, ownsPath(command),
+                  owned["args"] as? [String] == arguments,
+                  (owned["transport"] ?? owned["type"]) as? String == "stdio" else {
+                throw AgentVoiceHostMigration.Failure.conflict
             }
-            json = parsed
+            entry = owned
+            entry["command"] = executable
         } else {
-            json = [:]
+            entry = ["transport": "stdio", "command": executable, "args": arguments, "mode": "optional"]
         }
-        let key = json["mcpServers"] == nil ? "mcp_servers" : "mcpServers"
-        guard !(json["mcpServers"] != nil && json["mcp_servers"] != nil),
-              json[key] == nil || json[key] is [String: Any] else { throw InstallerError.invalidSettings(path: path) }
-        var servers = json[key] as? [String: Any] ?? [:]
-        var entry: [String: Any] = ["transport": "stdio", "command": executable, "args": arguments, "mode": "optional"]
-        if let previous = servers["dictaflow"] as? [String: Any] {
-            entry["enabled"] = previous["enabled"]
+        entries.removeValue(forKey: legacyAlias)
+        entries[serverAlias] = entry
+        root[key] = entries
+        if root["schema_version"] == nil { root["schema_version"] = 1 }
+        return try encodeJSON(migratedHooks(root: root, host: .museCode, executable: executable, ownsPath: ownsPath))
+    }
+
+    private static func migratedHooks(root: [String: Any], host: Host, executable: String,
+                                      ownsPath: (String) -> Bool) throws -> [String: Any] {
+        let aliases = [legacyAlias, serverAlias]
+        var updated = root
+        if let existing = root["hooks"] {
+            guard let hooks = existing as? [String: Any] else { throw AgentVoiceHostMigration.Failure.unownedHook }
+            for (event, groupsValue) in hooks {
+                guard let groups = groupsValue as? [[String: Any]] else { throw AgentVoiceHostMigration.Failure.unownedHook }
+                for group in groups {
+                    guard let handlers = group["hooks"] as? [[String: Any]] else { throw AgentVoiceHostMigration.Failure.unownedHook }
+                    let matcher = group["matcher"] as? String
+                    let reservedMatcher = aliases.contains { matcher?.contains("mcp__\($0)__") == true }
+                    for handler in handlers where isDictaFlowHook(handler) || reservedMatcher {
+                        var candidate = handler
+                        if let status = candidate.removeValue(forKey: "statusMessage"),
+                           !["Omdo: Agent Voice", "DictaFlow: Agent Voice"].contains(status as? String ?? "") {
+                            throw AgentVoiceHostMigration.Failure.unownedHook
+                        }
+                        if let alias = candidate["server"] as? String, aliases.contains(alias), matcher == nil,
+                           group.keys.allSatisfy({ $0 == "hooks" }),
+                           var template = expectedHookHandler(for: host, event: event) {
+                            template.removeValue(forKey: "statusMessage")
+                            template["server"] = alias
+                            if canonicalJSON(template) == canonicalJSON(candidate) { continue }
+                        }
+                        if event == "PreToolUse", let matcher, aliases.contains(where: { matcher == "mcp__\($0)__.*" }),
+                           group.keys.allSatisfy({ $0 == "hooks" || $0 == "matcher" }),
+                           candidate["type"] as? String == "command", let command = candidate["command"] as? String {
+                            let tokens = (candidate["args"] as? [String]).map { [command] + $0 } ?? shellTokens(command)
+                            if let invoked = tokens.first, ownsPath(invoked),
+                               Array(tokens.dropFirst()) == ["--hook-event", "PreToolUse", "--host", host.hostFlag],
+                               Set(candidate.keys).isSubset(of: ["type", "command", "args", "timeout"]),
+                               candidate["timeout"] == nil || candidate["timeout"] as? Int == 5 { continue }
+                        }
+                        throw AgentVoiceHostMigration.Failure.unownedHook
+                    }
+                }
+            }
         }
-        servers["dictaflow"] = entry
-        json[key] = servers
-        if json["schema_version"] == nil { json["schema_version"] = 1 }
-        try applyHooksMerge(to: &json, host: .museCode, executable: executable, path: path)
-        return try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        try applyHooksMerge(to: &updated, host: host, executable: executable, path: "host settings")
+        return updated
     }
 
     // MARK: - Native lifecycle hooks
@@ -501,19 +546,19 @@ enum AgentVoiceHostInstaller {
 
     /// Matcher selecting every DictaFlow MCP tool for the PreToolUse guard.
     /// Both hosts document the `mcp__<server>__.*` form for this.
-    static let dictaflowToolMatcher = "mcp__dictaflow__.*"
+    static let omdoToolMatcher = "mcp__omdo__.*"
 
     /// The matcher DictaFlow installs for one event, or nil for events whose
     /// group carries no matcher. Lifecycle events match every occurrence.
     static func expectedHookMatcher(for host: Host, event: String) -> String? {
         switch (host, event) {
-        case (.claudeCode, "PreToolUse"), (.museCode, "PreToolUse"): dictaflowToolMatcher
+        case (.claudeCode, "PreToolUse"), (.museCode, "PreToolUse"): omdoToolMatcher
         default: nil
         }
     }
 
-    /// The exact handler DictaFlow installs for one event. Identity of our
-    /// own hooks in a file is `type == mcp_tool && server == dictaflow`;
+    /// The exact handler Omdo installs for one event. Identity of our
+    /// own hooks is checked against the current and previously shipped shapes;
     /// setup replaces those with this exact definition and keeps every
     /// other handler untouched. The prompt text is captured only from the
     /// hook's explicit `prompt` payload field, never from a transcript.
@@ -546,8 +591,8 @@ enum AgentVoiceHostInstaller {
         // camelCase per Codex's own handler schema. There is no `name` field:
         // unknown keys are tolerated but never displayed. Identification still
         // uses type + server only.
-        return ["type": "mcp_tool", "server": "dictaflow", "tool": tool, "input": input,
-                "timeout": 2, "statusMessage": "DictaFlow: Agent Voice"]
+        return ["type": "mcp_tool", "server": serverAlias, "tool": tool, "input": input,
+                "timeout": 2, "statusMessage": "Omdo: Agent Voice"]
     }
 
     /// The exact PreToolUse guard handler for one host. The helper runs once
@@ -563,10 +608,10 @@ enum AgentVoiceHostInstaller {
         switch (host, event) {
         case (.claudeCode, "PreToolUse"):
             return ["type": "command", "command": claudeGuardCommand(executable: executable),
-                    "timeout": 5, "statusMessage": "DictaFlow: Agent Voice"]
+                    "timeout": 5, "statusMessage": "Omdo: Agent Voice"]
         case (.museCode, "PreToolUse"):
             return ["type": "command", "command": museGuardCommand(executable: executable),
-                    "timeout": 5, "statusMessage": "DictaFlow: Agent Voice"]
+                    "timeout": 5, "statusMessage": "Omdo: Agent Voice"]
         default: return nil
         }
     }
@@ -589,7 +634,7 @@ enum AgentVoiceHostInstaller {
         "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 
-    /// The exact handler DictaFlow installs for one event, either kind.
+    /// The exact handler Omdo installs for one event, either kind.
     static func expectedAnyHookHandler(for host: Host, event: String, executable: String) -> [String: Any]? {
         expectedHookHandler(for: host, event: event)
             ?? expectedCommandHookHandler(for: host, event: event, executable: executable)
@@ -641,14 +686,6 @@ enum AgentVoiceHostInstaller {
         try mergedHooksData(existing: existing, host: .claudeCode,
                             path: claudeSettingsURL(homeDirectoryURL: defaultHomeDirectoryURL()).path,
                             executable: executable)
-    }
-
-    /// Merges DictaFlow hooks into a Muse `settings.json` root object that
-    /// already passed settings validation, preserving every other member.
-    static func mergedMuseHooks(root: [String: Any], executable: String, path: String) throws -> [String: Any] {
-        var root = root
-        try applyHooksMerge(to: &root, host: .museCode, executable: executable, path: path)
-        return root
     }
 
     private static func mergedHooksData(existing: Data?, host: Host, path: String, executable: String) throws -> Data {
@@ -713,7 +750,7 @@ enum AgentVoiceHostInstaller {
     }
 
     private static func isDictaFlowHook(_ handler: [String: Any]) -> Bool {
-        if (handler["type"] as? String) == "mcp_tool", (handler["server"] as? String) == "dictaflow" { return true }
+        if (handler["type"] as? String) == "mcp_tool", [serverAlias, legacyAlias].contains(handler["server"] as? String ?? "") { return true }
         // Our own PreToolUse guard, recognized by invocation shape, not by
         // substrings: the helper executable must be the invoked program and
         // `--hook-event` a separate argument. Shell form quotes the helper
@@ -777,153 +814,6 @@ enum AgentVoiceHostInstaller {
         return state
     }
 
-    /// Merges DictaFlow hooks into the host settings file at `url`.
-    private static func writeHooks(host: Host, url: URL, executable: String) throws {
-        let merged = try mergedHooksData(existing: readIfPresent(url), host: host, path: url.path,
-                                         executable: executable)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-        try merged.write(to: url, options: .atomic)
-    }
-
-    // MARK: - Codex tool pre-approval
-
-    /// Server-level approval that Codex setup writes so the model is not
-    /// prompted for DictaFlow's own tools. This mirrors what Codex writes
-    /// for a manual Always-allow (`[mcp_servers.<server>.tools.<tool>]
-    /// approval_mode = "approve"`), but as one server default covering every
-    /// current and future DictaFlow tool, including the read-only status
-    /// query the model uses to address the current draft revision.
-    static let codexServerTableHeader = "[mcp_servers.dictaflow]"
-    static let codexApprovalKey = "default_tools_approval_mode"
-    static let codexApprovalValue = "approve"
-
-    enum CodexApprovalMerge: Equatable, Sendable {
-        case applied(String)
-        case alreadyApproved
-        case noServerEntry
-    }
-
-    /// Computes the updated `~/.codex/config.toml` text with the server
-    /// approval added under `[mcp_servers.dictaflow]`, preserving every
-    /// other byte. Never overwrites an existing value, never creates a
-    /// second server table, and leaves project-scoped or otherwise
-    /// unregistered servers alone (`.noServerEntry`).
-    static func mergedCodexApproval(existing: String) throws -> CodexApprovalMerge {
-        guard !existing.isEmpty else { return .noServerEntry }
-        let newline = existing.contains("\r\n") ? "\r\n" : "\n"
-        let lines = existing.components(separatedBy: newline)
-        let headerIndexes = lines.indices.filter { isCodexServerTableHeader(lines[$0]) }
-        guard headerIndexes.count <= 1 else {
-            throw InstallerError.invalidCodexConfig(path: codexConfigURL().path)
-        }
-        guard let headerIndex = headerIndexes.first else {
-            // A top-level dotted key predating the table form also approves.
-            return lines.contains(where: isDottedDictaflowApproval) ? .alreadyApproved : .noServerEntry
-        }
-        var sectionEnd = lines.count
-        for index in (headerIndex + 1)..<lines.count where isTOMLTableHeader(lines[index]) {
-            sectionEnd = index
-            break
-        }
-        if lines[headerIndex + 1..<sectionEnd].contains(where: isActiveApprovalKey) {
-            return .alreadyApproved
-        }
-        var updated = lines
-        updated.insert("\(codexApprovalKey) = \"\(codexApprovalValue)\"", at: headerIndex + 1)
-        return .applied(updated.joined(separator: newline))
-    }
-
-    /// Writes the server approval into the user's Codex config. Returns how
-    /// the file was handled so setup can report it honestly.
-    private static func writeCodexApproval(original: Data?, to url: URL) throws -> CodexApprovalMerge {
-        guard let original else { return .noServerEntry }
-        guard let existing = String(data: original, encoding: .utf8) else {
-            throw InstallerError.invalidCodexConfig(path: url.path)
-        }
-        switch try mergedCodexApproval(existing: existing) {
-        case .applied(let updated):
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            do {
-                try updated.write(to: url, atomically: true, encoding: .utf8)
-            } catch {
-                throw InstallerError.invalidCodexConfig(path: url.path)
-            }
-            return .applied(updated)
-        case .alreadyApproved: return .alreadyApproved
-        case .noServerEntry: return .noServerEntry
-        }
-    }
-
-    private static func isCodexServerTableHeader(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasPrefix(codexServerTableHeader) else { return false }
-        // `[mcp_servers.dictaflow.tools.x]` and `[mcp_servers.dictaflow2]`
-        // share the prefix but are different tables.
-        let rest = trimmed.dropFirst(codexServerTableHeader.count)
-        return rest.isEmpty || rest.first == " " || rest.first == "\t" || rest.first == "#"
-    }
-
-    private static func isTOMLTableHeader(_ line: String) -> Bool {
-        line.trimmingCharacters(in: .whitespaces).hasPrefix("[")
-    }
-
-    private static func isActiveApprovalKey(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.hasPrefix("#"), trimmed.hasPrefix(codexApprovalKey) else { return false }
-        let rest = trimmed.dropFirst(codexApprovalKey.count).trimmingCharacters(in: .whitespaces)
-        return rest.hasPrefix("=")
-    }
-
-    private static func isDottedDictaflowApproval(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.hasPrefix("#"), !isTOMLTableHeader(line) else { return false }
-        let pattern = #"mcp_servers\s*\.\s*dictaflow\s*\.\s*default_tools_approval_mode\s*="#
-        return trimmed.range(of: pattern, options: .regularExpression) != nil
-    }
-
-    // MARK: - Private
-
-    private static func requireCLI(for host: Host, discovery: @Sendable (Host) -> String?) throws -> String {
-        guard let cli = discovery(host) else {
-            throw InstallerError.hostCLIMissing(host.name)
-        }
-        return cli
-    }
-
-    private static func isCodexConfigured(executable: String, arguments: [String],
-                                          cliPath: String, runner: any CommandRunner) async -> Bool {
-        guard let output = try? await withTimeout(seconds: 30, host: "Codex", operation: {
-            try await runner.run(executablePath: cliPath, arguments: ["mcp", "get", "--json", "dictaflow"])
-        }), output.exitCode == 0 else { return false }
-        return codexEntryMatches(json: Data(output.stdout.utf8), executable: executable, arguments: arguments)
-    }
-
-    /// Verifies via the Claude CLI that the DictaFlow server entry is current.
-    private static func isClaudeConfigured(executable: String, arguments: [String],
-                                           cliPath: String, runner: any CommandRunner) async -> Bool {
-        guard let output = try? await withTimeout(seconds: 30, host: "Claude Code", operation: {
-            try await runner.run(executablePath: cliPath, arguments: ["mcp", "get", "dictaflow"])
-        }), output.exitCode == 0 else { return false }
-        return claudeOutputMatches(output: output.stdout, executable: executable, arguments: arguments)
-    }
-
-    private static func writeMuseSettings(executable: String, arguments: [String], homeDirectoryURL: URL) throws {
-        let url = museSettingsURL(homeDirectoryURL: homeDirectoryURL)
-        let existing = try readIfPresent(url)
-        let merged = try mergedMuseSettings(existing: existing, executable: executable, arguments: arguments, path: url.path)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-        try merged.write(to: url, options: .atomic)
-    }
-
-    /// Reads a file, returning nil only when it is genuinely missing.
-    private static func readIfPresent(_ url: URL) throws -> Data? {
-        do { return try Data(contentsOf: url) }
-        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return nil }
-    }
-
     /// Runs an operation with a timeout, cancelling it and throwing when the deadline passes.
     static func withTimeout<T: Sendable>(seconds: UInt64, host: String,
                                                  operation: @escaping @Sendable () async throws -> T) async throws -> T {
@@ -939,10 +829,4 @@ enum AgentVoiceHostInstaller {
         }
     }
 
-    private static func nonempty(_ value: String, fallback: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { return trimmed }
-        let fallbackTrimmed = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
-        return fallbackTrimmed.isEmpty ? "unknown error" : fallbackTrimmed
-    }
 }

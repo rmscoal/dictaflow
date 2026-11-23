@@ -111,6 +111,11 @@ final class AgentVoiceCoordinator: ObservableObject {
     @Published private(set) var isEnabled: Bool
     @Published private(set) var status = "Agent Voice is off."
     @Published private(set) var isModelReady = false
+    @Published private(set) var isCheckingSpeechModel = true
+    @Published private(set) var canRestoreLegacyModel = false
+    @Published private(set) var isRestoringLegacyModel = false
+    @Published private(set) var legacyModelRestoreError: String?
+    static let checkingSpeechModelText = "Checking speech model…"
     @Published private(set) var modelDownloadProgress: ModelDownloadProgress?
     var isDownloading: Bool { modelDownloadProgress != nil }
     var onModelDownloadFinished: ((Result<Void, Error>) -> Void)?
@@ -131,7 +136,11 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     let assets: LiquidAssets
     private let modelDownloader: any LiquidAssetDownloading
+    private let legacyModels: LiquidModelMigration?
+    private let supportDirectory: URL
+    private var initialModelCheck: Task<Void, Never>?
     private var modelDownloadTask: Task<Void, Never>?
+    private var modelRestoreTask: Task<Void, Never>?
     private var modelDownloadGeneration = UUID()
     let runtime: any LiquidRuntimeProtocol
     let installationID: UUID
@@ -144,6 +153,7 @@ final class AgentVoiceCoordinator: ObservableObject {
     private let beforePreviewCompletion: (() -> Void)?
     private let logger = Logger(subsystem: "com.dictaflow.agentvoice", category: "Coordinator")
     private var store: VoiceStore?
+    private var storageFailureMessage: String?
     private var bridge: LocalVoiceServer?
     private var worker: Task<Void, Never>?
     private var workerNeedsWake = false
@@ -158,11 +168,15 @@ final class AgentVoiceCoordinator: ObservableObject {
     private var stopped = false
 
     init(defaults: UserDefaults = .standard, player: AgentSpeechPlayerProtocol? = nil,
-         supportDirectory: URL? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil,
+         supportDirectory: URL, preparedStore: Result<VoiceStore, any Error>? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil,
          limits: VoiceLimits = VoiceLimits(), beforeIdleRefresh: (() async -> Void)? = nil,
          beforeRetentionRefresh: ((VoiceHistoryRetention) async -> Void)? = nil,
-         modelDownloader: (any LiquidAssetDownloading)? = nil, beforePreviewCompletion: (() -> Void)? = nil) {
+         modelDownloader: (any LiquidAssetDownloading)? = nil, beforePreviewCompletion: (() -> Void)? = nil,
+         legacyModels: LiquidModelMigration? = nil) {
         self.defaults = defaults; self.player = player ?? AgentSpeechPlayer()
+        self.legacyModels = legacyModels
+        self.supportDirectory = supportDirectory
+        canRestoreLegacyModel = legacyModels?.canRestore == true
         speechVoice = defaults.string(forKey: Self.speechVoiceKey).flatMap(LiquidVoice.init(rawValue:)) ?? .female
         englishAccent = defaults.string(forKey: Self.englishAccentKey).flatMap(LiquidEnglishAccent.init(rawValue:)) ?? .american
         let savedRate = defaults.double(forKey: Self.playbackRateKey)
@@ -171,18 +185,18 @@ final class AgentVoiceCoordinator: ObservableObject {
         self.beforeRetentionRefresh = beforeRetentionRefresh
         self.beforePreviewCompletion = beforePreviewCompletion
         appID = appIdentity ?? (Bundle.main.bundleIdentifier == "com.dictaflow" ? "com.dictaflow" : "com.dictaflow.dev")
-        let name = appID == "com.dictaflow" ? "DictaFlow" : "DictaFlow Dev"
-        let support = supportDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(name)
-        assets = LiquidAssets(directory: support.appendingPathComponent("Models/Liquid/\(LiquidAssets.revision)"))
+        assets = LiquidAssets(directory: supportDirectory.appendingPathComponent("Models/Liquid/\(LiquidAssets.revision)"))
         self.modelDownloader = modelDownloader ?? assets
         self.runtime = runtime ?? LiquidRuntime(executable: Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/AudioRuntime/llama-server"), assets: assets)
         let installation = defaults.string(forKey: "agentVoice.installationID").flatMap(UUID.init(uuidString:)) ?? UUID()
         installationID = installation; defaults.set(installation.uuidString, forKey: "agentVoice.installationID")
         isEnabled = defaults.bool(forKey: "agentVoice.enabled")
-        do { store = try VoiceStore(url: support.appendingPathComponent("AgentVoice/voice.sqlite"), limits: limits) }
+        do { store = try preparedStore?.get() ?? VoiceStore(url: supportDirectory.appendingPathComponent("AgentVoice/voice.sqlite"), limits: limits) }
         catch {
-            status = "Agent Voice storage failed: \(error.localizedDescription)"
-            activeError = AgentVoiceError(scope: .setup, message: status)
+            let message = "Agent Voice storage failed: \(error.localizedDescription)"
+            storageFailureMessage = message
+            status = message
+            activeError = AgentVoiceError(scope: .setup, message: message)
             isEnabled = false
         }
         if isEnabled { startBridge() }
@@ -201,12 +215,18 @@ final class AgentVoiceCoordinator: ObservableObject {
                 }
             }
         }
-        Task { [weak self, modelDownloader = self.modelDownloader, generation = modelDownloadGeneration] in
+        initialModelCheck = Task { [weak self, modelDownloader = self.modelDownloader, generation = modelDownloadGeneration] in
+            defer { self?.isCheckingSpeechModel = false }
             await self?.refresh()
             let ready = (try? await modelDownloader.isReady()) == true
-            guard self?.modelDownloadGeneration == generation else { return }
+            guard !Task.isCancelled, self?.modelDownloadGeneration == generation else { return }
             self?.isModelReady = ready
         }
+    }
+
+    func waitForInitialModelCheck() async {
+        await initialModelCheck?.value
+        initialModelCheck = nil
     }
 
     var connectionCommand: String {
@@ -216,6 +236,11 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func setEnabled(_ enabled: Bool) {
         guard !stopped else { return }
+        if let storageFailureMessage {
+            status = storageFailureMessage
+            activeError = AgentVoiceError(scope: .setup, message: storageFailureMessage)
+            return
+        }
         // An explicit toggle supersedes every prior actionable error. Fresh
         // failures below set a new one; heartbeats and refreshes never clear.
         activeError = nil
@@ -235,11 +260,13 @@ final class AgentVoiceCoordinator: ObservableObject {
     }
 
     func downloadModel() {
-        guard !stopped, !isDownloading else { return }
+        guard !stopped, !isDownloading, !isRestoringLegacyModel else { return }
+        legacyModelRestoreError = nil
         // An explicit retry supersedes a prior model error; other scopes stay.
         if activeError?.scope == .models { activeError = nil }
         let generation = UUID()
         modelDownloadGeneration = generation
+        initialModelCheck?.cancel()
         modelDownloadProgress = ModelDownloadProgress(progress: nil, statusText: "Starting download")
         status = "Downloading and verifying Liquid audio (1.4 GB)…"
         modelDownloadTask = Task { [weak self, modelDownloader] in
@@ -284,6 +311,32 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func cancelModelDownload() {
         modelDownloadTask?.cancel()
+    }
+
+    func restoreLegacyModel() {
+        guard let legacyModels, canRestoreLegacyModel, !stopped, !isCheckingSpeechModel,
+              !isModelReady, !isDownloading, !isRestoringLegacyModel else { return }
+        if activeError?.scope == .models { activeError = nil }
+        legacyModelRestoreError = nil
+        isRestoringLegacyModel = true
+        modelRestoreTask = Task { [weak self, supportDirectory] in
+            defer {
+                self?.isRestoringLegacyModel = false
+                self?.modelRestoreTask = nil
+            }
+            do {
+                try await legacyModels.restore(into: supportDirectory)
+                try Task.checkCancellation()
+                self?.isModelReady = true
+                self?.status = "Liquid audio is ready."
+                await self?.didReceiveRequest()
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.canRestoreLegacyModel = legacyModels.canRestore
+                self?.legacyModelRestoreError = error.localizedDescription
+            }
+        }
     }
 
     private func applyModelDownloadEvent(_ event: LiquidDownloadEvent) {
@@ -597,13 +650,17 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func shutdown() {
         stopped = true; bridge?.stop(); bridge = nil
+        initialModelCheck?.cancel()
         cancelModelDownload()
+        modelRestoreTask?.cancel()
         maintenance?.cancel(); maintenance = nil
         interruptActiveSpeech(stopAllInference: true)
     }
 
     func waitForShutdown() async {
+        await initialModelCheck?.value
         await modelDownloadTask?.value
+        await modelRestoreTask?.value
         await resourceRelease?.value
     }
 
@@ -620,7 +677,7 @@ final class AgentVoiceCoordinator: ObservableObject {
                     await self?.reportPlaybackError(VoiceError.unavailable("This response is too old for automatic speech. Use Play in History."))
                 }
                 return reply
-            } catch { return VoiceReply(accepted: false, code: "storage_failed", message: "DictaFlow could not persist the request. Finish your written answer normally.") }
+            } catch { return VoiceReply(accepted: false, code: "storage_failed", message: "Omdo could not persist the request. Finish your written answer normally.") }
         }, onDisconnect: { [weak self] connection in
             try? await store.disconnect(connectionID: connection)
             await self?.didReceiveRequest()

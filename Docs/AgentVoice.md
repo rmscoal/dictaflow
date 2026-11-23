@@ -4,15 +4,19 @@ Agent Voice provides automatic, interruptible local speech for connected agent s
 
 ## User experience
 
-Under **Agent Voice > General**, enable Agent Voice and download the verified Liquid model. Choose **Speak automatically** or **Play on request**. Automatic mode admits the current eligible rendition when the host reports Stop. Manual mode retains the response for explicit playback. General also contains host connections, manual configuration with a Copy action in each code block, and a collapsed MCP tool reference.
+Under **Agent Voice > General**, enable Agent Voice and download the verified Liquid model. The Omdo menu bar also has an Agent Voice switch for quick access. Choose **Speak automatically** or **Play on request**. Automatic mode admits the current eligible rendition when the host reports Stop. Manual mode retains the response for explicit playback. General also contains host connections, manual configuration with a Copy action in each code block, and a collapsed MCP tool reference.
 
-The **Speech model** section offers Liquid’s **Female** and **Male** voices, **American** and **British** English accents, and a **Playback speed** slider from 0.75× to 1.5×. The default is Female, American English, and 1×. Settings save immediately and apply to automatic replies and History replay. DictaFlow detects the language automatically and applies the chosen accent to English. Speed changes also apply during playback. A voice or accent change regenerates speech that is still being synthesized. Replies already playing finish with the voice and accent they started with.
+The **Speech model** section offers Liquid’s **Female** and **Male** voices, **American** and **British** English accents, and a **Playback speed** slider from 0.75× to 1.5×. The default is Female, American English, and 1×. Settings save immediately and apply to automatic replies and History replay. Omdo detects the language automatically and applies the chosen accent to English. Speed changes also apply during playback. A voice or accent change regenerates speech that is still being synthesized. Replies already playing finish with the voice and accent they started with.
 
 **Test speech** generates and plays a four-sentence English sample locally with the current voice, accent, and speed. The button is available when Agent Voice is enabled, the model is ready, and dictation and agent speech are idle. While the sample plays, changing its voice or accent generates a new sample. The same button becomes **Stop test** during generation and playback. Starting dictation also stops the test immediately. Samples are never added to History.
 
-Liquid downloads use the shared progress bar and toolbar Downloads list, with combined byte progress across both model files, a separate verification state, cancellation, and completion or failure notices. Opening the download returns to Agent Voice > General. Cancelling removes the partial transfer and any uninstalled temporary files. Previously checksum-verified and installed files remain available for retry. The model becomes ready only after both files pass verification and installation.
+Liquid downloads use the shared progress bar and toolbar Downloads list, with combined byte progress across both model files, a separate verification state, cancellation, and completion or failure notices. Opening the download returns to Agent Voice > General. Cancelling removes the partial transfer and any uninstalled temporary files. Previously checksum-verified and installed files remain available for retry. At launch, Omdo verifies the local files before showing the model’s status. The model becomes ready only after both files pass verification.
 
-The floating control identifies the speaking session and provides Stop and Dictate. Hover over the pill to expand it. It collapses after the pointer leaves. Hover uses the pill’s destination bounds during a resize, so the animation can finish under a stationary pointer. The control does not take keyboard focus from the target app. The existing dictation shortcut also interrupts speech. Interruption is a deliberate button or shortcut action; DictaFlow does not listen continuously for speech over the agent.
+During a DictaFlow upgrade, Omdo commits local history and prompts before reusing the Liquid model. Omdo tries to clone each verified Liquid file on the same APFS volume. The clone shares the original data blocks. If cloning is unavailable, Omdo checks available space before copying the file. If the model needs attention, choose **Continue** to open Omdo or **Speech Model Settings** to go to the model card. After freeing space, choose **Restore from DictaFlow** to verify and reuse local model files. If Liquid is selected for dictation, **Use Whisper** appears when an installed Whisper model passes verification. Omdo switches providers only when you select that action.
+
+If Omdo quits during the upgrade's Liquid import, the next launch clears the staged copy and resumes from any verified files already installed. If the retry needs more space or the old files are unusable, Omdo shows the model warning and lets you continue. Use the model card to retry after addressing the warning.
+
+The floating control identifies the speaking session and provides Stop and Dictate. Hover over the pill to expand it. It collapses after the pointer leaves. Hover uses the pill’s destination bounds during a resize, so the animation can finish under a stationary pointer. The control does not take keyboard focus from the target app. The existing dictation shortcut also interrupts speech. Interruption is a deliberate button or shortcut action; Omdo does not listen continuously for speech over the agent.
 
 Stopping the current response persists suppression for the interrupted interaction. Delayed Stop observations and corrections cannot automatically make it speak again. Explicit Play remains possible, and a new user turn is independently eligible.
 
@@ -29,7 +33,7 @@ Search matches session identities, prompts, and all spoken revisions. It keeps t
 1. `on_user_prompt_submit` creates an interaction and returns its internal input ID plus spoken-rendition instructions.
 2. The model either explicitly skips routine speech with `skip_spoken_response`, or calls `prepare_spoken_response` with conversational text. This never starts speech by itself.
 3. The model produces its written answer.
-4. `on_stop` records the observation and makes the current rendition eligible unless the input was explicitly skipped or suppressed. DictaFlow applies the app's playback preference, suppression, freshness, and queue limits.
+4. `on_stop` records the observation and makes the current rendition eligible unless the input was explicitly skipped or suppressed. Omdo applies the app's playback preference, suppression, freshness, and queue limits.
 5. An automatic attempt is created at most once for that rendition. Duplicate Stop delivery does not replay it.
 6. A corrected preparation creates a new immutable revision and supersedes active speech for older revisions. The new revision waits for a fresh Stop. Stop-before-preparation does not authorize a later rendition.
 
@@ -57,11 +61,11 @@ The updated Dev app was installed under `/Applications`, with the previous app p
 
 ## Setup and host boundaries
 
-The **Connections** section in General registers the bundled helper for the chosen host. Each host tab includes its logo. The host card has a **Set up** or **Update** action at the top right, and the external-link icon beside its name opens documentation. **Update** refreshes DictaFlow's integration configuration. Hosts without automatic setup offer **Show setup** for manual configuration.
+The **Connections** section in General registers the bundled helper under the host alias `omdo`. Close the target host before choosing **Set up**, **Update**, or **Recover setup**. Codex and Muse Code can update an app-owned user-level registration. Claude Code and other hosts provide manual setup. A configured connection requires a new host session. In Codex, use `/hooks` to review and trust the changed hooks.
 
-Codex and Claude Code lifecycle setup uses their user-level configuration; review the exact hooks in the host when prompted and start a new session. Existing unrelated configuration must be preserved. A configured server entry alone does not prove that a host has reviewed and activated hooks.
+An upgrade replaces the old `dictaflow` registration only when its helper and app, installation, and host arguments match. Codex uses the effective user profile, including `CODEX_HOME`. The rename carries across the server’s existing settings and per-tool approvals. A fresh Codex registration includes `default_tools_approval_mode = "approve"`. Muse Code honors `XDG_CONFIG_HOME`, preserves the enabled flag, and changes the registration and guard in one settings write. An ownership conflict, unsupported config form, or custom hook that references either alias requires manual review, including Codex hooks defined in `config.toml`. Keep one managed Omdo registration per profile. Use different host profiles to connect Dev and release independently where the host supports profiles.
 
-Codex setup also pre-approves DictaFlow's own tools with `default_tools_approval_mode = "approve"` under `[mcp_servers.dictaflow]` in `~/.codex/config.toml`, so sessions are not interrupted by approval prompts for the speech tools. The key is only added when absent; an existing value is never overwritten. If setup edits the file, it re-runs `codex mcp list` as a parse check and restores the original bytes on failure, so a failed run never strands a broken config. Manual setup carries the same line. This mirrors what Codex writes for a manual Always-allow, but as one server default covering every DictaFlow tool, including the read-only status query. When pasting the manual snippet, if the `[mcp_servers.dictaflow]` table already exists, add only the missing lines; duplicating the table breaks the file.
+For manual migration, close sessions using the affected profile. Rename the old registration and its policy references in the same scope, update the executable path and arguments using the app’s snippet, replace only the related lifecycle hooks and command guard, and review workspace overrides before restarting. Preserve explicit approvals and disabled state. The helper binary and the server’s protocol identity are stable. Only the host alias and host-qualified tool names change.
 
 Codex's hooks can supply native session and turn IDs. Claude Code has different event fields and requires its own configuration. Other MCP hosts need a lifecycle integration or manual playback; do not assume they implement Codex hooks. Lifecycle setup and supported versions must be checked using isolated host fixtures before claiming end-to-end support.
 
@@ -72,34 +76,36 @@ Only the user-facing coordinating agent may open voice interactions, submit rend
 Enforcement uses host-supplied identity only, never model-supplied arguments:
 
 - Codex requires stable 0.156.0 or later. Direct MCP requests carry host-written `_meta.threadId` and `_meta.sessionId`: only equal IDs may act, and the `session_id` argument must match them. Missing or malformed identity is rejected before attachment, receipt lookup, or store access. Child, nested, and background native threads retain the root session ID but have a different thread ID.
-- Codex MCP lifecycle hooks instead carry the host-written `_meta.threadId` with `session_id` substituted from the hook payload. Only prompt, stop, and interrupt callbacks may use this hook form (without the direct-call `callId` or `sessionId` fields); their owning thread must match the hook session. Native children run `SubagentStop`, not `Stop`, and do not run `Interrupt`. The existing MCP hook definitions stay unchanged, using the same helper connection as direct calls. Do not add `${agent_id}` to these templates: Codex fails a hook if an optional field is absent, including at root.
+- Codex MCP lifecycle hooks instead carry the host-written `_meta.threadId` with `session_id` substituted from the hook payload. Only prompt, stop, and interrupt callbacks may use this hook form (without the direct-call `callId` or `sessionId` fields); their owning thread must match the hook session. Native children run `SubagentStop`, not `Stop`, and do not run `Interrupt`. The lifecycle hooks use the same helper connection as direct calls. Do not add `${agent_id}` to these templates: Codex fails a hook if an optional field is absent, including at root.
 - Claude Code lifecycle hooks substitute `${agent_id}` into `on_user_prompt_submit` and `on_stop`. The helper rejects a non-empty value before any attachment or store contact. Missing, empty, or literally unsubstituted values are the main session. `agent_type` alone never proves a child (a root `--agent` session sets it) and is ignored.
-- A PreToolUse command hook matching `mcp__dictaflow__.*` denies direct child model calls to every DictaFlow tool. The helper answers from the host's hook input (`agent_id` for Claude; `MUSE_SESSION_ID` versus `MUSE_THREAD_ID` for Muse) and exits 0 in all cases so the host always continues.
+- A PreToolUse command hook matching `mcp__omdo__.*` denies direct child model calls to every Omdo tool. The helper answers from the host's hook input (`agent_id` for Claude; `MUSE_SESSION_ID` versus `MUSE_THREAD_ID` for Muse) and exits 0 in all cases so the host always continues.
 - Muse documents command hooks only, so it receives the guard but no lifecycle hooks. Its lifecycle stays model-driven through direct MCP calls, which the same guard filters. A Muse hook without both session variables denies loudly with an update prompt instead of silently passing as root.
 
-Boundaries, not guarantees: external orchestrators that launch children as independent ordinary CLI sessions (for example T3) communicate no ancestry, so each looks top-level and filtering cannot apply; children spawned that way speak in their own sessions. Claude Code added `agent_id` to hook events in 2.1.69 and DictaFlow setup requires 2.1.118 or later, so every accepted release supplies child identity and no accepted release fails open for lack of it; a release predating 2.1.69 would fail open (voice works, filtering may not) but is below the minimum and setup refuses it. The PreToolUse guard uses shell form so it runs on every accepted release (the exec-form `args` array needs 2.1.139 or later). No live host sessions were used to qualify this; verification is isolated fixtures and deterministic tests only.
+External orchestrators that launch children as independent CLI sessions (for example T3) supply no ancestry. Each child looks like a top-level session and can speak in its own session.
+
+Update Claude Code to 2.1.118 or later before applying the manual registration and voice hooks. Omdo checks this version before reporting the connection as configured. The manual snippets remain available on older versions. Supported versions supply `agent_id` for child hook events. The PreToolUse guard uses shell form so it runs on every accepted release (the exec-form `args` array needs 2.1.139 or later). Verification used isolated fixtures and deterministic tests.
 
 The Codex contract was traced in the official [0.169.0 runtime](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/core/src/mcp_tool_call.rs), [hook executor](https://github.com/openai/codex/blob/rust-v0.169.0/codex-rs/core/src/hook_mcp_executor.rs), and [session identity initialization](https://github.com/openai/codex/blob/rust-v0.156.0/codex-rs/core/src/session/session.rs). The MCP identity pair is present in 0.156.0 and absent in 0.155.0. Clients must preserve this common runtime metadata; no T3-specific integration or model-supplied role flag is used. Desktop and cloud client qualification remains separate. If `caller_identity_missing` appears, update the host and start a new session; do not substitute identity arguments to bypass it.
 
-Example Codex hooks for an MCP server named `dictaflow`:
+Example Codex hooks for an MCP server named `omdo`:
 
 ```json
 {
   "hooks": {
     "UserPromptSubmit": [{"hooks": [{
-      "type": "mcp_tool", "server": "dictaflow", "tool": "on_user_prompt_submit",
+      "type": "mcp_tool", "server": "omdo", "tool": "on_user_prompt_submit",
       "input": {"session_id": "${session_id}", "turn_id": "${turn_id}", "prompt": "${prompt}"},
-      "timeout": 2, "statusMessage": "DictaFlow: Agent Voice"
+      "timeout": 2, "statusMessage": "Omdo: Agent Voice"
     }]}],
     "Stop": [{"hooks": [{
-      "type": "mcp_tool", "server": "dictaflow", "tool": "on_stop",
+      "type": "mcp_tool", "server": "omdo", "tool": "on_stop",
       "input": {"session_id": "${session_id}", "turn_id": "${turn_id}"},
-      "timeout": 2, "statusMessage": "DictaFlow: Agent Voice"
+      "timeout": 2, "statusMessage": "Omdo: Agent Voice"
     }]}],
     "Interrupt": [{"hooks": [{
-      "type": "mcp_tool", "server": "dictaflow", "tool": "on_interrupt",
+      "type": "mcp_tool", "server": "omdo", "tool": "on_interrupt",
       "input": {"session_id": "${session_id}", "turn_id": "${turn_id}"},
-      "timeout": 2, "statusMessage": "DictaFlow: Agent Voice"
+      "timeout": 2, "statusMessage": "Omdo: Agent Voice"
     }]}]
   }
 }
@@ -128,7 +134,7 @@ Migration imports retained legacy text and known playback outcomes, records migr
 
 Foreground leases cover permission/startup, capture, ASR, refinement, and insertion. The first lease silences and suppresses current pending speech; nested leases preserve queued responses received during foreground work. Late synthesis results must pass generation and attempt-state checks before playback.
 
-Foreground inference waits for the owned Liquid process to exit. Termination escalates after a bounded grace period. The process belongs to DictaFlow; unrelated inference processes are not stopped. Before TTS, idle Whisper/refinement resources are released. Liquid stops after synthesis before playback.
+Foreground inference waits for the owned Liquid process to exit. Termination escalates after a bounded grace period. The process belongs to Omdo; unrelated inference processes are not stopped. Before TTS, idle Whisper/refinement resources are released. Liquid stops after synthesis before playback.
 
 Current limits: 8,000 submitted rendition characters; five pending jobs per session and 50 globally; a five-minute automatic eligibility window for each prepared revision; five-minute queued/synthesizing attempt lifetime; a 60-second whole-response synthesis budget including startup; 12 MiB aggregate generated audio; playback shorter than 120 seconds including joins. Each Liquid ASR request is limited to two minutes or 8 MiB; longer recordings are split at pauses into 90-110 s chunks, transcribed with one warm sidecar request per chunk, and joined in order. A failed chunk fails the whole transcription with the recording kept. Protocol, runtime, and audio safety limits still fail explicitly. Long speech uses the announced preview described below. Streaming is not implemented.
 
@@ -136,13 +142,13 @@ Current limits: 8,000 submitted rendition characters; five pending jobs per sess
 
 The agent submits one complete plain-text rendition. Its instructions ask for a calm, conversational tone, related sentences in short paragraphs, natural punctuation, preserved caveats, and commands described for listening. The agent should explain code and identify files naturally, keep exact commands/paths/URLs in the written answer, and aim for at most 220 spoken words. Pause tags, SSML, stage directions, Markdown, and artificial ellipses are not part of the speech contract. Multiple preparations replace revisions; they do not append chunks.
 
-MCP preparation remains permissive within the existing protocol limits. Content does not trigger a correction/retry request to the agent. DictaFlow keeps the submitted text in history and derives a speech version locally at synthesis time, including manual replay of older entries:
+MCP preparation remains permissive within the existing protocol limits. Content does not trigger a correction/retry request to the agent. Omdo keeps the submitted text in history and derives a speech version locally at synthesis time, including manual replay of older entries:
 
 - Foundation's Markdown parser removes formatting wrappers, keeps inline-code content and meaningful link/image labels, and preserves paragraph and list-item boundaries.
 - Task-list markers at the start of a list item become "Completed:" or "Pending:" so completion status remains audible. Literal markers inside inline code or ordinary prose are retained.
 - Common HTML formatting tags are removed only from parser-identified HTML outside inline code. Break/block tags preserve word boundaries. Unknown tags, generic types, and comparisons stay intact.
 - Bare HTTP/HTTPS links use their hostname and explicit port, omitting credentials, paths, and query strings. Recognized file URLs use the filename. Inline commands and filenames otherwise keep their names and punctuation.
-- Fenced or indented code blocks become "Code is available in the written answer." Tables receive a similar reference. Standalone blocks of consistently bordered pipe rows also get the table reference, even without a Markdown separator row; inline code and ordinary pipelines/operators are preserved. DictaFlow does not invent a semantic summary or silently delete a block.
+- Fenced or indented code blocks become "Code is available in the written answer." Tables receive a similar reference. Standalone blocks of consistently bordered pipe rows also get the table reference, even without a Markdown separator row; inline code and ordinary pipelines/operators are preserved. Omdo does not invent a semantic summary or silently delete a block.
 - Unbroken Latin-script identifiers over 320 characters receive a short reference to the written answer. Formatting-only input also gets a spoken fallback. Unspaced non-Latin prose remains available to the language-aware splitter.
 
 Fallback notices currently use English app copy. The initial rollout and real-model qualification focus on English. Other model-supported languages remain available as best effort, without new language-specific tuning.

@@ -29,7 +29,7 @@ final class WhisperServiceTests: XCTestCase {
                 XCTFail("User transcription must never bypass a missing VAD model")
             } catch {
                 XCTAssertEqual(error as? WhisperServiceError, .missingVADModel)
-                XCTAssertTrue(error.localizedDescription.contains("Reinstall DictaFlow"))
+                XCTAssertTrue(error.localizedDescription.contains("Reinstall Omdo"))
             }
         }
     }

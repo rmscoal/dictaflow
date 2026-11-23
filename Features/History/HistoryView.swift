@@ -23,7 +23,7 @@ struct HistoryView: View {
                     .font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
                 Spacer()
                 Button { showsSettings = true } label: { Label("History settings", systemImage: "gearshape") }
-                    .buttonStyle(.plain).font(.system(size: 12))
+                    .buttonStyle(EmberInlineActionButtonStyle()).font(.system(size: 12))
                     .popover(isPresented: $showsSettings, arrowEdge: .top) { settings }
             }
             .padding(.bottom, 16)
@@ -52,9 +52,8 @@ struct HistoryView: View {
                     }
                 }
             }
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 20))
+            .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 20))
             .clipShape(RoundedRectangle(cornerRadius: 20))
-            .overlay { RoundedRectangle(cornerRadius: 20).stroke(AppTheme.border, lineWidth: 1) }
         }
         .padding(.horizontal, AppLayout.contentPadding).padding(.top, 10).padding(.bottom, 28)
         .task(id: model.searchQuery) {
@@ -91,7 +90,7 @@ struct HistoryView: View {
                 TextField("Search history", text: Binding(get: { model.searchQuery }, set: { model.updateSearchQuery($0) }))
                     .textFieldStyle(.plain).font(.system(size: 12)).accessibilityLabel("Search recordings")
             }
-            .padding(11).background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 10)).padding(14)
+            .padding(11).omdoControlBackground(in: RoundedRectangle(cornerRadius: 10)).padding(14)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 5) {
                     if model.isLoading && (model.entries.isEmpty || model.isReplacingSearchResults) {
@@ -120,7 +119,7 @@ struct HistoryView: View {
                                     .background(model.selectedID == entry.id ? AppTheme.selectedFill : .clear, in: RoundedRectangle(cornerRadius: 12))
                                     .contentShape(RoundedRectangle(cornerRadius: 12))
                                 }
-                                .buttonStyle(.plain).accessibilityAddTraits(model.selectedID == entry.id ? .isSelected : [])
+                                .buttonStyle(EmberButtonStyle(appearance: .plain)).accessibilityAddTraits(model.selectedID == entry.id ? .isSelected : [])
                             }
                         }
                         if model.hasMore {
@@ -173,7 +172,7 @@ struct HistoryView: View {
             Button("Delete all history…", role: .destructive) { showsSettings = false; confirmsDeleteAll = true }
                 .disabled(!canMutate)
         }
-        .padding(20).frame(width: 320).foregroundStyle(AppTheme.primaryText).background(AppTheme.tileFill)
+        .padding(20).frame(width: 320).foregroundStyle(AppTheme.primaryText).omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false)
     }
 
     private var recordingDays: [Date] {

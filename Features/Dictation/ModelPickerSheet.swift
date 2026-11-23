@@ -75,12 +75,11 @@ struct ModelPickerSheet: View {
                         Button("Done") { dismiss() }.buttonStyle(EmberButtonStyle()).keyboardShortcut(.cancelAction)
                     }
                     .padding(.horizontal, 22).padding(.vertical, 14)
-                    .background(AppTheme.background, in: Rectangle())
                 }
             }
         }
         .frame(width: 610, height: 650)
-        .foregroundStyle(AppTheme.primaryText).background(AppTheme.tileFill).tint(AppTheme.accent)
+        .foregroundStyle(AppTheme.primaryText).omdoSheetBackground().tint(AppTheme.accent)
         .sheet(item: $downloadRequest) { request in
             ModelDownloadConfirmation(appState: appState, request: request)
         }
@@ -127,7 +126,7 @@ struct ModelPickerSheet: View {
                     .overlay { Capsule().stroke(speechProvider == item ? AppTheme.accent : AppTheme.border, lineWidth: 1) }
                     .contentShape(Capsule())
                 }
-                .buttonStyle(.plain).accessibilityLabel(item.title)
+                .buttonStyle(EmberButtonStyle(appearance: .plain)).accessibilityLabel(item.title)
                 .accessibilityAddTraits(speechProvider == item ? .isSelected : [])
             }
         }
@@ -151,6 +150,8 @@ struct ModelPickerSheet: View {
                 VStack(alignment: .trailing, spacing: 8) {
                     if downloading {
                         Text("Downloading…").font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
+                    } else if appState.agentVoice?.isCheckingSpeechModel == true {
+                        Text(AgentVoiceCoordinator.checkingSpeechModelText).font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
                     } else if selected && ready {
                         Label("Selected", systemImage: "checkmark").font(.system(size: 11)).foregroundStyle(AppTheme.accent)
                     } else if ready {
@@ -258,6 +259,6 @@ private struct ModelDownloadConfirmation: View {
             }
         }
         .padding(24).frame(width: 425)
-        .foregroundStyle(AppTheme.primaryText).background(AppTheme.tileFill).tint(AppTheme.accent)
+        .foregroundStyle(AppTheme.primaryText).omdoSheetBackground().tint(AppTheme.accent)
     }
 }

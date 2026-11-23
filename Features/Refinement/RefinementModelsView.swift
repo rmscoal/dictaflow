@@ -21,12 +21,12 @@ struct RefinementModelsView: View {
                         .overlay { Capsule().stroke(provider == item ? AppTheme.accent : AppTheme.border, lineWidth: 1) }
                         .contentShape(Capsule())
                     }
-                    .buttonStyle(.plain).accessibilityLabel(item.title)
+                    .buttonStyle(EmberButtonStyle(appearance: .plain)).accessibilityLabel(item.title)
                     .accessibilityAddTraits(provider == item ? .isSelected : [])
                 }
             }
             if !appState.isRefinementRuntimeAvailable {
-                EmberErrorBanner(title: "Local runtime unavailable", message: "Reinstall DictaFlow to restore llama-server.")
+                EmberErrorBanner(title: "Local runtime unavailable", message: "Reinstall Omdo to restore llama-server.")
             }
             VStack(spacing: 0) {
                 ForEach(RefinementModelDescriptor.allCases.filter { $0.provider == provider }, id: \.self) { model in
@@ -77,8 +77,8 @@ struct RefinementModelsView: View {
                 EmberDownloadProgress(value: appState.refinementDownloadProgress(for: model))
                 Text(appState.refinementDownloadStatusText(for: model)).font(.system(size: 11)).foregroundStyle(AppTheme.secondaryText)
             }
-            if let error { Text(error).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
-            if let unsupported { Text(unsupported).font(.system(size: 12)).foregroundStyle(AppTheme.errorText) }
+            if let error { EmberWarningLabel(error).font(.system(size: 12)).foregroundStyle(AppTheme.errorText).textSelection(.enabled) }
+            if let unsupported { EmberWarningLabel(unsupported).font(.system(size: 12)).foregroundStyle(AppTheme.errorText) }
         }
         .padding(.vertical, 17).padding(.horizontal, error != nil || unsupported != nil ? 12 : 0)
         .background(error != nil || unsupported != nil ? AppTheme.errorFill : .clear, in: RoundedRectangle(cornerRadius: 16))
@@ -116,8 +116,7 @@ struct ModelCardActionGroup: View {
         }
         .font(.system(size: 12))
         .foregroundStyle(AppTheme.primaryText)
-        .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(AppTheme.border, lineWidth: 1) }
+        .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

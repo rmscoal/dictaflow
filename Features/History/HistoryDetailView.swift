@@ -47,7 +47,7 @@ struct HistoryDetailView: View {
                                 available: detail.entry.audioAvailable && !model.isPlaybackLoading && !appState.isHistoryProcessing && !model.isMutating && appState.recordingState == .idle) {
                 Task { await model.togglePlayback() }
             }
-            .padding(.horizontal, 12).background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 12).omdoControlBackground(in: RoundedRectangle(cornerRadius: 12))
             if isRetrying {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -171,10 +171,10 @@ struct HistoryDetailView: View {
             Text("Processes the saved audio again. Previous results are kept. Text will not be inserted automatically.")
                 .foregroundStyle(AppTheme.secondaryText)
             if !appState.isWhisperModelPrepared(selectedModel) {
-                Text("Download this model in Dictation → Transcription before retrying.").foregroundStyle(AppTheme.errorText)
+                EmberWarningLabel("Download this model in Dictation → Transcription before retrying.").foregroundStyle(AppTheme.errorText)
             }
             if appState.refinementConfiguration.isEnabled && !appState.isSelectedRefinementModelPrepared {
-                Text("The refinement model is unavailable. This retry will use the transcript with your selected tone.")
+                EmberWarningLabel("The refinement model is unavailable. This retry will use the transcript with your selected tone.")
                     .foregroundStyle(AppTheme.errorText)
             }
             HStack {
@@ -189,7 +189,7 @@ struct HistoryDetailView: View {
             }
         }
         .font(.system(size: 12)).padding(20).frame(width: 340)
-        .foregroundStyle(AppTheme.primaryText).background(AppTheme.tileFill)
+        .foregroundStyle(AppTheme.primaryText).omdoGlassBackground(in: Rectangle(), material: .regular, showsRim: false)
     }
 
     private var previousResults: some View {
@@ -198,7 +198,7 @@ struct HistoryDetailView: View {
                 Text("Previous results").font(.system(size: 13, weight: .medium))
                 Spacer()
                 Button { showsPreviousResults = false } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).accessibilityLabel("Close previous results")
+                    .buttonStyle(EmberButtonStyle(appearance: .plain)).accessibilityLabel("Close previous results")
             }
             Picker("Transcription", selection: $model.selectedTranscriptionID) {
                 ForEach(detail.transcriptions) { result in
@@ -215,7 +215,7 @@ struct HistoryDetailView: View {
             }
         }
         .font(.system(size: 12)).padding(14)
-        .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 12))
+        .omdoControlBackground(in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var missingText: String {

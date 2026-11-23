@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Production release packaging for DictaFlow.
+# Production release packaging for Omdo.
 # Archives the DictaFlow scheme (Release), exports a Developer ID signed app,
 # verifies it, and creates a versioned distributable DMG.
 # Notarization and GitHub publishing are separate release stages, not done here.
@@ -22,7 +22,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="$ROOT_DIR/DictaFlow.xcodeproj"
 SCHEME="DictaFlow"
 CONFIGURATION="Release"
-APP_NAME="DictaFlow"
+APP_NAME="Omdo"
 BUNDLE_ID="com.dictaflow"
 EXPECTED_AUTHORITY="Developer ID Application: Rifky Satyana (627M6A6KRH)"
 EXPORT_OPTIONS="$ROOT_DIR/Config/ExportOptions.plist"

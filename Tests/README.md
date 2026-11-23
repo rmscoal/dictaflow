@@ -200,7 +200,7 @@ xcodebuild -project DictaFlow.xcodeproj -scheme "DictaFlow Dev" \
   -only-testing:DictaFlowTests/WhisperIntegrationTests test
 ```
 
-For installed-app acceptance, use `/Applications/DictaFlow Dev.app` offline.
+For installed-app acceptance, use `/Applications/Omdo Dev.app` offline.
 Check no-speech feedback with refinement enabled and disabled, onboarding
 practice, and legitimate spoken endings. After downloading a Neural Engine
 encoder, verify that its silent warmup still runs. Both Dev and release bundles

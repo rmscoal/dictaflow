@@ -3,38 +3,20 @@ import SwiftUI
 
 struct MenuBarIconView: View {
     var body: some View {
-        Image(nsImage: Self.templateImage)
+        Image(nsImage: Self.statusImage)
             .renderingMode(.template)
-            .accessibilityLabel("DictaFlow")
+            .accessibilityLabel("Omdo")
     }
 
-    private static let templateImage: NSImage = {
-        let imageSize = NSSize(width: 18, height: 18)
-        let barWidth: CGFloat = 2
-        let barSpacing: CGFloat = 1.5
-        let barHeights: [CGFloat] = [6, 10, 15, 10, 6]
-        let markWidth = CGFloat(barHeights.count) * barWidth
-            + CGFloat(barHeights.count - 1) * barSpacing
-        let leadingInset = (imageSize.width - markWidth) / 2
-
-        let image = NSImage(size: imageSize, flipped: false) { _ in
-            NSColor.black.setFill()
-
-            for (index, height) in barHeights.enumerated() {
-                let x = leadingInset + CGFloat(index) * (barWidth + barSpacing)
-                let y = (imageSize.height - height) / 2
-                let barRect = NSRect(x: x, y: y, width: barWidth, height: height)
-                NSBezierPath(
-                    roundedRect: barRect,
-                    xRadius: barWidth / 2,
-                    yRadius: barWidth / 2
-                ).fill()
-            }
-
+    private static let statusImage: NSImage = {
+        // MenuBarExtra uses the image's intrinsic size for the status item.
+        let size = NSSize(width: 16, height: 16)
+        let artwork = NSImage(named: "OmdoMark")
+        let image = NSImage(size: size, flipped: false) { rect in
+            artwork?.draw(in: rect)
             return true
         }
         image.isTemplate = true
         return image
     }()
 }
-

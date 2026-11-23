@@ -1,64 +1,109 @@
 import SwiftUI
 
-/// Keep material in navigation and transient surfaces, with a stable opaque fallback.
-struct EmberMaterialFill: View {
-    let tint: Color
-    var tintOpacity = 0.97
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+struct EmberButtonStyle: ButtonStyle {
+    enum Appearance {
+        case standard, primary, inline, plain
+        case icon(size: CGFloat, bordered: Bool, highlighted: Bool)
+    }
 
-    var body: some View {
-        if reduceTransparency {
-            tint
-        } else {
-            Rectangle().fill(.ultraThinMaterial).overlay(tint.opacity(tintOpacity))
+    var appearance: Appearance
+    @Environment(\.isEnabled) private var isEnabled
+
+    init(primary: Bool = false) {
+        appearance = primary ? .primary : .standard
+    }
+
+    init(appearance: Appearance) {
+        self.appearance = appearance
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        makeBody(configuration: configuration, isEnabled: isEnabled)
+    }
+
+    fileprivate func makeBody(configuration: Configuration, isEnabled: Bool) -> some View {
+        face(for: configuration)
+            // Apply after sizing and padding so gaps and clear areas click.
+            .contentShape(Rectangle())
+            .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.45)
+    }
+
+    @ViewBuilder
+    private func face(for configuration: Configuration) -> some View {
+        switch appearance {
+        case .standard, .primary:
+            let isPrimary: Bool = if case .primary = appearance { true } else { false }
+            configuration.label
+                .font(.system(size: 12))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .foregroundStyle(isPrimary ? AppTheme.actionText : AppTheme.primaryText)
+                .background {
+                    if isPrimary {
+                        Capsule().fill(AppTheme.actionFill)
+                    } else {
+                        OmdoGlass(shape: Capsule())
+                    }
+                }
+        case .inline:
+            configuration.label.padding(.horizontal, 4).padding(.vertical, 3)
+        case .plain:
+            configuration.label
+        case let .icon(size, bordered, highlighted):
+            configuration.label
+                .font(.system(size: 14))
+                .frame(width: size, height: size)
+                .background {
+                    if highlighted {
+                        Circle().fill(AppTheme.selectedFill)
+                    } else if bordered {
+                        OmdoGlass(shape: Circle())
+                    } else if configuration.isPressed {
+                        RoundedRectangle(cornerRadius: 7).fill(AppTheme.controlFill)
+                    }
+                }
         }
     }
 }
 
-struct EmberButtonStyle: ButtonStyle {
-    var primary = false
+struct EmberInlineActionButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .foregroundStyle(primary ? AppTheme.actionText : AppTheme.primaryText)
-            .background(primary ? AppTheme.actionFill : AppTheme.tileFill,
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(primary ? AppTheme.actionFill : AppTheme.border, lineWidth: 1)
-            }
-            // The whole rounded component is the button: padding, spacing
-            // between icon and text, and empty label areas all click.
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.45)
-    }
-}
-
-/// Inline icon-and-text action (Play, Stop, Show more). Plain SwiftUI labels
-/// only hit-test their drawn glyphs, so the gap between icon and text would
-/// be dead; this style pads the label and makes its full frame clickable.
-struct EmberInlineActionButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 4)
-            .padding(.vertical, 3)
-            .contentShape(Rectangle())
-            .opacity(configuration.isPressed ? 0.7 : 1)
+        EmberButtonStyle(appearance: .inline).makeBody(configuration: configuration, isEnabled: isEnabled)
     }
 }
 
 struct EmberIconButtonStyle: ButtonStyle {
+    var bordered = false
+    var size: CGFloat = 29
+    var highlighted = false
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 14))
-            .frame(width: 29, height: 29)
-            .contentShape(RoundedRectangle(cornerRadius: 7))
-            .background(configuration.isPressed ? AppTheme.controlFill : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 7))
+        EmberButtonStyle(appearance: .icon(size: size, bordered: bordered, highlighted: highlighted))
+            .makeBody(configuration: configuration, isEnabled: isEnabled)
+    }
+}
+
+struct EmberReadyBadge: View {
+    var title = "Ready"
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let label = Label(title, systemImage: "checkmark.circle.fill")
+            .foregroundStyle(AppTheme.ready)
+
+        if colorScheme == .dark {
+            label
+                .fontWeight(.semibold)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(AppTheme.ready.opacity(0.14), in: Capsule())
+        } else {
+            label
+        }
     }
 }
 
@@ -66,13 +111,11 @@ struct EmberPanel<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: AppLayout.tileCornerRadius, style: .continuous)
         VStack(spacing: 0) { content }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(AppTheme.border, lineWidth: 1)
-            }
+            .omdoGlassBackground(in: shape)
+            .clipShape(shape)
     }
 }
 
@@ -162,14 +205,15 @@ struct EmberAppMark: View {
     var size: CGFloat = 35
 
     var body: some View {
-        HStack(spacing: size * 0.057) {
-            ForEach(Array([0.24, 0.4, 0.57, 0.4, 0.24].enumerated()), id: \.offset) { _, height in
-                Capsule().fill(Color.black).frame(width: size * 0.071, height: size * height)
-            }
-        }
-        .frame(width: size, height: size)
-        .background(.white, in: RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))
-        .accessibilityHidden(true)
+        Image("OmdoMark")
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .foregroundStyle(AppTheme.brandPrimary)
+            .frame(width: size * 0.62, height: size * 0.62)
+            .frame(width: size, height: size)
+            .omdoGlassBackground(in: RoundedRectangle(cornerRadius: size * 0.26), tint: AppTheme.brandTile)
+            .accessibilityHidden(true)
     }
 }
 
@@ -204,22 +248,50 @@ struct EmberProviderIcon: View {
 
 struct ShortcutKeycaps: View {
     let shortcut: GlobalShortcutDescriptor
+    var onPrimary = false
 
     var body: some View {
-        HStack(spacing: 4) {
+        let ink = onPrimary ? AppTheme.actionText : AppTheme.primaryText
+        let shape = RoundedRectangle(cornerRadius: 6)
+
+        HStack(spacing: 5) {
             ForEach(shortcut.displayParts) { part in
                 Group {
                     if let symbol = part.symbol { Image(systemName: symbol) }
                     else { Text(part.title) }
                 }
-                .font(.system(size: 12))
-                .frame(minWidth: 21, minHeight: 22)
-                .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 4))
-                .overlay { RoundedRectangle(cornerRadius: 4).stroke(AppTheme.border, lineWidth: 1) }
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
             }
         }
+        .foregroundStyle(ink)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(ink.opacity(0.08), in: shape)
+        .overlay { shape.strokeBorder(ink.opacity(0.15), lineWidth: 1) }
+        .fixedSize()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(shortcut.displayValue)
+    }
+}
+
+struct EmberWarningIcon: View {
+    static let symbol = "exclamationmark.triangle.fill"
+
+    var body: some View {
+        Image(systemName: Self.symbol)
+            .symbolRenderingMode(.monochrome)
+            .foregroundStyle(AppTheme.warning)
+            .accessibilityHidden(true)
+    }
+}
+
+struct EmberWarningLabel: View {
+    let message: String
+
+    init(_ message: String) { self.message = message }
+
+    var body: some View {
+        Label { Text(message) } icon: { EmberWarningIcon() }
     }
 }
 
@@ -231,12 +303,12 @@ struct EmberErrorBanner: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.circle").font(.system(size: 15))
+            EmberWarningIcon().font(.system(size: 15))
             VStack(alignment: .leading, spacing: 5) {
                 Text(title).font(.system(size: 12, weight: .semibold))
                 Text(message).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
                 if let actionTitle, let action {
-                    Button(actionTitle, action: action).buttonStyle(.plain).padding(.top, 3)
+                    Button(actionTitle, action: action).buttonStyle(EmberInlineActionButtonStyle()).padding(.top, 3)
                 }
             }
             Spacer(minLength: 0)
@@ -265,7 +337,7 @@ struct EmberInformationBanner: View {
                 }
                 Spacer(minLength: 0)
                 Button(action: dismiss) { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).accessibilityLabel("Dismiss notice")
+                    .buttonStyle(EmberIconButtonStyle()).accessibilityLabel("Dismiss notice")
             }
             .padding(15)
         }
@@ -324,7 +396,7 @@ struct EmberDisclosureGroupStyle: DisclosureGroupStyle {
                 .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(EmberButtonStyle(appearance: .plain))
             .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
             if configuration.isExpanded {
                 configuration.content

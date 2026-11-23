@@ -45,7 +45,7 @@ struct WritingStyleAppPicker: View {
                         Text("No applications match this search.").font(.system(size: 12)).foregroundStyle(AppTheme.secondaryText)
                     }
                     Button("Browse applications…") { browse() }.buttonStyle(EmberButtonStyle())
-                    if let browseError { Text(browseError).font(.system(size: 12)).foregroundStyle(AppTheme.errorText) }
+                    if let browseError { EmberWarningLabel(browseError).font(.system(size: 12)).foregroundStyle(AppTheme.errorText) }
                 }.padding(.horizontal, 22).padding(.bottom, 20)
             }
             EmberDivider()
@@ -60,7 +60,7 @@ struct WritingStyleAppPicker: View {
             }.padding(20)
         }
         .frame(width: 580, height: 560)
-        .foregroundStyle(AppTheme.primaryText).background(AppTheme.tileFill).tint(AppTheme.accent)
+        .foregroundStyle(AppTheme.primaryText).omdoSheetBackground().tint(AppTheme.accent)
         .onAppear {
             running = catalog.runningApplications()
             let ids = Set(running.map(\.id))
@@ -90,7 +90,7 @@ struct WritingStyleAppPicker: View {
                     Button("Move \(countLabel(movers.count))") { apply() }
                         .buttonStyle(EmberButtonStyle(primary: true)).disabled(appState.refinementSettingsLocked)
                 }
-            }.padding(22).frame(width: 425).foregroundStyle(AppTheme.primaryText).background(AppTheme.tileFill)
+            }.padding(22).frame(width: 425).foregroundStyle(AppTheme.primaryText).omdoSheetBackground()
         }
     }
 
@@ -151,7 +151,7 @@ struct WritingStyleAppPicker: View {
         browseError = nil
         for url in panel.urls {
             guard let id = Bundle(url: url)?.bundleIdentifier, id != Bundle.main.bundleIdentifier else {
-                browseError = "Choose an application with a bundle identifier other than DictaFlow."
+                browseError = "Choose an application with a bundle identifier other than Omdo."
                 continue
             }
             if !applications.contains(where: { $0.id == id }) {

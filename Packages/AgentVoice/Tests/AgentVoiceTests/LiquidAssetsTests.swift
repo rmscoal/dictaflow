@@ -4,6 +4,13 @@ import CryptoKit
 import Testing
 
 struct LiquidAssetsTests {
+    @Test func assetURLPreservesFilenameWithHash() {
+        let asset = LiquidAsset(name: "model#2.gguf", bytes: 3, sha256: "")
+        #expect(asset.url.lastPathComponent == asset.name)
+        #expect(asset.url.fragment == nil)
+        #expect(asset.url.absoluteString.hasSuffix("/\(LiquidAssets.revision)/model%232.gguf"))
+    }
+
     @Test func downloadReportsCombinedProgressAndSkipsVerifiedFilesOnRetry() async throws {
         let fixture = try LiquidAssetDownloadFixture()
         defer { fixture.cleanup() }

@@ -18,7 +18,7 @@ enum RecordingPlaybackBehavior: String, Codable, Equatable, CaseIterable {
     var detailText: String {
         switch self {
         case .unchanged:
-            return "Music and other system audio continue at their current volume while DictaFlow records."
+            return "Music and other system audio continue at their current volume while Omdo records."
         case .lowerSystemVolume:
             return "Temporarily lowers the default output volume while recording, then restores it afterward."
         }

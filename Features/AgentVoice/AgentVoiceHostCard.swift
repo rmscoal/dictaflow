@@ -3,7 +3,9 @@ import SwiftUI
 /// Plain-words setup state for one host card. It reports CLI detection
 /// plus the configured server entry, and never claims a live connection.
 enum AgentVoiceHostCardStatus: Equatable {
-    case ready(hooksInstalled: Bool)
+    case configured(hooksInstalled: Bool)
+    case needsMigration
+    case updateInterrupted
     case needsSetup
     case disabledInHost
     case notFound
@@ -15,16 +17,20 @@ enum AgentVoiceHostCardStatus: Equatable {
 
     var accessibilityDescription: String {
         switch self {
-        case .ready(let hooksInstalled):
+        case .configured(let hooksInstalled):
             hooksInstalled
                 ? "MCP and voice hooks are configured."
                 : "MCP is configured but voice hooks are missing."
         case .unsupportedVersion(let requirement):
             requirement
+        case .needsMigration:
+            "The old DictaFlow registration needs to be migrated."
+        case .updateInterrupted:
+            "The Omdo update was interrupted and needs to be recovered."
         case .needsSetup:
-            "Found on this Mac. DictaFlow entry not configured."
+            "Found on this Mac. Omdo entry not configured."
         case .disabledInHost:
-            "DictaFlow entry is disabled in the host settings."
+            "Omdo entry is disabled in the host settings."
         case .notFound:
             "Not detected in common install locations."
         case .manualOnly:
@@ -68,14 +74,21 @@ struct AgentVoiceHostCard: View {
 
     private var guidance: String? {
         switch status {
-        case .ready(let hooksInstalled):
-            return hooksInstalled ? nil : "Update setup to add the missing voice hooks."
+        case .configured(let hooksInstalled):
+            guard !hooksInstalled else { return nil }
+            return offersOneClickSetup ? "Update setup to add the missing voice hooks."
+                : "Open Show setup and follow the Voice hooks instructions."
+        case .needsMigration:
+            return "Close the host before replacing the old DictaFlow registration."
+        case .updateInterrupted:
+            return offersOneClickSetup ? "Close the host, then choose Recover setup."
+                : "Install or restore the \(brand.displayName) CLI, then reopen this page to recover setup."
         case .needsSetup, .manualOnly:
             return hint
         case .checking:
             return nil
         case .disabledInHost:
-            return "Enable DictaFlow in \(brand.displayName) settings."
+            return "Enable Omdo in \(brand.displayName) settings."
         case .unsupportedVersion(let requirement):
             return requirement
         case .notFound:
@@ -98,7 +111,7 @@ struct AgentVoiceHostCard: View {
                                         .frame(width: 24, height: 24)
                                         .contentShape(Rectangle())
                                 }
-                                .buttonStyle(.plain).foregroundStyle(AppTheme.secondaryText)
+                                .buttonStyle(EmberButtonStyle(appearance: .plain)).foregroundStyle(AppTheme.secondaryText)
                                 .accessibilityLabel("\(brand.host.docsLabel), opens in browser")
                                 .help("Open \(brand.host.docsLabel)")
                             }
@@ -120,8 +133,8 @@ struct AgentVoiceHostCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let errorMessage {
-                    Label(errorMessage, systemImage: "exclamationmark.circle")
-                        .font(.system(size: 12)).foregroundStyle(AppTheme.destructive)
+                    EmberWarningLabel(errorMessage)
+                        .font(.system(size: 12)).foregroundStyle(AppTheme.primaryText)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityLabel("Setup failed. \(errorMessage)")
                 }
@@ -155,7 +168,7 @@ struct AgentVoiceHostCard: View {
             }
             .frame(minHeight: 28).contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(EmberButtonStyle(appearance: .plain))
         .accessibilityValue(showsManualConfiguration ? "Expanded" : "Collapsed")
         .accessibilityIdentifier("agent-voice-manual-\(brand.host.rawValue)")
     }
