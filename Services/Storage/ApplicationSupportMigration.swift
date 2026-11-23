@@ -79,7 +79,7 @@ nonisolated struct LiquidModelMigration: Sendable {
     }
 
     @concurrent func restore(into root: URL) async throws {
-        if let issue = try importModels(into: root, requireComplete: true) { throw issue }
+        if let issue = try importModels(into: root) { throw issue }
     }
 
     func discardStagedCopy(in root: URL) throws {
@@ -92,11 +92,10 @@ nonisolated struct LiquidModelMigration: Sendable {
         try FileManager.default.removeItem(at: temporary)
     }
 
-    func importModels(into root: URL, requireComplete: Bool = false) throws -> Issue? {
+    func importModels(into root: URL) throws -> Issue? {
         do {
             try discardStagedCopy(in: root)
             let sourceExists = try modelDirectoryExists(in: legacy)
-            guard sourceExists || requireComplete else { return nil }
             let source = legacy.appendingPathComponent(modelPath)
             let target = root.appendingPathComponent(modelPath)
             let targetExists = try modelDirectoryExists(in: root)
@@ -235,6 +234,7 @@ nonisolated enum MigrationFiles {
             try requireDirectory(parent)
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false,
                                                     attributes: [.posixPermissions: 0o700])
+            try syncDirectory(parent)
         }
         try requireDirectory(url)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
@@ -436,7 +436,7 @@ nonisolated struct ApplicationSupportMigration: Sendable {
             }
             if committed.liquidImportPending == true {
                 await report(.resumingSpeechModels)
-                try await finishLiquidImport(models, journal: committed, at: journalURL, resuming: true, report: report)
+                try await finishLiquidImport(models, journal: committed, at: journalURL, report: report)
             } else {
                 discardAbandonedLiquidCopy(models)
             }
@@ -546,7 +546,7 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         // Finish committing required data before using disk space for the optional model.
         if reportsMigration { await report(.checkingSpeechModels) }
         if committed.liquidImportPending == true {
-            try await finishLiquidImport(models, journal: committed, at: journalURL, resuming: false, report: report)
+            try await finishLiquidImport(models, journal: committed, at: journalURL, report: report)
         } else {
             discardAbandonedLiquidCopy(models)
         }
@@ -554,8 +554,8 @@ nonisolated struct ApplicationSupportMigration: Sendable {
     }
 
     private func finishLiquidImport(_ models: LiquidModelMigration, journal: Journal, at journalURL: URL,
-                                    resuming: Bool, report: @Sendable (Progress) async -> Void) async throws {
-        let issue = try models.importModels(into: paths.current, requireComplete: resuming)
+                                    report: @Sendable (Progress) async -> Void) async throws {
+        let issue = try models.importModels(into: paths.current)
         var settled = journal
         settled.liquidImportPending = nil
         do { try save(settled, to: journalURL) }

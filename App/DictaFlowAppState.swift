@@ -963,12 +963,16 @@ final class DictaFlowAppState: ObservableObject {
         return nil
     }
 
-    func useWhisperFallback(_ model: WhisperModelDescriptor) async {
-        guard !whisperSettingsLocked, whisperConfiguration.recognitionProvider == .liquid,
-              await modelDownloadService.verifiedWhisperModelURL(for: model) != nil,
-              !Task.isCancelled, !isTerminating, !whisperSettingsLocked,
-              whisperConfiguration.recognitionProvider == .liquid else { return }
+    func useWhisperFallback(_ model: WhisperModelDescriptor) async -> String? {
+        guard !whisperSettingsLocked, whisperConfiguration.recognitionProvider == .liquid else { return nil }
+        let verified = await modelDownloadService.verifiedWhisperModelURL(for: model) != nil
+        guard !Task.isCancelled, !isTerminating, !whisperSettingsLocked,
+              whisperConfiguration.recognitionProvider == .liquid else { return nil }
+        guard verified else {
+            return "Couldn’t verify \(model.displayName). Move the old model file out of the models folder, then download a fresh copy in Dictation."
+        }
         updateWhisperModel(model)
+        return nil
     }
 
     func showRefinementModels(focusing model: RefinementModelDescriptor? = nil) {

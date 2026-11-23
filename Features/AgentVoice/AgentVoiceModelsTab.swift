@@ -7,10 +7,20 @@ struct AgentVoiceModelsTab: View {
     @ObservedObject var voice: AgentVoiceCoordinator
     @State private var confirmsCancellation = false
     @State private var whisperFallback: WhisperModelDescriptor?
+    @State private var whisperFallbackError: String?
     @State private var isSwitchingToWhisper = false
 
     private var fallbackCandidates: [WhisperModelDescriptor] {
         voice.isModelReady || voice.isCheckingSpeechModel ? [] : appState.whisperFallbackCandidates
+    }
+
+    private var availableWhisperFallback: WhisperModelDescriptor? {
+        guard let whisperFallback, fallbackCandidates.contains(whisperFallback) else { return nil }
+        return whisperFallback
+    }
+
+    private var hasRecoveryButtons: Bool {
+        voice.canRestoreLegacyModel || availableWhisperFallback != nil
     }
 
     var body: some View {
@@ -49,7 +59,8 @@ struct AgentVoiceModelsTab: View {
                     }
                     .padding(.horizontal, 20).padding(.bottom, 18)
                 }
-                if !voice.isModelReady && !voice.isCheckingSpeechModel {
+                if !voice.isModelReady && !voice.isCheckingSpeechModel,
+                   hasRecoveryButtons || voice.legacyModelRestoreError != nil || whisperFallbackError != nil {
                     recoveryActions
                 }
                 EmberDivider()
@@ -91,7 +102,12 @@ struct AgentVoiceModelsTab: View {
                     .font(.system(size: 12))
                     .foregroundStyle(AppTheme.secondaryText)
             }
-            if voice.canRestoreLegacyModel || whisperFallback.map(fallbackCandidates.contains) == true {
+            if let error = whisperFallbackError {
+                EmberWarningLabel(error)
+                    .font(.system(size: 12))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if hasRecoveryButtons {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 8) { recoveryButtons }
                     VStack(alignment: .leading, spacing: 8) { recoveryButtons }
@@ -99,7 +115,7 @@ struct AgentVoiceModelsTab: View {
             }
         }
         .padding(.horizontal, 20)
-        .padding(.bottom, voice.canRestoreLegacyModel || voice.legacyModelRestoreError != nil || whisperFallback != nil ? 14 : 0)
+        .padding(.bottom, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -109,12 +125,17 @@ struct AgentVoiceModelsTab: View {
                 .buttonStyle(EmberButtonStyle())
                 .disabled(voice.isRestoringLegacyModel || voice.isDownloading)
         }
-        if let model = whisperFallback, fallbackCandidates.contains(model) {
+        if let model = availableWhisperFallback {
             Button("Use Whisper") {
                 isSwitchingToWhisper = true
+                whisperFallbackError = nil
                 Task {
-                    await appState.useWhisperFallback(model)
-                    isSwitchingToWhisper = false
+                    defer { isSwitchingToWhisper = false }
+                    if let error = await appState.useWhisperFallback(model) {
+                        whisperFallback = nil
+                        whisperFallbackError = error
+                        whisperFallback = await appState.verifiedWhisperFallback(from: fallbackCandidates.filter { $0 != model })
+                    }
                 }
             }
             .buttonStyle(EmberButtonStyle())

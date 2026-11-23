@@ -14,7 +14,8 @@ public struct LiquidAsset: Sendable {
     }
 
     public var url: URL {
-        URL(string: "https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF/resolve/\(LiquidAssets.revision)/\(name)")!
+        URL(string: "https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF/resolve/\(LiquidAssets.revision)/")!
+            .appending(component: name, directoryHint: .notDirectory)
     }
 }
 

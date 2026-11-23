@@ -301,6 +301,41 @@ final class OmdoMigrationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: paths.current.appendingPathComponent("Prompts/refinement.txt")), Data("legacy prompt".utf8))
     }
 
+    func testPendingLiquidImportChecksDestinationWhenLegacyDirectoryDisappears() async throws {
+        for hasVerifiedDestination in [false, true] {
+            let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow")
+            let modelDirectory = "Models/Liquid/\(LiquidAssets.revision)"
+            let asset = LiquidAsset(name: "fixture.gguf", bytes: 3,
+                                    sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+            let source = paths.legacy.appendingPathComponent(modelDirectory)
+            let destination = paths.current.appendingPathComponent(modelDirectory)
+            let retainedSource = paths.legacy.appendingPathComponent("Saved Liquid")
+            let data = Data("abc".utf8)
+            try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+            try data.write(to: source.appendingPathComponent(asset.name))
+            let progress = ProgressLog()
+            let models = LiquidModelMigration(legacy: paths.legacy, assets: [asset])
+
+            _ = try await ApplicationSupportMigration(paths: paths).prepare(report: { event in
+                await progress.append(event)
+                guard event == .checkingSpeechModels else { return }
+                do {
+                    if hasVerifiedDestination {
+                        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+                        try data.write(to: destination.appendingPathComponent(asset.name))
+                    }
+                    try FileManager.default.moveItem(at: source, to: retainedSource)
+                } catch {
+                    XCTFail("Couldn’t arrange the missing source fixture: \(error)")
+                }
+            }, liquidModels: models) { false }
+
+            let events = await progress.values
+            XCTAssertEqual(events.contains(.speechModelsIncomplete(.incomplete)), !hasVerifiedDestination)
+            XCTAssertEqual(try Data(contentsOf: retainedSource.appendingPathComponent(asset.name)), data)
+        }
+    }
+
     func testStorageSpaceCheckIgnoresUnusedLiquidRevision() async throws {
         let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
         let unused = paths.legacy.appendingPathComponent("Models/Liquid/old-revision/unused.gguf")
