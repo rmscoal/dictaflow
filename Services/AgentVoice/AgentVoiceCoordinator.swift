@@ -574,29 +574,53 @@ final class AgentVoiceCoordinator: ObservableObject {
     }
 
     func recognize(_ audioURL: URL, configuration: WhisperConfiguration) async throws -> WhisperTranscriptionResult {
-        try Self.preflightASRDuration(audioURL)
+        try Self.preflightAudioReadable(audioURL)
         let samples = try await AVAudioDecodingService().decodePCMFloatSamples(from: audioURL)
-        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),
-              let channel = buffer.floatChannelData?[0] else { throw VoiceError.unavailable("Could not prepare recorded audio for Liquid recognition.") }
-        buffer.frameLength = AVAudioFrameCount(samples.count)
-        samples.withUnsafeBufferPointer { channel.update(from: $0.baseAddress!, count: samples.count) }
-        do {
-            let file = try AVAudioFile(forWriting: temporary, settings: format.settings)
-            try file.write(from: buffer)
+        // Recordings that fit one request keep the single-request path; only longer
+        // recordings pay for a chunk boundary. The energy scan runs off MainActor.
+        let chunks: [Range<Int>]
+        if Double(samples.count) / 16_000 <= LiquidRuntime.maxASRDuration {
+            chunks = [0..<samples.count]
+        } else {
+            chunks = await Task.detached(priority: .userInitiated) {
+                LiquidAudioChunker.split(samples: samples, sampleRate: 16_000)
+            }.value
         }
+        guard !chunks.isEmpty else { throw VoiceError.unavailable("The recorded audio is empty.") }
+        let translateToEnglish = configuration.taskMode == .translateToEnglish
         do {
-            let text = try await runtime.transcribe(wav: Data(contentsOf: temporary), translateToEnglish: configuration.taskMode == .translateToEnglish)
+            var texts: [String] = []
+            texts.reserveCapacity(chunks.count)
+            for chunk in chunks {
+                try Task.checkCancellation()
+                texts.append(try await transcribeChunk(samples: samples, range: chunk, translateToEnglish: translateToEnglish))
+            }
             await runtime.stop()
-            return WhisperTranscriptionResult(text: text, segments: [], detectedLanguageCode: configuration.taskMode == .translateToEnglish ? "en" : nil,
+            return WhisperTranscriptionResult(text: texts.joined(separator: " "), segments: [], detectedLanguageCode: translateToEnglish ? "en" : nil,
                                               model: nil, taskMode: configuration.taskMode, completedAt: Date(), recognitionProvider: .liquid)
         } catch {
             updateReadiness(after: error)
             await runtime.stop()
             throw error
         }
+    }
+
+    /// Transcribes one chunk with the shared warm sidecar. Each chunk is its
+    /// own request, so the per-request guards in
+    /// `LiquidRuntime.validateASRInput` apply per chunk, not per recording.
+    private func transcribeChunk(samples: [Float], range: Range<Int>, translateToEnglish: Bool) async throws -> String {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(range.count)),
+              let channel = buffer.floatChannelData?[0] else { throw VoiceError.unavailable("Could not prepare recorded audio for Liquid recognition.") }
+        buffer.frameLength = AVAudioFrameCount(range.count)
+        samples[range].withUnsafeBufferPointer { channel.update(from: $0.baseAddress!, count: range.count) }
+        do {
+            let file = try AVAudioFile(forWriting: temporary, settings: format.settings)
+            try file.write(from: buffer)
+        }
+        return try await runtime.transcribe(wav: Data(contentsOf: temporary), translateToEnglish: translateToEnglish)
     }
 
     /// Marks the Liquid model not ready when the runtime reports its assets unavailable.
@@ -608,11 +632,12 @@ final class AgentVoiceCoordinator: ObservableObject {
         }
     }
 
-    /// Metadata-only duration check before the potentially unbounded full decode.
-    /// Missing or unreadable files propagate the decoder's existing error. Invalid
-    /// or nonfinite durations fail explicitly. Overlimit clips fail with retention
-    /// so the user can retry with Whisper; they are never truncated or switched.
-    private static func preflightASRDuration(_ audioURL: URL) throws {
+    /// Metadata-only readability check before the potentially unbounded full
+    /// decode. Missing or unreadable files propagate the decoder's existing
+    /// error. Invalid or nonfinite durations fail explicitly. Long recordings
+    /// are chunked in `recognize`, so there is no duration cap here; each
+    /// chunk still passes the per-request guards in the runtime.
+    private static func preflightAudioReadable(_ audioURL: URL) throws {
         let file = try AVAudioFile(forReading: audioURL)
         let rate = file.processingFormat.sampleRate
         let frames = Double(file.length)
@@ -621,9 +646,6 @@ final class AgentVoiceCoordinator: ObservableObject {
         }
         let duration = frames / rate
         guard duration.isFinite else { throw VoiceError.unavailable("Liquid could not read the recording length.") }
-        guard duration <= LiquidRuntime.maxASRDuration else {
-            throw VoiceError.inputTooLong("Liquid ASR supports up to 2 minutes. The recording is kept; use Whisper or a shorter recording.")
-        }
     }
 
     func shutdown() {

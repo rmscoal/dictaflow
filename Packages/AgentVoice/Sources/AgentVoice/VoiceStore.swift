@@ -1166,9 +1166,12 @@ public enum VoiceError: Error, LocalizedError, Sendable {
     /// The recording exceeds a Liquid transcription limit. Callers retain it
     /// so the user can retry with Whisper or use a shorter clip.
     case inputTooLong(String)
+    /// Liquid transcription exceeded its whole-response budget. Callers
+    /// retain the recording so the user can retry.
+    case transcriptionTimedOut(String)
     public var errorDescription: String? {
         switch self {
-        case .unavailable(let message), .inputTooLong(let message): return message
+        case .unavailable(let message), .inputTooLong(let message), .transcriptionTimedOut(let message): return message
         case .liquidModelUnavailable: return "Download or repair the Liquid audio model in Agent Voice, under Models."
         }
     }
