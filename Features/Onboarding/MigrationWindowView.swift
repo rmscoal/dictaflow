@@ -2,13 +2,13 @@ import SwiftUI
 
 struct MigrationWindowState {
     enum Stage: Int {
-        case preparing, copyingData, checkingSpeechModels, openingStores, copyingOfflineModels
+        case preparing, copyingData, openingStores, checkingSpeechModels, copyingOfflineModels
     }
 
     var stage: Stage?
     var resuming = false
     var copiesOnlyOfflineModels = false
-    var speechModelsIncomplete = false
+    var speechModelIssue: LiquidModelMigration.Issue?
     var isComplete = false
     var error: String?
     var revealLocation: URL?
@@ -45,9 +45,9 @@ struct MigrationWindowView: View {
                             if !state.copiesOnlyOfflineModels {
                                 step(.copyingData, "Copy local data", state: state)
                                 EmberDivider()
-                                step(.checkingSpeechModels, "Check existing speech models", state: state)
-                                EmberDivider()
                                 step(.openingStores, "Open migrated data", state: state)
+                                EmberDivider()
+                                step(.checkingSpeechModels, "Check existing speech models", state: state)
                             }
                             if stage == .copyingOfflineModels {
                                 if !state.copiesOnlyOfflineModels { EmberDivider() }
@@ -63,8 +63,8 @@ struct MigrationWindowView: View {
                             .font(.system(size: 12))
                             .fixedSize(horizontal: false, vertical: true)
                     } else if state.isComplete {
-                        if state.speechModelsIncomplete {
-                            EmberWarningLabel("Some speech model files couldn’t be reused. Check the model in Agent Voice.")
+                        if let issue = state.speechModelIssue {
+                            EmberWarningLabel(issue.localizedDescription)
                                 .font(.system(size: 12))
                         }
                         if let notice = delegate.modelMigrationNotice {
@@ -81,6 +81,9 @@ struct MigrationWindowView: View {
                 HStack(spacing: 10) {
                     if !state.isComplete {
                         Button("Quit Omdo") { NSApp.terminate(nil) }
+                            .buttonStyle(SecondaryOnboardingButtonStyle())
+                    } else if state.speechModelIssue != nil {
+                        Button("Speech Model Settings") { delegate.continueAfterMigration(openSpeechModels: true) }
                             .buttonStyle(SecondaryOnboardingButtonStyle())
                     }
                     Spacer()
@@ -109,7 +112,9 @@ struct MigrationWindowView: View {
     private func subtitle(for state: MigrationWindowState) -> String {
         if state.error != nil { return "Omdo paused the upgrade." }
         if state.isComplete { return "Your local data is ready to use in Omdo." }
-        if state.resuming { return "Omdo is resuming your upgrade." }
+        if state.resuming {
+            return state.stage == .checkingSpeechModels ? "Omdo is resuming the Liquid model import." : "Omdo is resuming your upgrade."
+        }
         if state.copiesOnlyOfflineModels { return "Omdo is bringing your offline dictation models over automatically." }
         return "Omdo is bringing your local data and models over automatically."
     }
@@ -120,7 +125,7 @@ struct MigrationWindowView: View {
         let done = state.isComplete || (current?.rawValue ?? 0) > step.rawValue
         let needsAttention = active && state.error != nil
             || step == .copyingOfflineModels && state.isComplete && delegate.modelMigrationNotice != nil
-            || step == .checkingSpeechModels && done && state.speechModelsIncomplete
+            || step == .checkingSpeechModels && done && state.speechModelIssue != nil
         let status = if needsAttention { state.isComplete ? "Needs attention" : "Paused" }
             else if done { "Done" }
             else if active {

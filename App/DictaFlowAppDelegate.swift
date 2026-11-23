@@ -79,7 +79,10 @@ final class DictaFlowAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
             if shouldPresent { showMigrationWindow() }
         case .copyingData: advanceMigration(to: .copyingData)
         case .checkingSpeechModels: advanceMigration(to: .checkingSpeechModels)
-        case .speechModelsIncomplete: migration?.speechModelsIncomplete = true
+        case .resumingSpeechModels:
+            migration = MigrationWindowState(stage: .checkingSpeechModels, resuming: true)
+            if migrationWindow == nil { showMigrationWindow() }
+        case .speechModelsIncomplete(let issue): migration?.speechModelIssue = issue
         case .openingStores: advanceMigration(to: .openingStores)
         }
     }
@@ -132,9 +135,10 @@ final class DictaFlowAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
         if appState == nil { NSApp.setActivationPolicy(.accessory) }
     }
 
-    func continueAfterMigration() {
+    func continueAfterMigration(openSpeechModels: Bool = false) {
         guard let stores = preparedStores else { return }
         finishLaunching(stores: stores, fromMigration: true)
+        if openSpeechModels { appState?.showAgentVoiceSpeechModels() }
     }
 
     private func finishLaunching(stores: ApplicationSupportMigration.Stores, fromMigration: Bool) {

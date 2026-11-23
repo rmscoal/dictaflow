@@ -33,6 +33,8 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isSettingsWindowVisible = false
     @Published private(set) var appAppearance: AppAppearance
     @Published var agentVoiceTab: AgentVoiceTab = .general
+    @Published var agentVoiceSpeechModelRequest: UUID?
+    @Published var showsSpeechModelsDuringOnboarding = false
     @Published var dictationSettingsTab: DictationSettingsTab = .transcription
     @Published private(set) var textTone: TextTone
     private var recordingTone: TextTone = .original
@@ -191,7 +193,8 @@ final class DictaFlowAppState: ObservableObject {
         // Hosted tests use isolated coordinator fixtures. Do not bind the user's socket
         // or recover/cancel speech from a separately running installed Dev app.
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
-        agentVoice = AgentVoiceCoordinator(supportDirectory: paths.current, preparedStore: stores.voice)
+        agentVoice = AgentVoiceCoordinator(supportDirectory: paths.current, preparedStore: stores.voice,
+                                           legacyModels: LiquidModelMigration(legacy: paths.legacy))
         observeAgentVoiceDownloads()
         if let agentVoice {
             agentVoiceOverlay = AgentVoiceOverlayCoordinator(voice: agentVoice) { [weak self] in
@@ -323,8 +326,10 @@ final class DictaFlowAppState: ObservableObject {
 
     private func observeAgentVoiceDownloads() {
         guard let agentVoice else { return }
+        let preparingSpeechModel = agentVoice.$isCheckingSpeechModel.combineLatest(agentVoice.$isRestoringLegacyModel)
+            .map { checking, restoring in checking || restoring }
         agentVoiceModelObservation = agentVoice.$isModelReady.combineLatest(agentVoice.$modelDownloadProgress, agentVoice.$activeError,
-                                                                          agentVoice.$isCheckingSpeechModel)
+                                                                          preparingSpeechModel)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _, _, _, checking in
                 guard let self else { return }
@@ -531,6 +536,7 @@ final class DictaFlowAppState: ObservableObject {
         switch transcriptionState {
         case .idle:
             if whisperConfiguration.recognitionProvider == .liquid {
+                if agentVoice?.isRestoringLegacyModel == true { return "Restoring Liquid…" }
                 if agentVoice?.isCheckingSpeechModel == true { return AgentVoiceCoordinator.checkingSpeechModelText }
                 return agentVoice?.isModelReady == true ? "Liquid LFM3-Audio is ready." : "Download Liquid audio in Agent Voice, under Models."
             }
@@ -934,6 +940,35 @@ final class DictaFlowAppState: ObservableObject {
         showMainWindowPage(.dictation)
         refreshInstalledLocalModelFiles()
         modelPickerPresentation = ModelPickerPresentation(kind: .speech, modelIdentifier: model?.modelIdentifier)
+    }
+
+    func showAgentVoiceSpeechModels() {
+        agentVoiceTab = .general
+        agentVoiceSpeechModelRequest = UUID()
+        showsSpeechModelsDuringOnboarding = onboardingPresentation != nil
+        showMainWindowPage(.agentVoice)
+    }
+
+    var whisperFallbackCandidates: [WhisperModelDescriptor] {
+        guard whisperConfiguration.recognitionProvider == .liquid else { return [] }
+        let selected = whisperConfiguration.model
+        return ([selected] + WhisperModelDescriptor.allCases.filter { $0 != selected }).filter(isWhisperModelPrepared)
+    }
+
+    func verifiedWhisperFallback(from candidates: [WhisperModelDescriptor]) async -> WhisperModelDescriptor? {
+        for model in candidates {
+            guard !Task.isCancelled else { return nil }
+            if await modelDownloadService.verifiedWhisperModelURL(for: model) != nil { return model }
+        }
+        return nil
+    }
+
+    func useWhisperFallback(_ model: WhisperModelDescriptor) async {
+        guard !whisperSettingsLocked, whisperConfiguration.recognitionProvider == .liquid,
+              await modelDownloadService.verifiedWhisperModelURL(for: model) != nil,
+              !Task.isCancelled, !isTerminating, !whisperSettingsLocked,
+              whisperConfiguration.recognitionProvider == .liquid else { return }
+        updateWhisperModel(model)
     }
 
     func showRefinementModels(focusing model: RefinementModelDescriptor? = nil) {
@@ -2910,7 +2945,7 @@ final class DictaFlowAppState: ObservableObject {
         guard usesLiquid ? agentVoice?.isModelReady == true : isWhisperModelPrepared(whisperConfiguration.model) else {
             releaseRecordingAudioLease()
             isOnboardingPracticeSession = false
-            if usesLiquid, agentVoice?.isCheckingSpeechModel == true {
+            if usesLiquid, agentVoice?.isCheckingSpeechModel == true || agentVoice?.isRestoringLegacyModel == true {
                 setPreservedStatusMessage(Self.recordingDuringLiquidCheck,
                                           issueTitle: AgentVoiceCoordinator.checkingSpeechModelText, severity: .information)
                 return

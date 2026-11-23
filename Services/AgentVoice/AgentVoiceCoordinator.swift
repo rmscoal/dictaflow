@@ -112,6 +112,9 @@ final class AgentVoiceCoordinator: ObservableObject {
     @Published private(set) var status = "Agent Voice is off."
     @Published private(set) var isModelReady = false
     @Published private(set) var isCheckingSpeechModel = true
+    @Published private(set) var canRestoreLegacyModel = false
+    @Published private(set) var isRestoringLegacyModel = false
+    @Published private(set) var legacyModelRestoreError: String?
     static let checkingSpeechModelText = "Checking speech model…"
     @Published private(set) var modelDownloadProgress: ModelDownloadProgress?
     var isDownloading: Bool { modelDownloadProgress != nil }
@@ -133,8 +136,11 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     let assets: LiquidAssets
     private let modelDownloader: any LiquidAssetDownloading
+    private let legacyModels: LiquidModelMigration?
+    private let supportDirectory: URL
     private var initialModelCheck: Task<Void, Never>?
     private var modelDownloadTask: Task<Void, Never>?
+    private var modelRestoreTask: Task<Void, Never>?
     private var modelDownloadGeneration = UUID()
     let runtime: any LiquidRuntimeProtocol
     let installationID: UUID
@@ -165,8 +171,12 @@ final class AgentVoiceCoordinator: ObservableObject {
          supportDirectory: URL, preparedStore: Result<VoiceStore, any Error>? = nil, runtime: (any LiquidRuntimeProtocol)? = nil, appIdentity: String? = nil,
          limits: VoiceLimits = VoiceLimits(), beforeIdleRefresh: (() async -> Void)? = nil,
          beforeRetentionRefresh: ((VoiceHistoryRetention) async -> Void)? = nil,
-         modelDownloader: (any LiquidAssetDownloading)? = nil, beforePreviewCompletion: (() -> Void)? = nil) {
+         modelDownloader: (any LiquidAssetDownloading)? = nil, beforePreviewCompletion: (() -> Void)? = nil,
+         legacyModels: LiquidModelMigration? = nil) {
         self.defaults = defaults; self.player = player ?? AgentSpeechPlayer()
+        self.legacyModels = legacyModels
+        self.supportDirectory = supportDirectory
+        canRestoreLegacyModel = legacyModels?.canRestore == true
         speechVoice = defaults.string(forKey: Self.speechVoiceKey).flatMap(LiquidVoice.init(rawValue:)) ?? .female
         englishAccent = defaults.string(forKey: Self.englishAccentKey).flatMap(LiquidEnglishAccent.init(rawValue:)) ?? .american
         let savedRate = defaults.double(forKey: Self.playbackRateKey)
@@ -250,7 +260,8 @@ final class AgentVoiceCoordinator: ObservableObject {
     }
 
     func downloadModel() {
-        guard !stopped, !isDownloading else { return }
+        guard !stopped, !isDownloading, !isRestoringLegacyModel else { return }
+        legacyModelRestoreError = nil
         // An explicit retry supersedes a prior model error; other scopes stay.
         if activeError?.scope == .models { activeError = nil }
         let generation = UUID()
@@ -300,6 +311,32 @@ final class AgentVoiceCoordinator: ObservableObject {
 
     func cancelModelDownload() {
         modelDownloadTask?.cancel()
+    }
+
+    func restoreLegacyModel() {
+        guard let legacyModels, canRestoreLegacyModel, !stopped, !isCheckingSpeechModel,
+              !isModelReady, !isDownloading, !isRestoringLegacyModel else { return }
+        if activeError?.scope == .models { activeError = nil }
+        legacyModelRestoreError = nil
+        isRestoringLegacyModel = true
+        modelRestoreTask = Task { [weak self, supportDirectory] in
+            defer {
+                self?.isRestoringLegacyModel = false
+                self?.modelRestoreTask = nil
+            }
+            do {
+                try await legacyModels.restore(into: supportDirectory)
+                try Task.checkCancellation()
+                self?.isModelReady = true
+                self?.status = "Liquid audio is ready."
+                await self?.didReceiveRequest()
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.canRestoreLegacyModel = legacyModels.canRestore
+                self?.legacyModelRestoreError = error.localizedDescription
+            }
+        }
     }
 
     private func applyModelDownloadEvent(_ event: LiquidDownloadEvent) {
@@ -593,6 +630,7 @@ final class AgentVoiceCoordinator: ObservableObject {
         stopped = true; bridge?.stop(); bridge = nil
         initialModelCheck?.cancel()
         cancelModelDownload()
+        modelRestoreTask?.cancel()
         maintenance?.cancel(); maintenance = nil
         interruptActiveSpeech(stopAllInference: true)
     }
@@ -600,6 +638,7 @@ final class AgentVoiceCoordinator: ObservableObject {
     func waitForShutdown() async {
         await initialModelCheck?.value
         await modelDownloadTask?.value
+        await modelRestoreTask?.value
         await resourceRelease?.value
     }
 

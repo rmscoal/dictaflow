@@ -17,9 +17,18 @@ struct AgentVoiceView: View {
             }
             .padding(.horizontal, AppLayout.contentPadding).padding(.top, 10).padding(.bottom, 28)
         } else {
-            EmberPage {
-                header
-                tabBody
+            ScrollViewReader { scroll in
+                EmberPage {
+                    header
+                    tabBody
+                }
+                .task(id: appState.agentVoiceSpeechModelRequest) {
+                    guard let request = appState.agentVoiceSpeechModelRequest else { return }
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    scroll.scrollTo("speech-model-settings", anchor: .top)
+                    if appState.agentVoiceSpeechModelRequest == request { appState.agentVoiceSpeechModelRequest = nil }
+                }
             }
         }
     }
@@ -51,7 +60,7 @@ struct AgentVoiceView: View {
         Group {
             if let voice = appState.agentVoice {
                 switch appState.agentVoiceTab {
-                case .general: AgentVoiceConnectionsTab(voice: voice) { appState.copySetupSnippet($0) }
+                case .general: AgentVoiceConnectionsTab(appState: appState, voice: voice) { appState.copySetupSnippet($0) }
                 case .history: AgentVoiceHistoryTab(voice: voice, appState: appState) { appState.copyVoiceHistoryText($0) }
                 }
             } else {

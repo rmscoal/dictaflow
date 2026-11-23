@@ -2,6 +2,7 @@ import AgentVoice
 import Darwin
 import Foundation
 import GRDB
+import OSLog
 
 nonisolated struct ApplicationSupportPaths: Sendable {
     let applicationSupport: URL
@@ -27,6 +28,143 @@ nonisolated struct ApplicationSupportPaths: Sendable {
     }
 }
 
+/// Imports only verified assets. A model failure is independent of the private data stores.
+nonisolated struct LiquidModelMigration: Sendable {
+    enum Issue: LocalizedError, Equatable, Sendable {
+        case insufficientSpace, incomplete, copyFailed
+
+        var errorDescription: String? {
+            switch self {
+            case .insufficientSpace:
+                "There isn’t enough space to copy Liquid. Free up space, then restore it from Speech model settings."
+            case .incomplete:
+                "Some Liquid model files couldn’t be reused. Check the model in Speech model settings."
+            case .copyFailed:
+                "Liquid couldn’t be copied from DictaFlow. Check the model in Speech model settings."
+            }
+        }
+    }
+
+    private let legacy: URL
+    private let assets: [LiquidAsset]
+    private let cloneFile: @Sendable (URL, URL) throws -> Bool
+    private let requireSpace: @Sendable (Int64, URL) throws -> Void
+
+    init(legacy: URL, assets: [LiquidAsset] = LiquidAssets.files,
+         cloneFile: @escaping @Sendable (URL, URL) throws -> Bool = MigrationFiles.cloneFileIfSupported,
+         requireSpace: @escaping @Sendable (Int64, URL) throws -> Void = MigrationFiles.requireSpace) {
+        self.legacy = legacy
+        self.assets = assets
+        self.cloneFile = cloneFile
+        self.requireSpace = requireSpace
+    }
+
+    private var modelPath: String { "Models/Liquid/\(LiquidAssets.revision)" }
+    private static let stagedFilename = ".restore-copy.download"
+
+    var hasLegacyFiles: Bool {
+        guard (try? modelDirectoryExists(in: legacy)) == true else { return false }
+        let source = legacy.appendingPathComponent(modelPath)
+        return assets.contains { (try? MigrationFiles.attributes(source.appendingPathComponent($0.name))) != nil }
+    }
+
+    var canRestore: Bool {
+        guard (try? modelDirectoryExists(in: legacy)) == true else { return false }
+        let source = legacy.appendingPathComponent(modelPath)
+        return assets.contains { asset in
+            guard let attributes = try? MigrationFiles.attributes(source.appendingPathComponent(asset.name)) else { return false }
+            return attributes[.type] as? FileAttributeType == .typeRegular
+                && (attributes[.size] as? NSNumber)?.int64Value == asset.bytes
+        }
+    }
+
+    @concurrent func restore(into root: URL) async throws {
+        if let issue = try importModels(into: root, requireComplete: true) { throw issue }
+    }
+
+    func discardStagedCopy(in root: URL) throws {
+        guard try modelDirectoryExists(in: root) else { return }
+        let temporary = root.appendingPathComponent(modelPath).appendingPathComponent(Self.stagedFilename)
+        guard let attributes = try MigrationFiles.attributes(temporary) else { return }
+        guard attributes[.type] as? FileAttributeType == .typeRegular else {
+            throw ApplicationSupportMigration.Failure.unsafeItem(temporary)
+        }
+        try FileManager.default.removeItem(at: temporary)
+    }
+
+    func importModels(into root: URL, requireComplete: Bool = false) throws -> Issue? {
+        do {
+            try discardStagedCopy(in: root)
+            let sourceExists = try modelDirectoryExists(in: legacy)
+            guard sourceExists || requireComplete else { return nil }
+            let source = legacy.appendingPathComponent(modelPath)
+            let target = root.appendingPathComponent(modelPath)
+            let targetExists = try modelDirectoryExists(in: root)
+            let temporary = target.appendingPathComponent(Self.stagedFilename)
+            var existingCount = 0
+            var assetsToCopy: [LiquidAsset] = []
+            for asset in assets {
+                try Task.checkCancellation()
+                if targetExists, try LiquidAssets.verify(target.appendingPathComponent(asset.name), asset: asset) {
+                    existingCount += 1
+                } else if sourceExists, try LiquidAssets.verify(source.appendingPathComponent(asset.name), asset: asset) {
+                    assetsToCopy.append(asset)
+                }
+            }
+            if !assetsToCopy.isEmpty {
+                try MigrationFiles.makePrivateDirectory(target)
+                for asset in assetsToCopy {
+                    try Task.checkCancellation()
+                    try copy(asset, from: source, to: target, through: temporary)
+                }
+            }
+            return existingCount + assetsToCopy.count == assets.count ? nil : .incomplete
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch ApplicationSupportMigration.Failure.insufficientSpace {
+            return .insufficientSpace
+        } catch let issue as Issue {
+            return issue
+        } catch {
+            let failure = error as NSError
+            if (failure.domain == NSPOSIXErrorDomain && failure.code == Int(ENOSPC))
+                || (failure.domain == NSCocoaErrorDomain && failure.code == NSFileWriteOutOfSpaceError) {
+                return .insufficientSpace
+            }
+            return .copyFailed
+        }
+    }
+
+    private func modelDirectoryExists(in root: URL) throws -> Bool {
+        var directory = root
+        for component in modelPath.split(separator: "/") {
+            guard try MigrationFiles.attributes(directory) != nil else { return false }
+            try MigrationFiles.requireDirectory(directory)
+            directory.appendPathComponent(String(component))
+        }
+        guard try MigrationFiles.attributes(directory) != nil else { return false }
+        try MigrationFiles.requireDirectory(directory)
+        return true
+    }
+
+    private func copy(_ asset: LiquidAsset, from source: URL, to target: URL, through temporary: URL) throws {
+        let files = FileManager.default
+        let original = source.appendingPathComponent(asset.name)
+        defer { try? files.removeItem(at: temporary) }
+        if try !cloneFile(original, temporary) {
+            try requireSpace(asset.bytes, target)
+            try files.copyItem(at: original, to: temporary)
+        }
+        guard try LiquidAssets.verify(temporary, asset: asset) else { throw Issue.incomplete }
+        try files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        try MigrationFiles.syncFile(temporary)
+        try Task.checkCancellation()
+        let destination = target.appendingPathComponent(asset.name)
+        guard rename(temporary.path, destination.path) == 0 else { throw MigrationFiles.posixError() }
+        try MigrationFiles.syncDirectory(target)
+    }
+}
+
 /// Locks serialize Omdo instances. Legacy apps and external hosts do not take these locks.
 nonisolated final class OmdoMigrationLock: @unchecked Sendable {
     private let descriptor: Int32
@@ -48,6 +186,14 @@ nonisolated final class OmdoMigrationLock: @unchecked Sendable {
 
 nonisolated enum MigrationFiles {
     static func posixError() -> POSIXError { POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+
+    /// Try cloning before reserving space for the file's logical size.
+    static func cloneFileIfSupported(_ source: URL, _ destination: URL) throws -> Bool {
+        if clonefile(source.path, destination.path, UInt32(CLONE_NOFOLLOW)) == 0 { return true }
+        let error = posixError()
+        if error.code == .ENOTSUP || error.code == .EXDEV { return false }
+        throw error
+    }
 
     static func attributes(_ url: URL) throws -> [FileAttributeKey: Any]? {
         var metadata = stat()
@@ -192,13 +338,15 @@ nonisolated enum MigrationFiles {
 
 nonisolated struct ApplicationSupportMigration: Sendable {
     let paths: ApplicationSupportPaths
-    private static let components = ["History", "Prompts", "AgentVoice", "Models/Liquid"]
+    private static let components = ["History", "Prompts", "AgentVoice"]
+    private static let logger = Logger(subsystem: "com.dictaflow.storage", category: "Migration")
 
     enum Progress: Sendable, Equatable {
         case started(resuming: Bool)
         case copyingData
         case checkingSpeechModels
-        case speechModelsIncomplete
+        case resumingSpeechModels
+        case speechModelsIncomplete(LiquidModelMigration.Issue)
         case openingStores
     }
 
@@ -239,6 +387,7 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         var destinationInode: UInt64?
         var destinationDevice: UInt64?
         var source: [String: [String: MigrationFiles.Fingerprint]]?
+        var liquidImportPending: Bool?
     }
 
     struct Stores {
@@ -249,6 +398,7 @@ nonisolated struct ApplicationSupportMigration: Sendable {
 
     /// Called before constructing app state, while no services can write to either root.
     @concurrent func prepare(report: @Sendable (Progress) async -> Void = { _ in },
+                             liquidModels: LiquidModelMigration? = nil,
                              legacyIsRunning: @Sendable () -> Bool) async throws -> Stores {
         let files = FileManager.default
         let work = paths.storageWork
@@ -259,6 +409,7 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         defer { withExtendedLifetime(lock) {} }
         let journalURL = work.appendingPathComponent("storage.json")
         let destination = paths.current
+        let models = liquidModels ?? LiquidModelMigration(legacy: paths.legacy)
         let existing = try MigrationFiles.attributes(journalURL)
         if existing != nil, existing?[.type] as? FileAttributeType != .typeRegular {
             throw Failure.unsafeItem(journalURL)
@@ -266,10 +417,11 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         var journal = try existing.map { _ in
             try JSONDecoder().decode(Journal.self, from: Data(contentsOf: journalURL))
         }
-        let isNewStorage = try journal == nil && MigrationFiles.attributes(destination) == nil
+        let hasIndependentDestination = try journal == nil && MigrationFiles.attributes(destination) != nil
+        let isNewStorage = journal == nil && !hasIndependentDestination
         let reportsMigration: Bool
         if let journal { reportsMigration = journal.phase != .committed }
-        else { reportsMigration = try hasLegacyData() }
+        else { reportsMigration = try hasLegacyData(includeModels: !hasIndependentDestination) }
         if reportsMigration {
             await report(.started(resuming: journal != nil))
         }
@@ -282,16 +434,22 @@ nonisolated struct ApplicationSupportMigration: Sendable {
                 try markDestination(destination, journal: &committed)
                 try save(committed, to: journalURL)
             }
+            if committed.liquidImportPending == true {
+                await report(.resumingSpeechModels)
+                try await finishLiquidImport(models, journal: committed, at: journalURL, resuming: true, report: report)
+            } else {
+                discardAbandonedLiquidCopy(models)
+            }
             return stores
         }
 
         let components = Self.components
-        let hasIndependentDestination = try journal == nil && MigrationFiles.attributes(destination) != nil
         let source = try snapshotSource(includeDevFallback: !hasIndependentDestination)
         // A fully independent existing Omdo installation needs no data import.
         if hasIndependentDestination {
             guard source.values.allSatisfy(\.isEmpty) else { throw Failure.destinationConflict(destination) }
             try MigrationFiles.requireDirectory(destination)
+            discardAbandonedLiquidCopy(models)
             return try await openStores(at: destination)
         }
 
@@ -300,7 +458,8 @@ nonisolated struct ApplicationSupportMigration: Sendable {
                 throw Failure.destinationConflict(destination)
             }
             // A crash may have happened after promotion or during store validation.
-            if previous.source != source {
+            // Older journals included the optional model cache in their source snapshot.
+            if previous.source?.filter({ $0.key != "Models/Liquid" }) != source {
                 let saved = paths.uncommittedData
                 guard try MigrationFiles.attributes(saved) == nil else { throw Failure.previousAttempt(saved) }
                 // Preserve one interrupted copy in case it was modified outside Omdo.
@@ -323,13 +482,11 @@ nonisolated struct ApplicationSupportMigration: Sendable {
             // Only this attempt owns this UUID. After promotion there is no staging
             // path, and the journal takes care of the promoted directory on retry.
             defer { try? files.removeItem(at: staging) }
-            for parent in [paths.legacy, paths.legacy.appendingPathComponent("Models")] {
-                if try MigrationFiles.attributes(parent) != nil { try MigrationFiles.requireDirectory(parent) }
-            }
-            let copiedBytes = source.filter { $0.key != "Models/Liquid" }.values
+            if try MigrationFiles.attributes(paths.legacy) != nil { try MigrationFiles.requireDirectory(paths.legacy) }
+            let copiedBytes = source.values
                 .flatMap(\.values).filter { !$0.directory }.reduce(Int64(0)) { $0 + $1.length }
             try MigrationFiles.requireSpace(copiedBytes, at: staging)
-            for component in components where component != "Models/Liquid" {
+            for component in components {
                 let origin = paths.legacy.appendingPathComponent(component)
                 let target = staging.appendingPathComponent(component)
                 guard let entries = source[component], !entries.isEmpty else { continue }
@@ -349,8 +506,6 @@ nonisolated struct ApplicationSupportMigration: Sendable {
             if source[Self.devFallbackComponent] != nil {
                 try importLegacyDevPrompt(into: staging)
             }
-            if reportsMigration { await report(.checkingSpeechModels) }
-            if try copyLiquid(into: staging), reportsMigration { await report(.speechModelsIncomplete) }
             for relativePath in Self.storeDatabasePaths {
                 do {
                     try normalizeDatabase(staging.appendingPathComponent(relativePath),
@@ -384,20 +539,46 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         }
         committed.phase = .committed
         committed.source = nil
+        committed.liquidImportPending = reportsMigration && models.hasLegacyFiles ? true : nil
         try save(committed, to: journalURL)
         stores.isNewStorage = isNewStorage
+
+        // Finish committing required data before using disk space for the optional model.
+        if reportsMigration { await report(.checkingSpeechModels) }
+        if committed.liquidImportPending == true {
+            try await finishLiquidImport(models, journal: committed, at: journalURL, resuming: false, report: report)
+        } else {
+            discardAbandonedLiquidCopy(models)
+        }
         return stores
     }
 
-    private func hasLegacyData() throws -> Bool {
+    private func finishLiquidImport(_ models: LiquidModelMigration, journal: Journal, at journalURL: URL,
+                                    resuming: Bool, report: @Sendable (Progress) async -> Void) async throws {
+        let issue = try models.importModels(into: paths.current, requireComplete: resuming)
+        var settled = journal
+        settled.liquidImportPending = nil
+        do { try save(settled, to: journalURL) }
+        catch {
+            // The user data commit is already durable. A pending Liquid import can safely retry.
+            Self.logger.error("Could not finish the Liquid migration journal: \(error.localizedDescription, privacy: .private)")
+        }
+        if let issue { await report(.speechModelsIncomplete(issue)) }
+    }
+
+    private func discardAbandonedLiquidCopy(_ models: LiquidModelMigration) {
+        do { try models.discardStagedCopy(in: paths.current) }
+        catch { Self.logger.error("Could not remove a staged Liquid copy: \(error.localizedDescription, privacy: .private)") }
+    }
+
+    private func hasLegacyData(includeModels: Bool) throws -> Bool {
         let legacy = paths.legacy
         guard try MigrationFiles.attributes(legacy) != nil else {
             return try MigrationFiles.attributes(paths.current) == nil && legacyDevPrompt() != nil
         }
         try MigrationFiles.requireDirectory(legacy)
-        let models = legacy.appendingPathComponent("Models")
-        if try MigrationFiles.attributes(models) != nil { try MigrationFiles.requireDirectory(models) }
-        if try Self.components.contains(where: { try MigrationFiles.attributes(legacy.appendingPathComponent($0)) != nil }) {
+        if try Self.components.contains(where: { try MigrationFiles.attributes(legacy.appendingPathComponent($0)) != nil })
+            || (includeModels && (try? MigrationFiles.attributes(legacy.appendingPathComponent("Models/Liquid"))) != nil) {
             return true
         }
         return try MigrationFiles.attributes(paths.current) == nil && legacyDevPrompt() != nil
@@ -406,9 +587,7 @@ nonisolated struct ApplicationSupportMigration: Sendable {
     private static let devFallbackComponent = "Dev fallback prompt"
 
     private func snapshotSource(includeDevFallback: Bool = true) throws -> [String: [String: MigrationFiles.Fingerprint]] {
-        for parent in [paths.legacy, paths.legacy.appendingPathComponent("Models")] {
-            if try MigrationFiles.attributes(parent) != nil { try MigrationFiles.requireDirectory(parent) }
-        }
+        if try MigrationFiles.attributes(paths.legacy) != nil { try MigrationFiles.requireDirectory(paths.legacy) }
         var source = try Dictionary(uniqueKeysWithValues: Self.components.map {
             ($0, try MigrationFiles.snapshot(paths.legacy.appendingPathComponent($0)))
         })
@@ -438,33 +617,6 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         guard let attributes = try MigrationFiles.attributes(legacy),
               attributes[.type] as? FileAttributeType == .typeRegular else { return nil }
         return legacy
-    }
-
-    /// Reports a partial or invalid set of existing files. Missing models are optional.
-    private func copyLiquid(into staging: URL) throws -> Bool {
-        let component = "Models/Liquid/\(LiquidAssets.revision)"
-        let old = paths.legacy.appendingPathComponent(component)
-        guard try MigrationFiles.attributes(old) != nil else { return false }
-        let target = staging.appendingPathComponent(component)
-        var hasExistingAsset = false
-        let verifiedAssets = try LiquidAssets.files.filter { asset in
-            let source = old.appendingPathComponent(asset.name)
-            guard try MigrationFiles.attributes(source) != nil else { return false }
-            hasExistingAsset = true
-            return try LiquidAssets.verify(source, asset: asset)
-        }
-        if !verifiedAssets.isEmpty {
-            try MigrationFiles.requireSpace(verifiedAssets.reduce(Int64(0)) { $0 + $1.bytes }, at: staging)
-            try MigrationFiles.makePrivateDirectory(target)
-        }
-        for asset in verifiedAssets {
-            let source = old.appendingPathComponent(asset.name)
-            let copy = target.appendingPathComponent(asset.name)
-            try FileManager.default.copyItem(at: source, to: copy)
-            guard try LiquidAssets.verify(copy, asset: asset) else { throw Failure.sourceChanged }
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: copy.path)
-        }
-        return hasExistingAsset && verifiedAssets.count < LiquidAssets.files.count
     }
 
     private func markDestination(_ root: URL, journal: inout Journal) throws {

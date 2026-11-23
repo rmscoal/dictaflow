@@ -54,6 +54,18 @@ struct ContentView: View {
         .sheet(item: $appState.modelPickerPresentation) { presentation in
             ModelPickerSheet(appState: appState, presentation: presentation)
         }
+        .sheet(isPresented: $appState.showsSpeechModelsDuringOnboarding) {
+            if let voice = appState.agentVoice {
+                VStack(alignment: .trailing, spacing: 14) {
+                    AgentVoiceModelsTab(appState: appState, voice: voice)
+                    Button("Done") { appState.showsSpeechModelsDuringOnboarding = false }
+                        .buttonStyle(EmberButtonStyle())
+                        .keyboardShortcut(.defaultAction)
+                }
+                .padding(24)
+                .frame(width: 560)
+            }
+        }
         .alert("Recording failed", isPresented: Binding(
             get: { appState.recordingFailureMessage != nil },
             set: { if !$0 { appState.dismissRecordingFailure() } }

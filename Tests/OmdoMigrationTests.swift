@@ -150,7 +150,155 @@ final class OmdoMigrationTests: XCTestCase {
         let progress = ProgressLog()
         _ = try await ApplicationSupportMigration(paths: paths).prepare(report: { await progress.append($0) }) { false }
         let events = await progress.values
-        XCTAssertEqual(events, [.started(resuming: false), .copyingData, .checkingSpeechModels, .speechModelsIncomplete, .openingStores])
+        XCTAssertEqual(events, [.started(resuming: false), .copyingData, .openingStores, .checkingSpeechModels, .speechModelsIncomplete(.incomplete)])
+    }
+
+    func testLiquidMigrationClonesOnAPFSBeforeCheckingCopySpace() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow")
+        let volume = try paths.applicationSupport.resourceValues(forKeys: [.volumeSupportsFileCloningKey])
+        try XCTSkipUnless(volume.volumeSupportsFileCloning == true, "This fixture requires file cloning support.")
+        let modelPath = "Models/Liquid/\(LiquidAssets.revision)/fixture.gguf"
+        let source = paths.legacy.appendingPathComponent(modelPath)
+        let destination = paths.current.appendingPathComponent(modelPath)
+        let modelData = Data("abc".utf8)
+        let asset = LiquidAsset(name: "fixture.gguf", bytes: 3,
+                                sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try modelData.write(to: source)
+
+        let models = LiquidModelMigration(legacy: paths.legacy, assets: [asset]) { _, _ in
+            XCTFail("A clone must not be gated by the physical-copy space check.")
+            throw ApplicationSupportMigration.Failure.insufficientSpace
+        }
+        _ = try await ApplicationSupportMigration(paths: paths).prepare(liquidModels: models) { false }
+
+        let keys: Set<URLResourceKey> = [.fileContentIdentifierKey]
+        let sourceContent = try XCTUnwrap(source.resourceValues(forKeys: keys).fileContentIdentifier)
+        let destinationContent = try XCTUnwrap(destination.resourceValues(forKeys: keys).fileContentIdentifier)
+        XCTAssertEqual(sourceContent, destinationContent)
+        let sourceInode = try XCTUnwrap(MigrationFiles.attributes(source)?[.systemFileNumber] as? NSNumber)
+        let destinationInode = try XCTUnwrap(MigrationFiles.attributes(destination)?[.systemFileNumber] as? NSNumber)
+        XCTAssertNotEqual(sourceInode, destinationInode)
+        let handle = try FileHandle(forWritingTo: destination)
+        defer { try? handle.close() }
+        try handle.write(contentsOf: Data("xyz".utf8))
+        XCTAssertEqual(try Data(contentsOf: source), modelData)
+        XCTAssertEqual(try Data(contentsOf: destination), Data("xyz".utf8))
+    }
+
+    func testLiquidSpaceFailureCommitsUserDataAndModelCanBeRestoredLater() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow")
+        let modelPath = "Models/Liquid/\(LiquidAssets.revision)/fixture.gguf"
+        let source = paths.legacy.appendingPathComponent(modelPath)
+        let destination = paths.current.appendingPathComponent(modelPath)
+        let prompt = paths.legacy.appendingPathComponent("Prompts/refinement.txt")
+        let modelData = Data("abc".utf8)
+        let asset = LiquidAsset(name: "fixture.gguf", bytes: 3,
+                                sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        for file in [source, prompt] {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        try modelData.write(to: source)
+        try Data("keep my prompt".utf8).write(to: prompt)
+
+        let progress = ProgressLog()
+        let lowDisk = LiquidModelMigration(legacy: paths.legacy, assets: [asset], cloneFile: { _, _ in false }) { _, _ in
+            throw ApplicationSupportMigration.Failure.insufficientSpace
+        }
+        let migration = ApplicationSupportMigration(paths: paths)
+        _ = try await migration.prepare(report: { await progress.append($0) }, liquidModels: lowDisk) { false }
+        let events = await progress.values
+        XCTAssertEqual(events, [.started(resuming: false), .copyingData, .openingStores, .checkingSpeechModels,
+                                .speechModelsIncomplete(.insufficientSpace)])
+        XCTAssertEqual(try Data(contentsOf: paths.current.appendingPathComponent("Prompts/refinement.txt")), Data("keep my prompt".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+
+        let partial = destination.deletingLastPathComponent().appendingPathComponent(".restore-copy.download")
+        try FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("interrupted copy".utf8).write(to: partial)
+        let nextLaunch = ProgressLog()
+        _ = try await migration.prepare(report: { await nextLaunch.append($0) }, liquidModels: lowDisk) { false }
+        let eventsAfterCommit = await nextLaunch.values
+        XCTAssertTrue(eventsAfterCommit.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
+        let restored = LiquidModelMigration(legacy: paths.legacy, assets: [asset], cloneFile: { _, _ in false })
+        XCTAssertTrue(restored.canRestore)
+        try await restored.restore(into: paths.current)
+        try await lowDisk.restore(into: paths.current)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
+        XCTAssertEqual(try Data(contentsOf: destination), modelData)
+        XCTAssertEqual(try Data(contentsOf: source), modelData)
+    }
+
+    func testInterruptedLiquidImportResumesOrDefersWithoutRecopyingUserData() async throws {
+        for enoughSpace in [true, false] {
+            let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow")
+            let modelDirectory = "Models/Liquid/\(LiquidAssets.revision)"
+            let asset = LiquidAsset(name: "fixture.gguf", bytes: 3,
+                                    sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+            let source = paths.legacy.appendingPathComponent(modelDirectory).appendingPathComponent(asset.name)
+            let target = paths.current.appendingPathComponent(modelDirectory)
+            let originalPrompt = paths.legacy.appendingPathComponent("Prompts/refinement.txt")
+            let copiedPrompt = paths.current.appendingPathComponent("Prompts/refinement.txt")
+            for file in [source, originalPrompt] {
+                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            }
+            try Data("abc".utf8).write(to: source)
+            try Data("original".utf8).write(to: originalPrompt)
+            let migration = ApplicationSupportMigration(paths: paths)
+            let interrupted = LiquidModelMigration(legacy: paths.legacy, assets: [asset],
+                                                   cloneFile: { _, _ in throw CancellationError() })
+            do {
+                _ = try await migration.prepare(liquidModels: interrupted) { false }
+                XCTFail("Expected an interruption during the Liquid import.")
+            } catch is CancellationError {}
+
+            XCTAssertEqual(try Data(contentsOf: copiedPrompt), Data("original".utf8))
+            try Data("edited after commit".utf8).write(to: copiedPrompt)
+            let partial = target.appendingPathComponent(".restore-copy.download")
+            try Data("partial copy".utf8).write(to: partial)
+            let retry = LiquidModelMigration(legacy: paths.legacy, assets: [asset], cloneFile: { _, _ in false }) { _, _ in
+                XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
+                if !enoughSpace { throw ApplicationSupportMigration.Failure.insufficientSpace }
+            }
+            let progress = ProgressLog()
+            _ = try await migration.prepare(report: { await progress.append($0) }, liquidModels: retry) { false }
+            let events = await progress.values
+            XCTAssertEqual(events, enoughSpace ? [.resumingSpeechModels]
+                                               : [.resumingSpeechModels, .speechModelsIncomplete(.insufficientSpace)])
+            XCTAssertEqual(try Data(contentsOf: copiedPrompt), Data("edited after commit".utf8))
+            XCTAssertEqual(try Data(contentsOf: source), Data("abc".utf8))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
+            XCTAssertEqual(FileManager.default.fileExists(atPath: target.appendingPathComponent(asset.name).path), enoughSpace)
+            let routineLaunch = ProgressLog()
+            _ = try await migration.prepare(report: { await routineLaunch.append($0) }, liquidModels: retry) { false }
+            let routineEvents = await routineLaunch.values
+            XCTAssertTrue(routineEvents.isEmpty)
+        }
+    }
+
+    func testPromptOnlyUpgradeDoesNotResumeLiquidAfterInterruption() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow")
+        let prompt = paths.legacy.appendingPathComponent("Prompts/refinement.txt")
+        try FileManager.default.createDirectory(at: prompt.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("legacy prompt".utf8).write(to: prompt)
+        let journalURL = paths.storageWork.appendingPathComponent("storage.json")
+        let journalAtModelCheck = OSAllocatedUnfairLock<Data?>(initialState: nil)
+        let migration = ApplicationSupportMigration(paths: paths)
+        _ = try await migration.prepare(report: { progress in
+            guard progress == .checkingSpeechModels else { return }
+            let journal = try? Data(contentsOf: journalURL)
+            journalAtModelCheck.withLock { $0 = journal }
+        }) { false }
+
+        // Relaunch with the journal that was on disk before the model step returned.
+        let interruptedJournal = try XCTUnwrap(journalAtModelCheck.withLock { $0 })
+        try interruptedJournal.write(to: journalURL, options: .atomic)
+        let progress = ProgressLog()
+        _ = try await migration.prepare(report: { await progress.append($0) }) { false }
+        let relaunchEvents = await progress.values
+        XCTAssertTrue(relaunchEvents.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: paths.current.appendingPathComponent("Prompts/refinement.txt")), Data("legacy prompt".utf8))
     }
 
     func testStorageSpaceCheckIgnoresUnusedLiquidRevision() async throws {
@@ -214,7 +362,7 @@ final class OmdoMigrationTests: XCTestCase {
 
         _ = try await migration.prepare(report: { await progress.append($0) }) { false }
         let allEvents = await progress.values
-        XCTAssertEqual(allEvents, [.started(resuming: true), .started(resuming: true), .copyingData, .checkingSpeechModels, .openingStores])
+        XCTAssertEqual(allEvents, [.started(resuming: true), .started(resuming: true), .copyingData, .openingStores, .checkingSpeechModels])
     }
 
     func testConcurrentMigrationReportsAnActionableFailure() async throws {

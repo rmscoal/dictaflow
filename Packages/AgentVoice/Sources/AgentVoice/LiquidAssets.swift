@@ -6,6 +6,13 @@ public struct LiquidAsset: Sendable {
     public let name: String
     public let bytes: Int64
     public let sha256: String
+
+    public init(name: String, bytes: Int64, sha256: String) {
+        self.name = name
+        self.bytes = bytes
+        self.sha256 = sha256
+    }
+
     public var url: URL {
         URL(string: "https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF/resolve/\(LiquidAssets.revision)/\(name)")!
     }

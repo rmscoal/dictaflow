@@ -4,6 +4,7 @@ import SwiftUI
 /// General controls, speech model, and host setup. Host status describes
 /// installed configuration, not a live MCP connection.
 struct AgentVoiceConnectionsTab: View {
+    @ObservedObject var appState: DictaFlowAppState
     @ObservedObject var voice: AgentVoiceCoordinator
     /// Copies setup snippets. Wired to the shared pasteboard writer so
     /// copied text is marked transient and concealed.
@@ -63,7 +64,8 @@ struct AgentVoiceConnectionsTab: View {
                     .accessibilityLabel("Agent Voice error. \(error.message)")
             }
 
-            AgentVoiceModelsTab(voice: voice)
+            AgentVoiceModelsTab(appState: appState, voice: voice)
+                .id("speech-model-settings")
                 .padding(.bottom, 22)
 
             EmberSectionHeading(title: "Connections")

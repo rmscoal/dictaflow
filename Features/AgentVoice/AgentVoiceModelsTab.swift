@@ -3,8 +3,15 @@ import SwiftUI
 
 /// Speech model section in General. Liquid is shared with dictation.
 struct AgentVoiceModelsTab: View {
+    @ObservedObject var appState: DictaFlowAppState
     @ObservedObject var voice: AgentVoiceCoordinator
     @State private var confirmsCancellation = false
+    @State private var whisperFallback: WhisperModelDescriptor?
+    @State private var isSwitchingToWhisper = false
+
+    private var fallbackCandidates: [WhisperModelDescriptor] {
+        voice.isModelReady || voice.isCheckingSpeechModel ? [] : appState.whisperFallbackCandidates
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -17,8 +24,8 @@ struct AgentVoiceModelsTab: View {
                     } else if voice.isModelReady {
                         EmberReadyBadge()
                             .font(.system(size: 12))
-                    } else if voice.isCheckingSpeechModel {
-                        ProgressView(AgentVoiceCoordinator.checkingSpeechModelText)
+                    } else if voice.isCheckingSpeechModel || voice.isRestoringLegacyModel {
+                        ProgressView(voice.isRestoringLegacyModel ? "Restoring Liquid…" : AgentVoiceCoordinator.checkingSpeechModelText)
                             .controlSize(.small)
                             .font(.system(size: 12))
                     } else {
@@ -42,6 +49,9 @@ struct AgentVoiceModelsTab: View {
                     }
                     .padding(.horizontal, 20).padding(.bottom, 18)
                 }
+                if !voice.isModelReady && !voice.isCheckingSpeechModel {
+                    recoveryActions
+                }
                 EmberDivider()
                 voicePicker
                 EmberDivider()
@@ -57,11 +67,59 @@ struct AgentVoiceModelsTab: View {
                     .accessibilityLabel("Liquid download failed. \(error.message)")
             }
         }
+        .task(id: fallbackCandidates) {
+            whisperFallback = nil
+            let verified = await appState.verifiedWhisperFallback(from: fallbackCandidates)
+            if !Task.isCancelled { whisperFallback = verified }
+        }
         .alert("Cancel download?", isPresented: $confirmsCancellation) {
             Button("Keep downloading", role: .cancel) {}
             Button("Cancel download", role: .destructive) { voice.cancelModelDownload() }
         } message: {
             Text("The partial file will be removed. Any verified model files will be kept for retry.")
+        }
+    }
+
+    private var recoveryActions: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            if let error = voice.legacyModelRestoreError {
+                EmberWarningLabel(error)
+                    .font(.system(size: 12))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if voice.canRestoreLegacyModel {
+                Text("Reuse model files from your previous DictaFlow installation.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(AppTheme.secondaryText)
+            }
+            if voice.canRestoreLegacyModel || whisperFallback.map(fallbackCandidates.contains) == true {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { recoveryButtons }
+                    VStack(alignment: .leading, spacing: 8) { recoveryButtons }
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, voice.canRestoreLegacyModel || voice.legacyModelRestoreError != nil || whisperFallback != nil ? 14 : 0)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var recoveryButtons: some View {
+        if voice.canRestoreLegacyModel {
+            Button("Restore from DictaFlow") { voice.restoreLegacyModel() }
+                .buttonStyle(EmberButtonStyle())
+                .disabled(voice.isRestoringLegacyModel || voice.isDownloading)
+        }
+        if let model = whisperFallback, fallbackCandidates.contains(model) {
+            Button("Use Whisper") {
+                isSwitchingToWhisper = true
+                Task {
+                    await appState.useWhisperFallback(model)
+                    isSwitchingToWhisper = false
+                }
+            }
+            .buttonStyle(EmberButtonStyle())
+            .disabled(appState.whisperSettingsLocked || isSwitchingToWhisper)
+            .help("Use the verified \(model.displayName) model for dictation")
         }
     }
 
