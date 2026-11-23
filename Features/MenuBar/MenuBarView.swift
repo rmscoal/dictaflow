@@ -27,7 +27,6 @@ struct MenuBarView: View {
         .padding(16)
         .frame(width: 364)
         .foregroundStyle(AppTheme.primaryText)
-        .omdoFloatingWindowBackground(in: Rectangle(), showsRim: false)
         .tint(AppTheme.accent)
     }
 
@@ -151,7 +150,7 @@ struct MenuBarView: View {
                 appState.toggleDictation()
             } label: {
                 HStack(spacing: 8) {
-                    Label(title, systemImage: recording ? "stop.fill" : "mic")
+                    Label(title, systemImage: appState.recordingState.actionSymbol)
                         .fontWeight(.semibold)
                     Spacer(minLength: 0)
                     ShortcutKeycaps(shortcut: appState.globalShortcut, onPrimary: true)

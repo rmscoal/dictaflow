@@ -19,7 +19,7 @@ struct AppearanceSettingsView: View {
                             .font(.system(size: 13))
                         }
                         .padding(10).frame(maxWidth: .infinity)
-                        .background(AppTheme.tileFill, in: RoundedRectangle(cornerRadius: 10))
+                        .background(AppTheme.selectedFill, in: RoundedRectangle(cornerRadius: 10))
                         .overlay {
                             RoundedRectangle(cornerRadius: 10)
                                 .stroke(appearance == option ? AppTheme.accent : AppTheme.border, lineWidth: appearance == option ? 2 : 1)
@@ -41,12 +41,16 @@ private struct AppearanceThumbnail: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let sidebarWidth = geometry.size.width * 0.32
             ZStack {
-                miniature(dark: appearance == .dark)
+                miniature(sidebarWidth: sidebarWidth)
+                    .environment(\.colorScheme, appearance == .dark ? .dark : .light)
                 if appearance == .system {
-                    miniature(dark: true).mask(alignment: .trailing) {
-                        Rectangle().frame(width: geometry.size.width / 2)
-                    }
+                    miniature(sidebarWidth: sidebarWidth)
+                        .environment(\.colorScheme, .dark)
+                        .mask(alignment: .trailing) {
+                            Rectangle().frame(width: geometry.size.width / 2)
+                        }
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -55,17 +59,59 @@ private struct AppearanceThumbnail: View {
         .accessibilityHidden(true)
     }
 
-    private func miniature(dark: Bool) -> some View {
+    private func miniature(sidebarWidth: CGFloat) -> some View {
         HStack(spacing: 0) {
-            Rectangle().fill((dark ? Color(red: 38.0/255, green: 39.0/255, blue: 34.0/255) : Color(red: 233.0/255, green: 228.0/255, blue: 216.0/255)))
-                .frame(width: 72)
-            VStack {
-                Spacer()
-                RoundedRectangle(cornerRadius: 10).fill(Color(red: dark ? 0.251 : 1, green: dark ? 0.224 : 0.992, blue: dark ? 0.176 : 0.973))
-                    .frame(height: 68).padding(.horizontal, 16)
-                Spacer()
+            VStack(alignment: .leading, spacing: 5) {
+                EmberAppMark(size: 19)
+                    .padding(.bottom, 5)
+                sidebarRow("waveform", selected: true)
+                sidebarRow("person.wave.2")
+                sidebarRow("clock")
             }
-            .background(dark ? Color(red: 0.09, green: 0.094, blue: 0.086) : Color(red: 0.953, green: 0.941, blue: 0.914))
+            .padding(7)
+            .frame(width: sidebarWidth)
+            .frame(maxHeight: .infinity, alignment: .topLeading)
+            .background(AppTheme.sidebar)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Capsule().fill(AppTheme.primaryText).frame(width: 18, height: 4)
+                    Spacer(minLength: 2)
+                    Image(systemName: "mic")
+                        .font(.system(size: 7, weight: .semibold))
+                        .foregroundStyle(AppTheme.actionText)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(AppTheme.actionFill, in: Capsule())
+                }
+                Capsule().fill(AppTheme.primaryText).frame(width: 34, height: 6)
+                VStack(alignment: .leading, spacing: 8) {
+                    Capsule().fill(AppTheme.primaryText).frame(width: 24, height: 4)
+                    Capsule().fill(AppTheme.secondaryText).frame(height: 3)
+                    Capsule().fill(AppTheme.secondaryText).frame(width: 18, height: 3)
+                }
+                .padding(8)
+                .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 8))
+            }
+            .padding(9)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(AppTheme.background)
+        }
+    }
+
+    private func sidebarRow(_ symbol: String, selected: Bool = false) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: symbol)
+                .font(.system(size: 7))
+                .frame(width: 8)
+            Capsule().frame(height: 3)
+        }
+        .foregroundStyle(AppTheme.primaryText)
+        .padding(4)
+        .background {
+            if selected {
+                RoundedRectangle(cornerRadius: 5).fill(AppTheme.selectedFill)
+            }
         }
     }
 }

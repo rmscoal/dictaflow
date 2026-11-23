@@ -429,7 +429,7 @@ private struct RecordingOverlayView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(AppTheme.primaryText)
-        .omdoFloatingWindowBackground(in: Capsule())
+        .omdoFloatingWindowBackground(in: Capsule(), strongerLightTint: true)
     }
 
     private var recordingContent: some View {

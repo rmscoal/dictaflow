@@ -7,6 +7,8 @@ enum DictationRecordingState: Equatable {
     case recording(startedAt: Date, fileURL: URL)
     case stopping
 
+    var actionSymbol: String { isRecording ? "stop.fill" : "mic" }
+
     var isRecording: Bool {
         if case .recording = self {
             return true

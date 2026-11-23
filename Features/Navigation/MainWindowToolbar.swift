@@ -21,7 +21,7 @@ struct MainWindowToolbar: View {
                     .transition(.scale(scale: 0.85).combined(with: .opacity))
             }
             Button { appState.toggleDictation() } label: {
-                Label(recordTitle, systemImage: appState.recordingState.isRecording ? "stop" : "mic")
+                Label(recordTitle, systemImage: appState.recordingState.actionSymbol)
             }
             .buttonStyle(EmberButtonStyle(primary: true))
             .disabled(appState.isDictationActionDisabled)

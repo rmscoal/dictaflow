@@ -61,7 +61,7 @@ struct AppSidebar: View {
             .padding(.horizontal, collapsed ? 8 : 11).padding(.vertical, 13)
             .background {
                 if selected {
-                    OmdoGlass(shape: RoundedRectangle(cornerRadius: 14), tint: AppTheme.selectedFill)
+                    RoundedRectangle(cornerRadius: 14).fill(AppTheme.selectedFill)
                 }
             }
             .contentShape(RoundedRectangle(cornerRadius: 14))

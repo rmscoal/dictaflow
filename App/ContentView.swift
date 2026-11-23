@@ -48,7 +48,7 @@ struct ContentView: View {
         }
         .frame(minWidth: AppLayout.windowMinWidth, minHeight: AppLayout.windowMinHeight)
         .foregroundStyle(AppTheme.primaryText)
-        .omdoWindowTint(in: RoundedRectangle(cornerRadius: 12))
+        .omdoWindowTint(in: Rectangle(), showsRim: false)
         .tint(AppTheme.accent)
         .ignoresSafeArea(.container, edges: .top)
         .sheet(item: $appState.modelPickerPresentation) { presentation in

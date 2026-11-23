@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// A translucent tint over the window's shared backdrop. Detached surfaces
-/// can supply their own material when they need an independent background.
+/// A tint over the shared backdrop. Detached surfaces can supply their own material.
 struct OmdoGlass<Surface: InsettableShape>: View {
     let shape: Surface
     var tint = AppTheme.glass
@@ -20,13 +19,7 @@ struct OmdoGlass<Surface: InsettableShape>: View {
             shape.fill(tint.opacity(reduceTransparency ? 1 : tintOpacity))
             if showsRim {
                 shape.strokeBorder(
-                    LinearGradient(
-                        colors: colorScheme == .dark
-                            ? [.white.opacity(0.24), .white.opacity(0.08)]
-                            : [.white.opacity(0.9), .black.opacity(0.17)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
+                    colorScheme == .dark ? .white.opacity(0.16) : .black.opacity(0.14),
                     lineWidth: 1
                 )
             }
@@ -56,14 +49,18 @@ private struct OmdoControlSurface<Surface: InsettableShape>: View {
 private struct OmdoWindowTint<Surface: InsettableShape>: View {
     let shape: Surface
     let showsRim: Bool
+    var strongerLightTint = false
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
+        // A stronger neutral tint keeps floating controls readable over bright content.
+        let usesStrongerTint = strongerLightTint && colorScheme == .light && !reduceTransparency
         OmdoGlass(
             shape: shape,
-            tint: AppTheme.background,
-            tintOpacity: colorScheme == .dark ? 0.36 : 0.26,
+            tint: usesStrongerTint ? Color(white: 0.67) : AppTheme.background,
+            tintOpacity: usesStrongerTint ? 0.72 : 0.28,
             showsRim: showsRim
         )
     }
@@ -74,9 +71,11 @@ extension View {
         background { OmdoWindowTint(shape: shape, showsRim: showsRim) }
     }
 
-    func omdoFloatingWindowBackground<S: InsettableShape>(in shape: S, showsRim: Bool = true) -> some View {
+    func omdoFloatingWindowBackground<S: InsettableShape>(
+        in shape: S, showsRim: Bool = true, strongerLightTint: Bool = false
+    ) -> some View {
         background {
-            OmdoWindowTint(shape: shape, showsRim: showsRim)
+            OmdoWindowTint(shape: shape, showsRim: showsRim, strongerLightTint: strongerLightTint)
                 .background { OmdoWindowBackdrop().clipShape(shape) }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)

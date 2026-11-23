@@ -251,7 +251,6 @@ private enum AgentVoiceOverlayLayout {
 
 private struct AgentVoiceOverlay: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var colorScheme
     let source: String
     let status: String
     let isReady: Bool
@@ -268,7 +267,7 @@ private struct AgentVoiceOverlay: View {
     }
 
     private var statusColor: Color {
-        isReady && colorScheme == .dark ? AppTheme.ready : AppTheme.secondaryText
+        isReady ? AppTheme.ready : AppTheme.secondaryText
     }
 
     private var hostName: String { source.components(separatedBy: " · ").first ?? source }
@@ -321,7 +320,9 @@ private struct AgentVoiceOverlay: View {
         .help(source)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16).delay(isExpanded ? 0.1 : 0), value: isExpanded)
         .foregroundStyle(AppTheme.primaryText)
-        .omdoFloatingWindowBackground(in: RoundedRectangle(cornerRadius: AgentVoiceOverlayLayout.cornerRadius))
+        .omdoFloatingWindowBackground(
+            in: RoundedRectangle(cornerRadius: AgentVoiceOverlayLayout.cornerRadius), strongerLightTint: true
+        )
     }
 
     private var expandedContent: some View {

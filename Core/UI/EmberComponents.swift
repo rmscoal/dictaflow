@@ -89,21 +89,13 @@ struct EmberIconButtonStyle: ButtonStyle {
 struct EmberReadyBadge: View {
     var title = "Ready"
 
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
-        let label = Label(title, systemImage: "checkmark.circle.fill")
+        Label(title, systemImage: "checkmark.circle.fill")
             .foregroundStyle(AppTheme.ready)
-
-        if colorScheme == .dark {
-            label
-                .fontWeight(.semibold)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(AppTheme.ready.opacity(0.14), in: Capsule())
-        } else {
-            label
-        }
+            .fontWeight(.semibold)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(AppTheme.ready.opacity(0.14), in: Capsule())
     }
 }
 
