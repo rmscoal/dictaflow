@@ -729,6 +729,20 @@ final class OmdoMigrationTests: XCTestCase {
             try: return open(path).read()
             except FileNotFoundError: return ""
         def entry(name):
+            for line in read().splitlines():
+                if line.strip().startswith("mcp_servers") and not line.strip().startswith("["):
+                    im = re.search(re.escape(name) + r'\s*=\s*\{([^}]*)\}', line)
+                    if im:
+                        body = im.group(1)
+                        icmd = re.search(r'command\s*=\s*(?:\'([^\']*)\'|"((?:[^"\\]|\\.)*)")', body)
+                        iarg = re.search(r'args\s*=\s*\[(.*?)\]', body, re.S)
+                        ien = re.search(r'enabled\s*=\s*(true|false)', body)
+                        cmdv = (icmd.group(1) if icmd.group(1) is not None else json.loads('"' + icmd.group(2) + '"')) if icmd else ""
+                        argv = []
+                        if iarg:
+                            for sq, dq in re.findall(r"'([^']*)'|\"((?:[^\"\\]|\\.)*)\"", iarg.group(1)):
+                                argv.append(sq if sq else json.loads('"' + dq + '"'))
+                        return {"transport": {"command": cmdv, "args": argv}, "enabled": (ien.group(1) == "true") if ien else True}
             m = re.search(r'\[mcp_servers\.' + re.escape(name) + r'\]\n(.*?)(?=\n\[|\Z)', read(), re.S)
             if not m: return None
             body = m.group(1)
@@ -779,6 +793,154 @@ final class OmdoMigrationTests: XCTestCase {
         let configuration = try CodexMCPConfiguration(Data(contents.utf8))
         XCTAssertFalse(configuration.aliases.contains("dictaflow"))
         XCTAssertTrue(configuration.aliases.contains("omdo"))
+    }
+
+    /// Fake Codex CLI that reads and removes both section and inline
+    /// `mcp_servers` entries, preserving unrelated inline entries on removal.
+    private func fakeCodexCLI(in host: URL) throws -> URL {
+        let cli = host.appendingPathComponent("fake-codex")
+        let script = #"""
+        #!/usr/bin/env python3
+        import json, os, re, sys
+        args = sys.argv[1:]
+        if args == ["--version"]:
+            print("codex-cli 0.171.0"); raise SystemExit(0)
+        home = os.environ["CODEX_HOME"]
+        path = os.path.join(home, "config.toml")
+        def read():
+            try: return open(path).read()
+            except FileNotFoundError: return ""
+        def quoted(body, key):
+            m = re.search(key + r'\s*=\s*(?:\'([^\']*)\'|"((?:[^"\\]|\\.)*)")', body)
+            if not m: return ""
+            return m.group(1) if m.group(1) is not None else json.loads('"' + m.group(2) + '"')
+        def parse_body(body):
+            argv = []
+            am = re.search(r'args\s*=\s*\[(.*?)\]', body, re.S)
+            if am:
+                for sq, dq in re.findall(r"'([^']*)'|\"((?:[^\"\\]|\\.)*)\"", am.group(1)):
+                    argv.append(sq if sq else json.loads('"' + dq + '"'))
+            en = re.search(r'enabled\s*=\s*(true|false)', body)
+            return {"transport": {"command": quoted(body, "command"), "args": argv}, "enabled": (en.group(1) == "true") if en else True}
+        def entry(name):
+            for line in read().splitlines():
+                if line.strip().startswith("mcp_servers") and not line.strip().startswith("["):
+                    m = re.search(re.escape(name) + r'\s*=\s*\{([^}]*)\}', line)
+                    if m: return parse_body(m.group(1))
+            m = re.search(r'\[mcp_servers\.' + re.escape(name) + r'\]\n(.*?)(?=\n\[|\Z)', read(), re.S)
+            return parse_body(m.group(1)) if m else None
+        if args[:2] == ["mcp", "list"]:
+            print("omdo"); raise SystemExit(0)
+        if args[:2] == ["mcp", "get"]:
+            found = entry(args[-1])
+            if found is None: raise SystemExit(1)
+            print(json.dumps(found)); raise SystemExit(0)
+        if args[:2] == ["mcp", "remove"]:
+            name = args[-1]; out = []; skip = False
+            for line in read().splitlines(True):
+                stripped = line.strip()
+                if stripped.startswith("mcp_servers") and not stripped.startswith("[") and "=" in stripped:
+                    m = re.search(re.escape(name) + r'\s*=\s*\{[^}]*\}', line)
+                    if m:
+                        start, end = m.span()
+                        if end < len(line) and line[end] == ",":
+                            end += 1
+                            while end < len(line) and line[end] == " ": end += 1
+                        elif start > 0 and "," in line[:start]:
+                            start = line.rfind(",", 0, start)
+                        line = line[:start] + line[end:]
+                        if re.search(r'mcp_servers\s*=\s*\{\s*\}', line): continue
+                    out.append(line); continue
+                hdr = re.match(r'\[(.+)\]\s*$', stripped)
+                if hdr:
+                    parts = hdr.group(1).split(".")
+                    skip = len(parts) >= 2 and parts[0] == "mcp_servers" and parts[1].strip('"') == name
+                if skip: continue
+                out.append(line)
+            open(path, "w").write("".join(out)); raise SystemExit(0)
+        raise SystemExit(1)
+        """#
+        try Data(script.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        return cli
+    }
+
+    private func fakeCodexFixture(config: String) throws -> (host: URL, cli: URL, helper: URL, configURL: URL) {
+        let host = try fixture()
+        let cli = try fakeCodexCLI(in: host)
+        let helper = host.appendingPathComponent("dictaflow-mcp")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: helper)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+        let configURL = AgentVoiceHostInstaller.codexConfigURL(homeDirectoryURL: host)
+        try FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try config.write(to: configURL, atomically: true, encoding: .utf8)
+        return (host, cli, helper, configURL)
+    }
+
+    func testCodexSetupFallbackPreservesUnrelatedInlineServer() async throws {
+        let other = "other = { command = '/usr/bin/other', args = ['keep'] }"
+        let fixture = try fakeCodexFixture(config: """
+        model = "keep-this-setting"
+        mcp_servers = { dictaflow = { command = '/Applications/DictaFlow.app/Contents/MacOS/dictaflow-mcp', args = ['--app-id', 'com.dictaflow', '--installation-id', 'stale', '--host', 'codex'], enabled = false }, \(other) }
+        """)
+        let completion = try await AgentVoiceHostInstaller.setUp(
+            host: .codex, executable: fixture.helper.path, appID: "com.dictaflow.dev", installationID: installation,
+            agentVoiceEnabled: true, homeDirectoryURL: fixture.host, cliDiscovery: { _ in fixture.cli.path }, hostIdle: { true })
+        let contents = try String(contentsOf: fixture.configURL, encoding: .utf8)
+        XCTAssertTrue(completion.contains("remains disabled"), completion)
+        XCTAssertTrue(contents.contains(other), contents)
+        XCTAssertFalse(contents.contains("dictaflow = {"), contents)
+        let configuration = try CodexMCPConfiguration(Data(contents.utf8))
+        XCTAssertEqual(configuration.aliases, ["omdo", "other"])
+        XCTAssertTrue(configuration.isDisabled(alias: "omdo"))
+    }
+
+    func testCodexSetupFallbackRejectsForeignInlineEntryMentioningOwnedHelper() async throws {
+        let config = """
+        # previous helper lived at /Applications/DictaFlow.app/Contents/MacOS/dictaflow-mcp
+        mcp_servers = { dictaflow = { command = '/usr/bin/foreign', args = ['x'] } }
+        """
+        let fixture = try fakeCodexFixture(config: config)
+        do {
+            _ = try await AgentVoiceHostInstaller.setUp(
+                host: .codex, executable: fixture.helper.path, appID: "com.dictaflow.dev", installationID: installation,
+                agentVoiceEnabled: true, homeDirectoryURL: fixture.host, cliDiscovery: { _ in fixture.cli.path }, hostIdle: { true })
+            XCTFail("A foreign entry must not be removed on a file-wide text match")
+        } catch CodexMCPConfiguration.EditError.unknownOwner {}
+        XCTAssertEqual(try String(contentsOf: fixture.configURL, encoding: .utf8), config)
+    }
+
+    func testCodexSetupFallbackPreservesBothAliasesOnCollision() async throws {
+        let config = """
+        mcp_servers = { dictaflow = { command = '/Applications/DictaFlow.app/Contents/MacOS/dictaflow-mcp', args = ['a'] }, omdo = { command = '/Applications/Omdo.app/Contents/MacOS/dictaflow-mcp', args = ['b'] } }
+        """
+        let fixture = try fakeCodexFixture(config: config)
+        do {
+            _ = try await AgentVoiceHostInstaller.setUp(
+                host: .codex, executable: fixture.helper.path, appID: "com.dictaflow.dev", installationID: installation,
+                agentVoiceEnabled: true, homeDirectoryURL: fixture.host, cliDiscovery: { _ in fixture.cli.path }, hostIdle: { true })
+            XCTFail("Both aliases together must require manual resolution")
+        } catch CodexMCPConfiguration.EditError.collision {}
+        XCTAssertEqual(try String(contentsOf: fixture.configURL, encoding: .utf8), config)
+    }
+
+    func testCodexInlineUnrelatedServersSurviveCandidate() throws {
+        let other = "other = { command = '/usr/bin/other', args = ['keep'] }"
+        let original = Data("model = \"keep\"\nmcp_servers = { \(other) }\n".utf8)
+        let migrated = try CodexMCPConfiguration(original).candidate(
+            executable: currentHelper, arguments: ["ours"], ownsPath: { _ in false })
+        let output = String(decoding: migrated, as: UTF8.self)
+        XCTAssertTrue(output.contains(other), output)
+        let result = try CodexMCPConfiguration(migrated)
+        XCTAssertEqual(result.aliases, ["omdo", "other"])
+        // A managed alias inside an inline table stays strictly unsupported
+        // for editing, so setup falls back to the CLI for it.
+        for alias in ["dictaflow", "omdo"] {
+            let inline = try CodexMCPConfiguration(Data("mcp_servers = { \(alias) = {} }".utf8))
+            XCTAssertThrowsError(try inline.candidate(executable: currentHelper, arguments: ["ours"], ownsPath: { _ in true })) {
+                guard case CodexMCPConfiguration.EditError.unsupported = $0 else { return XCTFail("Expected unsupported") }
+            }
+        }
     }
 
     func testCodexAdoptsLegacyEntryWithDriftedArgsAcrossAppRename() throws {
@@ -845,7 +1007,10 @@ final class OmdoMigrationTests: XCTestCase {
         let original = Data("[mcp_servers.dictaflow]\ncommand = '/foreign'\nargs = ['foreign']\n".utf8)
         let parsed = try CodexMCPConfiguration(original)
         XCTAssertThrowsError(try parsed.candidate(executable: currentHelper, arguments: ["ours"], ownsPath: { _ in false }))
-        XCTAssertThrowsError(try CodexMCPConfiguration(Data("mcp_servers = { dictaflow = {} }".utf8)))
+        let inline = try CodexMCPConfiguration(Data("mcp_servers = { dictaflow = {} }".utf8))
+        XCTAssertThrowsError(try inline.candidate(executable: currentHelper, arguments: ["ours"], ownsPath: { _ in true })) {
+            guard case CodexMCPConfiguration.EditError.unsupported = $0 else { return XCTFail("Expected unsupported") }
+        }
     }
 
     func testMuseMovesRegistrationAndGuardTogetherAndPreservesDisabledFlag() throws {

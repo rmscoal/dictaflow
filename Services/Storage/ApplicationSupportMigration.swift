@@ -396,6 +396,14 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         var isNewStorage = false
     }
 
+    /// Whether the storage journal has reached its committed phase.
+    static func hasCompletedMigration(paths: ApplicationSupportPaths) -> Bool {
+        let journalURL = paths.storageWork.appendingPathComponent("storage.json")
+        guard let data = try? Data(contentsOf: journalURL),
+              let journal = try? JSONDecoder().decode(Journal.self, from: data) else { return false }
+        return journal.phase == .committed
+    }
+
     /// Called before constructing app state, while no services can write to either root.
     @concurrent func prepare(report: @Sendable (Progress) async -> Void = { _ in },
                              liquidModels: LiquidModelMigration? = nil,

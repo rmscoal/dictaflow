@@ -312,7 +312,8 @@ enum AgentVoiceHostInstaller {
                     _ = try CodexMCPConfiguration(original).candidate(executable: executable, arguments: arguments, ownsPath: ownsPath)
                 } catch CodexMCPConfiguration.EditError.unsupported {
                     codexFallback = (original, try await cliCleanedCodexCandidate(
-                        original: original, executable: executable, arguments: arguments, cli: cli, runner: runner))
+                        original: original, executable: executable, arguments: arguments, cli: cli, runner: runner,
+                        ownsPath: ownsPath))
                 } catch {}
             }
         }
@@ -375,29 +376,39 @@ enum AgentVoiceHostInstaller {
 
     /// Builds a candidate for a Codex config the TOML editor cannot parse, by
     /// letting the Codex CLI remove our server entries from an isolated copy.
-    /// Only runs when the file still names a DictaFlow or Omdo helper, so a
-    /// genuinely foreign entry keeps the manual path. The live file is only
-    /// written later, inside the journaled migration.
+    /// Each existing managed entry is decoded through the CLI and checked with
+    /// `ownsPath` before any removal, so a helper path in a comment or an
+    /// unrelated value is not ownership evidence. A profile with both aliases
+    /// is a collision, and an entry whose ownership cannot be established
+    /// keeps the manual path. The live file is only written later, inside the
+    /// journaled migration.
     private static func cliCleanedCodexCandidate(original: Data, executable: String, arguments: [String],
-                                                 cli: String, runner: any CommandRunner) async throws -> Data {
-        guard let text = String(data: original, encoding: .utf8) else { throw CodexMCPConfiguration.EditError.unsupported }
-        let bundles = ["DictaFlow.app", "DictaFlow Dev.app", "Omdo.app", "Omdo Dev.app"]
-        guard text.contains(executable)
-                || bundles.contains(where: { text.contains("/\($0)/Contents/MacOS/dictaflow-mcp") }) else {
-            throw CodexMCPConfiguration.EditError.unsupported
-        }
+                                                 cli: String, runner: any CommandRunner,
+                                                 ownsPath: (String) -> Bool) async throws -> Data {
+        guard String(data: original, encoding: .utf8) != nil else { throw CodexMCPConfiguration.EditError.unsupported }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("omdo-codex-fallback-\(UUID().uuidString)")
         try MigrationFiles.makePrivateDirectory(directory)
         defer { try? FileManager.default.removeItem(at: directory) }
         let isolatedConfig = directory.appendingPathComponent("config.toml")
         try MigrationFiles.replaceDurably(original, at: isolatedConfig)
         let scoped = scopedRunner(runner, codexDirectory: directory)
-        var disabled = false
+        // Decode every existing managed entry before removing anything.
+        var existing: [String: CodexEntry] = [:]
         for alias in [legacyAlias, serverAlias] {
-            if let probe = try? await run(scoped, cli: cli, host: .codex, args: ["mcp", "get", "--json", alias]),
-               probe.exitCode == 0,
-               let entry = try? JSONDecoder().decode(CodexEntry.self, from: Data(probe.stdout.utf8)),
-               entry.enabled == false { disabled = true }
+            guard let probe = try? await run(scoped, cli: cli, host: .codex, args: ["mcp", "get", "--json", alias]),
+                  probe.exitCode == 0 else { continue }
+            guard let entry = try? JSONDecoder().decode(CodexEntry.self, from: Data(probe.stdout.utf8)) else {
+                throw CodexMCPConfiguration.EditError.unsupported
+            }
+            existing[alias] = entry
+        }
+        guard !existing.isEmpty else { throw CodexMCPConfiguration.EditError.unsupported }
+        if existing.count > 1 { throw CodexMCPConfiguration.EditError.collision }
+        for entry in existing.values where !ownsPath(entry.transport.command) {
+            throw CodexMCPConfiguration.EditError.unknownOwner
+        }
+        let disabled = existing.values.contains { $0.enabled == false }
+        for alias in existing.keys {
             let removed = try await run(scoped, cli: cli, host: .codex, args: ["mcp", "remove", alias])
             guard removed.exitCode == 0 else {
                 throw InstallerError.commandFailed(host: Host.codex.name,
@@ -410,7 +421,20 @@ enum AgentVoiceHostInstaller {
             throw InstallerError.verificationFailed(host: Host.codex.name)
         }
         var candidate = try configuration.candidate(executable: executable, arguments: arguments, ownsPath: { _ in true })
-        if disabled { candidate.append(Data("enabled = false\n".utf8)) }
+        if disabled {
+            // A section candidate ends with the new entry, so a trailing line
+            // lands inside it. An inline candidate carries the entry inside
+            // the `mcp_servers` table, so the flag goes inside that entry.
+            if let text = String(data: candidate, encoding: .utf8),
+               let entryStart = text.range(of: "\(serverAlias) = {"),
+               let closing = text[entryStart.upperBound...].firstIndex(of: "}") {
+                var updated = text
+                updated.insert(contentsOf: ", enabled = false", at: closing)
+                candidate = Data(updated.utf8)
+            } else {
+                candidate.append(Data("enabled = false\n".utf8))
+            }
+        }
         return candidate
     }
 
