@@ -128,11 +128,17 @@ nonisolated struct CodexMCPConfiguration {
         }
         let commandRange = try singleton("command")
         let argsRange = try singleton("args")
-        guard let command = Self.string(text[commandRange]), ownsPath(command),
-              try Self.stringArray(text[argsRange]) == arguments else { throw EditError.unknownOwner }
+        // The helper path proves ownership. Recorded arguments embed the
+        // previous installation's app ID and random installation ID, so they
+        // are rewritten to the current values instead of required to match.
+        guard let command = Self.string(text[commandRange]), ownsPath(command) else { throw EditError.unknownOwner }
 
         var replacements: [Range<String.Index>: String] = [:]
         if command != executable { replacements[commandRange] = try Self.literal(executable) }
+        if try Self.stringArray(text[argsRange]) != arguments {
+            let values = try arguments.map(Self.literal).joined(separator: ", ")
+            replacements[argsRange] = "[\(values)]"
+        }
         if alias == old {
             for entry in owned { replacements[entry.path[1].range] = new }
         }

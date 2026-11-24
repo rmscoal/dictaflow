@@ -301,11 +301,31 @@ enum AgentVoiceHostInstaller {
         } else {
             cli = nil
         }
+        // TOML forms the built-in editor cannot safely edit (inline tables,
+        // multi-line values) fall back to the Codex CLI removing our entries
+        // from a copy; the journaled transaction below still writes the result.
+        var codexFallback: (original: Data, candidate: Data)?
+        if host == .codex, let cli {
+            let stored = (try? AgentVoiceHostMigration.read(config)) ?? nil
+            if let original = stored {
+                do {
+                    _ = try CodexMCPConfiguration(original).candidate(executable: executable, arguments: arguments, ownsPath: ownsPath)
+                } catch CodexMCPConfiguration.EditError.unsupported {
+                    codexFallback = (original, try await cliCleanedCodexCandidate(
+                        original: original, executable: executable, arguments: arguments, cli: cli, runner: runner))
+                } catch {}
+            }
+        }
         try await migration.apply(executable: executable, arguments: arguments) {
             let original = try AgentVoiceHostMigration.read(config)
             if let hooks = migration.hooks {
-                let configuration = try CodexMCPConfiguration(original)
-                let candidate = try configuration.candidate(executable: executable, arguments: arguments, ownsPath: ownsPath)
+                let candidate: Data
+                if let codexFallback, let original, codexFallback.original == original {
+                    candidate = codexFallback.candidate
+                } else {
+                    let configuration = try CodexMCPConfiguration(original)
+                    candidate = try configuration.candidate(executable: executable, arguments: arguments, ownsPath: ownsPath)
+                }
                 let originalHooks = try AgentVoiceHostMigration.read(hooks)
                 let root = try configurationObject(originalHooks, path: hooks.path)
                 let updated = try migratedHooks(root: root, host: host, executable: executable, ownsPath: ownsPath)
@@ -351,6 +371,47 @@ enum AgentVoiceHostInstaller {
         if host == .codex { message += " In the new session, open /hooks and review and trust the Omdo hooks." }
         if !agentVoiceEnabled { message += " Turn on Enable Agent Voice to use it." }
         return message
+    }
+
+    /// Builds a candidate for a Codex config the TOML editor cannot parse, by
+    /// letting the Codex CLI remove our server entries from an isolated copy.
+    /// Only runs when the file still names a DictaFlow or Omdo helper, so a
+    /// genuinely foreign entry keeps the manual path. The live file is only
+    /// written later, inside the journaled migration.
+    private static func cliCleanedCodexCandidate(original: Data, executable: String, arguments: [String],
+                                                 cli: String, runner: any CommandRunner) async throws -> Data {
+        guard let text = String(data: original, encoding: .utf8) else { throw CodexMCPConfiguration.EditError.unsupported }
+        let bundles = ["DictaFlow.app", "DictaFlow Dev.app", "Omdo.app", "Omdo Dev.app"]
+        guard text.contains(executable)
+                || bundles.contains(where: { text.contains("/\($0)/Contents/MacOS/dictaflow-mcp") }) else {
+            throw CodexMCPConfiguration.EditError.unsupported
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("omdo-codex-fallback-\(UUID().uuidString)")
+        try MigrationFiles.makePrivateDirectory(directory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let isolatedConfig = directory.appendingPathComponent("config.toml")
+        try MigrationFiles.replaceDurably(original, at: isolatedConfig)
+        let scoped = scopedRunner(runner, codexDirectory: directory)
+        var disabled = false
+        for alias in [legacyAlias, serverAlias] {
+            if let probe = try? await run(scoped, cli: cli, host: .codex, args: ["mcp", "get", "--json", alias]),
+               probe.exitCode == 0,
+               let entry = try? JSONDecoder().decode(CodexEntry.self, from: Data(probe.stdout.utf8)),
+               entry.enabled == false { disabled = true }
+            let removed = try await run(scoped, cli: cli, host: .codex, args: ["mcp", "remove", alias])
+            guard removed.exitCode == 0 else {
+                throw InstallerError.commandFailed(host: Host.codex.name,
+                    detail: removed.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        let cleaned = try Data(contentsOf: isolatedConfig)
+        let configuration = try CodexMCPConfiguration(cleaned)
+        guard !configuration.aliases.contains(legacyAlias), !configuration.aliases.contains(serverAlias) else {
+            throw InstallerError.verificationFailed(host: Host.codex.name)
+        }
+        var candidate = try configuration.candidate(executable: executable, arguments: arguments, ownsPath: { _ in true })
+        if disabled { candidate.append(Data("enabled = false\n".utf8)) }
+        return candidate
     }
 
     static func claudeProfileDirectory(_ home: URL? = nil) -> URL {
@@ -464,14 +525,16 @@ enum AgentVoiceHostInstaller {
         let existing = entries[legacyAlias] ?? entries[serverAlias]
         var entry: [String: Any]
         if let existing {
+            // The helper path proves ownership; recorded arguments may name a
+            // previous installation and are rewritten below.
             guard let owned = existing as? [String: Any],
                   let command = owned["command"] as? String, ownsPath(command),
-                  owned["args"] as? [String] == arguments,
                   (owned["transport"] ?? owned["type"]) as? String == "stdio" else {
                 throw AgentVoiceHostMigration.Failure.conflict
             }
             entry = owned
             entry["command"] = executable
+            entry["args"] = arguments
         } else {
             entry = ["transport": "stdio", "command": executable, "args": arguments, "mode": "optional"]
         }
