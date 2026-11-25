@@ -116,7 +116,8 @@ struct HistoryView: View {
                                         }
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                                    .background(model.selectedID == entry.id ? AppTheme.selectedFill : .clear, in: RoundedRectangle(cornerRadius: 12))
+                                    .omdoSelectionBackground(in: RoundedRectangle(cornerRadius: 12),
+                                                             isSelected: model.selectedID == entry.id)
                                     .contentShape(RoundedRectangle(cornerRadius: 12))
                                 }
                                 .buttonStyle(EmberButtonStyle(appearance: .plain)).accessibilityAddTraits(model.selectedID == entry.id ? .isSelected : [])

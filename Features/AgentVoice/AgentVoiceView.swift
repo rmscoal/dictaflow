@@ -40,8 +40,8 @@ struct AgentVoiceView: View {
                     Button { appState.agentVoiceTab = tab } label: {
                         Text(tab.title).font(.system(size: 12))
                             .frame(minWidth: 82).padding(.horizontal, 12).padding(.vertical, 9)
-                            .background(appState.agentVoiceTab == tab ? AppTheme.tileFill : .clear,
-                                        in: RoundedRectangle(cornerRadius: 7))
+                            .omdoSelectionBackground(in: RoundedRectangle(cornerRadius: 7),
+                                                     isSelected: appState.agentVoiceTab == tab)
                             .contentShape(RoundedRectangle(cornerRadius: 7))
                     }
                     .buttonStyle(EmberButtonStyle(appearance: .plain))
@@ -49,7 +49,7 @@ struct AgentVoiceView: View {
                     .accessibilityAddTraits(appState.agentVoiceTab == tab ? .isSelected : [])
                 }
             }
-            .padding(3).background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 9))
+            .padding(3).omdoControlBackground(in: RoundedRectangle(cornerRadius: 9))
             .overlay { RoundedRectangle(cornerRadius: 9).stroke(AppTheme.border, lineWidth: 1) }
             .padding(.bottom, 16)
             .accessibilityElement(children: .contain).accessibilityLabel("Agent Voice sections")

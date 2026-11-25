@@ -33,11 +33,7 @@ struct DictationStageCard: View {
             }
             .padding(.horizontal, compact ? 12 : 15).padding(.vertical, 12)
             .frame(maxWidth: .infinity, minHeight: compact ? 80 : 86, maxHeight: .infinity, alignment: .topLeading)
-            .background {
-                if selected {
-                    OmdoGlass(shape: shape, tint: AppTheme.selectedFill)
-                }
-            }
+            .omdoSelectionBackground(in: shape, isSelected: selected)
             .contentShape(shape)
         }
         .buttonStyle(EmberButtonStyle(appearance: .plain))

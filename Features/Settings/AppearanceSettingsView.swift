@@ -19,7 +19,9 @@ struct AppearanceSettingsView: View {
                             .font(.system(size: 13))
                         }
                         .padding(10).frame(maxWidth: .infinity)
-                        .background(AppTheme.selectedFill, in: RoundedRectangle(cornerRadius: 10))
+                        .omdoSelectionBackground(in: RoundedRectangle(cornerRadius: 10),
+                                                 isSelected: appearance == option, showsRim: false)
+                        .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 10), showsRim: false)
                         .overlay {
                             RoundedRectangle(cornerRadius: 10)
                                 .stroke(appearance == option ? AppTheme.accent : AppTheme.border, lineWidth: appearance == option ? 2 : 1)
@@ -108,10 +110,6 @@ private struct AppearanceThumbnail: View {
         }
         .foregroundStyle(AppTheme.primaryText)
         .padding(4)
-        .background {
-            if selected {
-                RoundedRectangle(cornerRadius: 5).fill(AppTheme.selectedFill)
-            }
-        }
+        .omdoSelectionBackground(in: RoundedRectangle(cornerRadius: 5), isSelected: selected)
     }
 }

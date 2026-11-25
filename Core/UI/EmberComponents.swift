@@ -53,12 +53,11 @@ struct EmberButtonStyle: ButtonStyle {
             configuration.label
                 .font(.system(size: 14))
                 .frame(width: size, height: size)
+                .omdoSelectionBackground(in: Circle(), isSelected: highlighted)
                 .background {
-                    if highlighted {
-                        Circle().fill(AppTheme.selectedFill)
-                    } else if bordered {
+                    if bordered && !highlighted {
                         OmdoGlass(shape: Circle())
-                    } else if configuration.isPressed {
+                    } else if configuration.isPressed && !highlighted {
                         RoundedRectangle(cornerRadius: 7).fill(AppTheme.controlFill)
                     }
                 }

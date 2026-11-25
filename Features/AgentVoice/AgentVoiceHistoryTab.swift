@@ -220,7 +220,7 @@ struct AgentVoiceHistoryTab: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading).padding(12)
-            .background(isSelected ? AppTheme.selectedFill : .clear, in: RoundedRectangle(cornerRadius: 10))
+            .omdoSelectionBackground(in: RoundedRectangle(cornerRadius: 10), isSelected: isSelected)
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(EmberButtonStyle(appearance: .plain))
@@ -363,7 +363,7 @@ struct AgentVoiceHistoryTab: View {
                 .gridCellUnsizedAxes(.horizontal)
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
-            .background(AppTheme.selectedFill, in: RoundedRectangle(cornerRadius: 13))
+            .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 13), tint: AppTheme.selectedFill, tintOpacity: 0.55)
             .contextMenu { exchangeMenu(record) }
             .frame(maxWidth: 560, alignment: .trailing)
             .accessibilityElement(children: .contain).accessibilityLabel("Your message")
@@ -394,7 +394,7 @@ struct AgentVoiceHistoryTab: View {
                     }
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 13))
+                .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 13))
                 .contextMenu { exchangeMenu(record) }
                 .frame(maxWidth: 560, alignment: .leading)
             } else if let displayed {
@@ -410,7 +410,7 @@ struct AgentVoiceHistoryTab: View {
                         .gridCellUnsizedAxes(.horizontal)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 13))
+                .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 13))
                 .contextMenu { exchangeMenu(record) }
                 .frame(maxWidth: 560, alignment: .leading)
                 .accessibilityElement(children: .contain).accessibilityLabel("Agent response")
@@ -418,7 +418,7 @@ struct AgentVoiceHistoryTab: View {
                 Text(record.interaction.isSuppressed ? "Automatic speech stopped" : record.interaction.hostClosed ? "No spoken response saved" : "Waiting for a spoken response…")
                     .font(.system(size: 12)).italic().foregroundStyle(AppTheme.secondaryText)
                     .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 13))
+                    .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 13))
                     .contextMenu { exchangeMenu(record) }
                     .frame(maxWidth: 560, alignment: .leading)
             }
