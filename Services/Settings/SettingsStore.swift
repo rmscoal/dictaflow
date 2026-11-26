@@ -8,6 +8,7 @@ protocol SettingsStoreProtocol: AnyObject {
     var voiceHistoryRetention: VoiceHistoryRetention { get }
     func saveVoiceHistoryRetention(_ retention: VoiceHistoryRetention)
     var appAppearance: AppAppearance { get }
+    var usesGlassWindowBackground: Bool { get }
     var shouldShowMainWindowOnLaunch: Bool { get }
     var hasRequestedAccessibilityPermission: Bool { get }
     var automaticallyChecksForUpdates: Bool { get }
@@ -23,6 +24,7 @@ protocol SettingsStoreProtocol: AnyObject {
     var hasVocabularySettings: Bool { get }
     func saveVocabularySettings(_ settings: VocabularySettings)
     func saveAppAppearance(_ appearance: AppAppearance)
+    func saveUsesGlassWindowBackground(_ usesGlass: Bool)
     func markInitialWindowPresentationComplete()
     func markAccessibilityPermissionRequested()
     func saveAutomaticallyChecksForUpdates(_ isEnabled: Bool)
@@ -40,6 +42,7 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
         static let textTone = "dictation.textTone"
         static let historyRetention = "history.retentionDays"
         static let appAppearance = "app.appearance"
+        static let usesGlassWindowBackground = "app.usesGlassWindowBackground"
         static let hasPresentedInitialWindow = "app.hasPresentedInitialWindow"
         static let hasRequestedAccessibilityPermission = "permissions.hasRequestedAccessibilityPermission"
         static let automaticallyChecksForUpdates = "updates.automaticallyChecks"
@@ -94,6 +97,14 @@ final class UserDefaultsSettingsStore: SettingsStoreProtocol {
 
     func saveAppAppearance(_ appearance: AppAppearance) {
         defaults.set(appearance.rawValue, forKey: Keys.appAppearance)
+    }
+
+    var usesGlassWindowBackground: Bool {
+        defaults.object(forKey: Keys.usesGlassWindowBackground) as? Bool ?? true
+    }
+
+    func saveUsesGlassWindowBackground(_ usesGlass: Bool) {
+        defaults.set(usesGlass, forKey: Keys.usesGlassWindowBackground)
     }
 
     var shouldShowMainWindowOnLaunch: Bool {

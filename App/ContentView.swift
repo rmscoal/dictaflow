@@ -74,6 +74,7 @@ struct ContentView: View {
         } message: {
             Text(appState.recordingFailureMessage ?? "Check your microphone and sound output, then try again.")
         }
+        .environment(\.usesGlassWindowBackground, appState.usesGlassWindowBackground)
     }
 
     @ViewBuilder private var page: some View {

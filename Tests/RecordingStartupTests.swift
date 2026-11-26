@@ -8,6 +8,24 @@ import XCTest
 
 @MainActor
 final class RecordingStartupTests: XCTestCase {
+    func testGlassWindowBackgroundDefaultsOnAndPersistsBothChoices() throws {
+        let fixture = try RecordingStartupFixture()
+        defer { fixture.cleanup() }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: fixture.suiteName))
+        let state = fixture.state
+
+        XCTAssertTrue(state.usesGlassWindowBackground)
+
+        state.updateUsesGlassWindowBackground(false)
+        state.updateAppAppearance(.dark)
+        XCTAssertFalse(state.usesGlassWindowBackground)
+        XCTAssertFalse(UserDefaultsSettingsStore(defaults: defaults).usesGlassWindowBackground)
+
+        state.updateUsesGlassWindowBackground(true)
+        XCTAssertTrue(state.usesGlassWindowBackground)
+        XCTAssertTrue(UserDefaultsSettingsStore(defaults: defaults).usesGlassWindowBackground)
+    }
+
     func testEmberNavigationPreservesDestinationAndRoutesModelRecovery() throws {
         let fixture = try RecordingStartupFixture()
         defer { fixture.cleanup() }

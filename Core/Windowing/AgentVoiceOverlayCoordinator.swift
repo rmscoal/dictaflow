@@ -321,7 +321,7 @@ private struct AgentVoiceOverlay: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16).delay(isExpanded ? 0.1 : 0), value: isExpanded)
         .foregroundStyle(AppTheme.primaryText)
         .omdoFloatingWindowBackground(
-            in: RoundedRectangle(cornerRadius: AgentVoiceOverlayLayout.cornerRadius), strongerLightTint: true
+            in: RoundedRectangle(cornerRadius: AgentVoiceOverlayLayout.cornerRadius), surface: .overlay
         )
     }
 

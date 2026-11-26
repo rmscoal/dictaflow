@@ -32,6 +32,7 @@ final class DictaFlowAppState: ObservableObject {
     @Published private(set) var isMainWindowVisible = false
     @Published private(set) var isSettingsWindowVisible = false
     @Published private(set) var appAppearance: AppAppearance
+    @Published private(set) var usesGlassWindowBackground: Bool
     @Published var agentVoiceTab: AgentVoiceTab = .general
     @Published var agentVoiceSpeechModelRequest: UUID?
     @Published var showsSpeechModelsDuringOnboarding = false
@@ -253,6 +254,7 @@ final class DictaFlowAppState: ObservableObject {
         self.historyRetention = settingsStore.historyRetention
         self.voiceHistoryRetention = settingsStore.voiceHistoryRetention
         self.appAppearance = settingsStore.appAppearance
+        self.usesGlassWindowBackground = settingsStore.usesGlassWindowBackground
         self.settingsStore = settingsStore
         self.permissionService = permissionService
         self.audioRecorderService = audioRecorderService
@@ -1043,6 +1045,12 @@ final class DictaFlowAppState: ObservableObject {
         }
         settingsStore.saveAppAppearance(appearance)
         appAppearance = appearance
+    }
+
+    func updateUsesGlassWindowBackground(_ usesGlass: Bool) {
+        guard usesGlassWindowBackground != usesGlass else { return }
+        settingsStore.saveUsesGlassWindowBackground(usesGlass)
+        usesGlassWindowBackground = usesGlass
     }
 
     func updateRecordingPlaybackBehavior(_ behavior: RecordingPlaybackBehavior) {

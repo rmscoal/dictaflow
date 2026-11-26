@@ -7,7 +7,8 @@ struct DictaFlowApp: App {
     var body: some Scene {
         MenuBarExtra {
             MenuBarLaunchContent(appDelegate: appDelegate)
-                .omdoFloatingWindowBackground(in: Rectangle(), showsRim: false, strongerLightTint: true)
+                // The menu bar window supplies its own material.
+                .omdoWindowTint(in: Rectangle(), surface: .menuBar, showsRim: false)
         } label: {
             MenuBarIconView()
         }

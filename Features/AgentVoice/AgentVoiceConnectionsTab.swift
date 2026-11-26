@@ -109,8 +109,8 @@ struct AgentVoiceConnectionsTab: View {
                         }
                         .font(.system(size: 12))
                         .frame(minWidth: 82).padding(.horizontal, 12).padding(.vertical, 9)
-                        .background(effectiveHost == host ? AppTheme.tileFill : .clear,
-                                    in: RoundedRectangle(cornerRadius: 7))
+                        .omdoSelectionBackground(in: RoundedRectangle(cornerRadius: 7),
+                                                 isSelected: effectiveHost == host)
                         .contentShape(RoundedRectangle(cornerRadius: 7))
                     }
                     .buttonStyle(EmberButtonStyle(appearance: .plain))
@@ -118,7 +118,7 @@ struct AgentVoiceConnectionsTab: View {
                     .accessibilityAddTraits(effectiveHost == host ? .isSelected : [])
                 }
             }
-            .padding(3).background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 9))
+            .padding(3).omdoControlBackground(in: RoundedRectangle(cornerRadius: 9))
             .overlay { RoundedRectangle(cornerRadius: 9).stroke(AppTheme.border, lineWidth: 1) }
             .padding(.bottom, 12)
             .accessibilityElement(children: .contain).accessibilityLabel("Host setup")

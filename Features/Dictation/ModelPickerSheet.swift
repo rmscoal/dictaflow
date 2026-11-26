@@ -122,7 +122,8 @@ struct ModelPickerSheet: View {
                     }
                     .padding(.horizontal, 10).padding(.vertical, 7)
                     .foregroundStyle(speechProvider == item ? AppTheme.accent : AppTheme.primaryText)
-                    .background(speechProvider == item ? AppTheme.selectedFill : AppTheme.tileFill, in: Capsule())
+                    .omdoSelectionBackground(in: Capsule(), isSelected: speechProvider == item, showsRim: false)
+                    .omdoGlassBackground(in: Capsule(), showsRim: false)
                     .overlay { Capsule().stroke(speechProvider == item ? AppTheme.accent : AppTheme.border, lineWidth: 1) }
                     .contentShape(Capsule())
                 }

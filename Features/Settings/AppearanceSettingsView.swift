@@ -2,6 +2,8 @@ import SwiftUI
 
 struct AppearanceSettingsView: View {
     @Binding var appearance: AppAppearance
+    @Binding var usesGlassWindowBackground: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -19,7 +21,9 @@ struct AppearanceSettingsView: View {
                             .font(.system(size: 13))
                         }
                         .padding(10).frame(maxWidth: .infinity)
-                        .background(AppTheme.selectedFill, in: RoundedRectangle(cornerRadius: 10))
+                        .omdoSelectionBackground(in: RoundedRectangle(cornerRadius: 10),
+                                                 isSelected: appearance == option, showsRim: false)
+                        .omdoGlassBackground(in: RoundedRectangle(cornerRadius: 10), showsRim: false)
                         .overlay {
                             RoundedRectangle(cornerRadius: 10)
                                 .stroke(appearance == option ? AppTheme.accent : AppTheme.border, lineWidth: appearance == option ? 2 : 1)
@@ -32,6 +36,21 @@ struct AppearanceSettingsView: View {
                     .accessibilityAddTraits(appearance == option ? .isSelected : [])
                 }
             }
+            EmberPanel {
+                EmberRow(
+                    title: "Liquid Glass",
+                    detail: reduceTransparency
+                        ? "The window stays solid while macOS Reduce Transparency is on."
+                        : "Use a translucent background for the main window."
+                ) {
+                    Toggle("Liquid Glass", isOn: $usesGlassWindowBackground)
+                        .labelsHidden()
+                        .toggleStyle(EmberSwitchStyle(showsLabel: false))
+                        .controlSize(.small)
+                        .accessibilityIdentifier("appearance-liquid-glass")
+                }
+            }
+            .padding(.top, 20)
         }
     }
 }
@@ -108,10 +127,6 @@ private struct AppearanceThumbnail: View {
         }
         .foregroundStyle(AppTheme.primaryText)
         .padding(4)
-        .background {
-            if selected {
-                RoundedRectangle(cornerRadius: 5).fill(AppTheme.selectedFill)
-            }
-        }
+        .omdoSelectionBackground(in: RoundedRectangle(cornerRadius: 5), isSelected: selected)
     }
 }

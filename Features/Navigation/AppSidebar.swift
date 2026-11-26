@@ -59,11 +59,7 @@ struct AppSidebar: View {
             .foregroundStyle(AppTheme.primaryText)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, collapsed ? 8 : 11).padding(.vertical, 13)
-            .background {
-                if selected {
-                    RoundedRectangle(cornerRadius: 14).fill(AppTheme.selectedFill)
-                }
-            }
+            .omdoSelectionBackground(in: RoundedRectangle(cornerRadius: 14), isSelected: selected)
             .contentShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(EmberButtonStyle(appearance: .plain))

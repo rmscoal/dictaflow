@@ -11,8 +11,8 @@ struct SettingsView: View {
                     Button { appState.settingsCategory = category } label: {
                         Text(category.title).font(.system(size: 12))
                             .frame(minWidth: 82).padding(.horizontal, 12).padding(.vertical, 9)
-                            .background(appState.settingsCategory == category ? AppTheme.tileFill : .clear,
-                                        in: RoundedRectangle(cornerRadius: 7))
+                            .omdoSelectionBackground(in: RoundedRectangle(cornerRadius: 7),
+                                                     isSelected: appState.settingsCategory == category)
                             .contentShape(RoundedRectangle(cornerRadius: 7))
                     }
                     .buttonStyle(EmberButtonStyle(appearance: .plain))
@@ -20,7 +20,7 @@ struct SettingsView: View {
                     .accessibilityAddTraits(appState.settingsCategory == category ? .isSelected : [])
                 }
             }
-            .padding(3).background(AppTheme.controlFill, in: RoundedRectangle(cornerRadius: 9))
+            .padding(3).omdoControlBackground(in: RoundedRectangle(cornerRadius: 9))
             .overlay { RoundedRectangle(cornerRadius: 9).stroke(AppTheme.border, lineWidth: 1) }
             .padding(.bottom, 26)
             .accessibilityElement(children: .contain).accessibilityLabel("Settings categories")
@@ -28,7 +28,13 @@ struct SettingsView: View {
             switch appState.settingsCategory {
             case .general: GeneralSettingsView(appState: appState)
             case .appearance:
-                AppearanceSettingsView(appearance: Binding(get: { appState.appAppearance }, set: { appState.updateAppAppearance($0) }))
+                AppearanceSettingsView(
+                    appearance: Binding(get: { appState.appAppearance }, set: { appState.updateAppAppearance($0) }),
+                    usesGlassWindowBackground: Binding(
+                        get: { appState.usesGlassWindowBackground },
+                        set: { appState.updateUsesGlassWindowBackground($0) }
+                    )
+                )
             case .permissions: PermissionsSettingsView(appState: appState)
             }
         }
