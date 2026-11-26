@@ -3,6 +3,7 @@ import SwiftUI
 
 struct OmdoWindowBackdrop: NSViewRepresentable {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.usesGlassWindowBackground) private var usesGlassWindowBackground
 
     static func makeView() -> NSVisualEffectView {
         let view = NSVisualEffectView()
@@ -17,6 +18,6 @@ struct OmdoWindowBackdrop: NSViewRepresentable {
     }
 
     func updateNSView(_ view: NSVisualEffectView, context: Context) {
-        view.isHidden = reduceTransparency
+        view.isHidden = reduceTransparency || !usesGlassWindowBackground
     }
 }

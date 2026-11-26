@@ -2,6 +2,8 @@ import SwiftUI
 
 struct AppearanceSettingsView: View {
     @Binding var appearance: AppAppearance
+    @Binding var usesGlassWindowBackground: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -34,6 +36,21 @@ struct AppearanceSettingsView: View {
                     .accessibilityAddTraits(appearance == option ? .isSelected : [])
                 }
             }
+            EmberPanel {
+                EmberRow(
+                    title: "Liquid Glass",
+                    detail: reduceTransparency
+                        ? "The window stays solid while macOS Reduce Transparency is on."
+                        : "Use a translucent background for the main window."
+                ) {
+                    Toggle("Liquid Glass", isOn: $usesGlassWindowBackground)
+                        .labelsHidden()
+                        .toggleStyle(EmberSwitchStyle(showsLabel: false))
+                        .controlSize(.small)
+                        .accessibilityIdentifier("appearance-liquid-glass")
+                }
+            }
+            .padding(.top, 20)
         }
     }
 }

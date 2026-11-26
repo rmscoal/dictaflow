@@ -54,10 +54,21 @@ enum OmdoWindowSurface {
 
     func tintOpacity(for colorScheme: ColorScheme) -> Double {
         switch self {
-        case .workspace: colorScheme == .dark ? 0.35 : 0.40
+        case .workspace: colorScheme == .dark ? 0.48 : 0.40
         case .menuBar: 0.12
         case .overlay: colorScheme == .dark ? 0.28 : 0.72
         }
+    }
+}
+
+private struct UsesGlassWindowBackgroundKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var usesGlassWindowBackground: Bool {
+        get { self[UsesGlassWindowBackgroundKey.self] }
+        set { self[UsesGlassWindowBackgroundKey.self] = newValue }
     }
 }
 
@@ -67,13 +78,14 @@ private struct OmdoWindowTint<Surface: InsettableShape>: View {
     let showsRim: Bool
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.usesGlassWindowBackground) private var usesGlassWindowBackground
 
     var body: some View {
-        let usesOverlayTint = surface == .overlay && colorScheme == .light
+        let usesOverlayTint = usesGlassWindowBackground && surface == .overlay && colorScheme == .light
         OmdoGlass(
             shape: shape,
             tint: usesOverlayTint ? Color(white: 0.67) : AppTheme.background,
-            tintOpacity: surface.tintOpacity(for: colorScheme),
+            tintOpacity: usesGlassWindowBackground ? surface.tintOpacity(for: colorScheme) : 1,
             opaqueTint: AppTheme.background,
             showsRim: showsRim
         )

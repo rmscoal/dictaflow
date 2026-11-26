@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -6,9 +7,14 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
     private let appState: DictaFlowAppState
     private var window: NSWindow?
     private var backdropView: NSVisualEffectView?
+    private var glassBackgroundObservation: AnyCancellable?
 
     init(appState: DictaFlowAppState) {
         self.appState = appState
+        super.init()
+        glassBackgroundObservation = appState.$usesGlassWindowBackground.sink { [weak self] usesGlass in
+            self?.updateBackdropAppearance(usesGlass: usesGlass)
+        }
     }
 
     func showMainWindow() {
@@ -17,7 +23,7 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
         NSApp.setActivationPolicy(.regular)
 
         let window = makeWindowIfNeeded()
-        updateBackdropAppearance()
+        updateBackdropAppearance(usesGlass: appState.usesGlassWindowBackground)
 
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -108,15 +114,18 @@ final class MainWindowCoordinator: NSObject, MainWindowRouting, NSWindowDelegate
     }
 
     @objc private nonisolated func reduceTransparencyDidChange(_ notification: Notification) {
-        Task { @MainActor [weak self] in self?.updateBackdropAppearance() }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            updateBackdropAppearance(usesGlass: appState.usesGlassWindowBackground)
+        }
     }
 
-    private func updateBackdropAppearance() {
+    private func updateBackdropAppearance(usesGlass: Bool) {
         guard let window else { return }
-        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
-        backdropView?.isHidden = reduce
-        window.isOpaque = reduce
-        window.backgroundColor = reduce ? AppTheme.windowBackgroundColor : .clear
+        let showsGlass = usesGlass && !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        backdropView?.isHidden = !showsGlass
+        window.isOpaque = !showsGlass
+        window.backgroundColor = showsGlass ? .clear : AppTheme.windowBackgroundColor
         window.invalidateShadow()
     }
 

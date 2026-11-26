@@ -28,7 +28,13 @@ struct SettingsView: View {
             switch appState.settingsCategory {
             case .general: GeneralSettingsView(appState: appState)
             case .appearance:
-                AppearanceSettingsView(appearance: Binding(get: { appState.appAppearance }, set: { appState.updateAppAppearance($0) }))
+                AppearanceSettingsView(
+                    appearance: Binding(get: { appState.appAppearance }, set: { appState.updateAppAppearance($0) }),
+                    usesGlassWindowBackground: Binding(
+                        get: { appState.usesGlassWindowBackground },
+                        set: { appState.updateUsesGlassWindowBackground($0) }
+                    )
+                )
             case .permissions: PermissionsSettingsView(appState: appState)
             }
         }
