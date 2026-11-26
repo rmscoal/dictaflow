@@ -26,6 +26,27 @@ nonisolated struct ApplicationSupportPaths: Sendable {
         (["History", "Prompts", "AgentVoice", "Models/Liquid"].map { legacy.appendingPathComponent($0) } + [uncommittedData])
             .filter { FileManager.default.fileExists(atPath: $0.path) }
     }
+
+    func canRemoveLegacyArtifact(_ artifact: URL) throws -> Bool {
+        let rootComponents = applicationSupport.pathComponents
+        let components = artifact.pathComponents
+        guard components.starts(with: rootComponents), components.count > rootComponents.count else { return false }
+
+        // lstat checks the final component only. Walk down from the support root
+        // so a symlink cannot redirect a lookup of any later component.
+        var location = applicationSupport
+        try MigrationFiles.requireDirectory(location)
+        for component in components.dropFirst(rootComponents.count) {
+            location.appendPathComponent(component)
+            if try MigrationFiles.attributes(location)?[.type] as? FileAttributeType == .typeSymbolicLink {
+                return false
+            }
+        }
+
+        let activeComponents = current.resolvingSymlinksInPath().pathComponents
+        let artifactComponents = artifact.resolvingSymlinksInPath().pathComponents
+        return !artifactComponents.starts(with: activeComponents) && !activeComponents.starts(with: artifactComponents)
+    }
 }
 
 /// Imports only verified assets. A model failure is independent of the private data stores.

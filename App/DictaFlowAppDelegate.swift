@@ -19,8 +19,6 @@ final class DictaFlowAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
     private var preparedStores: ApplicationSupportMigration.Stores?
     private let recordingOverlayCoordinator = RecordingOverlayCoordinator()
 
-    var legacyDataLocations: [URL] { paths.legacyArtifacts() }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         prepareApplication()
     }
@@ -155,6 +153,8 @@ final class DictaFlowAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
         state.attach(mainWindowRouter: window)
         state.attach(recordingOverlayRouter: recordingOverlayCoordinator)
         appState = state
+        // prepare() has finished by now, so the journal phase is settled.
+        state.refreshLegacyDataState()
         state.handleApplicationLaunch(showMainWindowAfterUpgrade: fromMigration)
     }
 

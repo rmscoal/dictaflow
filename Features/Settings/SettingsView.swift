@@ -7,7 +7,7 @@ struct SettingsView: View {
         EmberPage {
             EmberPageHeading(title: "Settings")
             HStack(spacing: 3) {
-                ForEach(SettingsCategory.allCases) { category in
+                ForEach(appState.visibleSettingsCategories) { category in
                     Button { appState.settingsCategory = category } label: {
                         Text(category.title).font(.system(size: 12))
                             .frame(minWidth: 82).padding(.horizontal, 12).padding(.vertical, 9)
@@ -36,6 +36,7 @@ struct SettingsView: View {
                     )
                 )
             case .permissions: PermissionsSettingsView(appState: appState)
+            case .legacy: LegacyDataView(appState: appState)
             }
         }
     }
