@@ -347,7 +347,9 @@ enum AgentVoiceHostInstaller {
                 let entry = try await run(scoped, cli: cli, host: host, args: ["mcp", "get", "--json", serverAlias])
                 let configuration = try CodexMCPConfiguration(changes[0].candidate)
                 guard list.exitCode == 0, !configuration.aliases.contains(legacyAlias), entry.exitCode == 0,
-                      codexEntryMatches(json: Data(entry.stdout.utf8), executable: executable, arguments: arguments),
+                      let registration = try? JSONDecoder().decode(CodexEntry.self, from: Data(entry.stdout.utf8)),
+                      registration.matches(executable: executable, arguments: arguments),
+                      (registration.enabled == false) == configuration.isDisabled(alias: serverAlias),
                       hooksStatus(data: changes[1].candidate, host: host, executable: executable).matches else {
                     throw InstallerError.verificationFailed(host: host.name)
                 }
@@ -407,6 +409,9 @@ enum AgentVoiceHostInstaller {
         for entry in existing.values where !ownsPath(entry.transport.command) {
             throw CodexMCPConfiguration.EditError.unknownOwner
         }
+        guard existing.values.allSatisfy({ $0.enabledTools == nil && $0.disabledTools == nil }) else {
+            throw CodexMCPConfiguration.EditError.unsupported
+        }
         let disabled = existing.values.contains { $0.enabled == false }
         for alias in existing.keys {
             let removed = try await run(scoped, cli: cli, host: .codex, args: ["mcp", "remove", alias])
@@ -420,22 +425,8 @@ enum AgentVoiceHostInstaller {
         guard !configuration.aliases.contains(legacyAlias), !configuration.aliases.contains(serverAlias) else {
             throw InstallerError.verificationFailed(host: Host.codex.name)
         }
-        var candidate = try configuration.candidate(executable: executable, arguments: arguments, ownsPath: { _ in true })
-        if disabled {
-            // A section candidate ends with the new entry, so a trailing line
-            // lands inside it. An inline candidate carries the entry inside
-            // the `mcp_servers` table, so the flag goes inside that entry.
-            if let text = String(data: candidate, encoding: .utf8),
-               let entryStart = text.range(of: "\(serverAlias) = {"),
-               let closing = text[entryStart.upperBound...].firstIndex(of: "}") {
-                var updated = text
-                updated.insert(contentsOf: ", enabled = false", at: closing)
-                candidate = Data(updated.utf8)
-            } else {
-                candidate.append(Data("enabled = false\n".utf8))
-            }
-        }
-        return candidate
+        return try configuration.candidate(
+            executable: executable, arguments: arguments, newEntryDisabled: disabled, ownsPath: ownsPath)
     }
 
     static func claudeProfileDirectory(_ home: URL? = nil) -> URL {
@@ -473,6 +464,14 @@ enum AgentVoiceHostInstaller {
         struct Transport: Decodable { var command: String; var args: [String]? }
         let transport: Transport
         let enabled: Bool?
+        let enabledTools: [String]?
+        let disabledTools: [String]?
+
+        private enum CodingKeys: String, CodingKey {
+            case transport, enabled
+            case enabledTools = "enabled_tools"
+            case disabledTools = "disabled_tools"
+        }
 
         func matches(executable: String, arguments: [String]) -> Bool {
             transport.command == executable && transport.args == arguments
