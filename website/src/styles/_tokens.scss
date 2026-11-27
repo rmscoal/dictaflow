@@ -1,0 +1,30 @@
+// DictaFlow website tokens, tuned from the Voicet reference.
+// Single source of truth for color, type, spacing, and radius.
+
+$primary: #6d5df6;
+$primary-dark: #5f4ee3;
+$primary-soft: #e6dfff;
+$ink: #141417;
+$ink-soft: #3c3f46;
+$muted: #767a83;
+$faint: #8e929b;
+$hairline: #eff1f5;
+$border: #e7eaf2;
+$sky-top: #ffffff;
+$sky-mid: #dfebff;
+$sky-low: #edf2ff;
+
+$font-display: "Inter Tight", Inter, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+$font-text: Inter, -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+
+$radius-card: 18px;
+$radius-window: 26px;
+$radius-pill: 999px;
+
+$shadow-nav: 0 6px 18px rgba(88, 98, 160, 0.06);
+$shadow-card: 0 6px 18px rgba(30, 35, 70, 0.035);
+$shadow-window: 0 18px 44px rgba(63, 72, 140, 0.12);
+$shadow-primary: 0 10px 22px rgba(109, 93, 246, 0.24);
+
+$section-y: 72px;
+$page-max: 1120px;
