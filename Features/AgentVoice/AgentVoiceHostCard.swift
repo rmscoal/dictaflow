@@ -79,7 +79,8 @@ struct AgentVoiceHostCard: View {
             return offersOneClickSetup ? "Update setup to add the missing voice hooks."
                 : "Open Show setup and follow the Voice hooks instructions."
         case .needsMigration:
-            return "Close the host before replacing the old DictaFlow registration."
+            return offersOneClickSetup ? "Close the host, then choose Update to replace the old DictaFlow registration."
+                : "Close the host, then open Show setup to replace the old DictaFlow registration manually."
         case .updateInterrupted:
             return offersOneClickSetup ? "Close the host, then choose Recover setup."
                 : "Install or restore the \(brand.displayName) CLI, then reopen this page to recover setup."

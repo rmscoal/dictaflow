@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 /// Host setup for Agent Voice. Installs and verifies the bundled helper in
-/// Codex and Muse Code, and supplies manual setup for Claude Code.
+/// Codex and Muse Code, and updates owned user-level Claude Code registrations.
 /// Codex and Claude also receive user-level lifecycle hook definitions, and
 /// Claude and Muse receive a main-agent-only PreToolUse guard so child
 /// agents cannot use Omdo voice tools. A configured entry means the
@@ -32,6 +32,7 @@ enum AgentVoiceHostInstaller {
         var versionUnsupported: Bool = false
         var legacyEntryFound = false
         var updateInterrupted = false
+        var canUpdateClaudeProfile = false
 
         var hooksConfigured: Bool { hooksEntryFound && hooksMatchCurrent }
 
@@ -228,7 +229,15 @@ enum AgentVoiceHostInstaller {
             let directory = settings.deletingLastPathComponent().resolvingSymlinksInPath()
             return AgentVoiceHostMigration(host: host, configuration: directory.appendingPathComponent(settings.lastPathComponent),
                                            hooks: nil, applicationSupport: base.appendingPathComponent("Library/Application Support"))
-        case .claudeCode, .other: return nil
+        case .claudeCode:
+            let profile = claudeProfileDirectory(home)
+            let usesOverride = home == nil && !(ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"] ?? "").isEmpty
+            let registry = usesOverride ? profile : base
+            return AgentVoiceHostMigration(
+                host: host, configuration: registry.resolvingSymlinksInPath().appendingPathComponent(".claude.json"),
+                hooks: profile.resolvingSymlinksInPath().appendingPathComponent("settings.json"),
+                applicationSupport: base.appendingPathComponent("Library/Application Support"))
+        case .other: return nil
         }
     }
 
@@ -240,7 +249,11 @@ enum AgentVoiceHostInstaller {
         var state = HostState(cliPath: cliPath, configuredEntryFound: false, entryMatchesCurrent: false)
         let arguments = serverArguments(appID: appID, installationID: installationID, host: host)
         let migration = migration(for: host, home: homeDirectoryURL)
-        if migration?.hasPendingUpdate == true { state.updateInterrupted = true; return state }
+        if migration?.hasPendingUpdate == true {
+            state.updateInterrupted = true
+            state.canUpdateClaudeProfile = host == .claudeCode && cliPath != nil
+            return state
+        }
         switch host {
         case .other:
             return .manualOnly(cliPath: cliPath)
@@ -254,10 +267,20 @@ enum AgentVoiceHostInstaller {
             return withHookStatus(state, host: host, url: url, executable: executable)
         case .codex, .claudeCode:
             guard let cliPath else { return state }
-            let probe = migration.map { scopedRunner(runner, codexDirectory: $0.configuration.deletingLastPathComponent()) } ?? runner
+            let probe = host == .codex
+                ? migration.map { scopedRunner(runner, codexDirectory: $0.configuration.deletingLastPathComponent()) } ?? runner
+                : runner
             guard let version = try? await run(probe, cli: cliPath, host: host, args: ["--version"]) else { return state }
             let supported = host == .codex ? supportsCodexIdentity(version.stdout) : supportsClaudeHooks(version.stdout)
             guard version.exitCode == 0, supported else { state.versionUnsupported = true; return state }
+            if host == .claudeCode, let migration,
+               let prepared = try? prepareClaudeUpdate(migration, executable: executable, arguments: arguments, ownsPath: {
+                   AgentVoiceHostMigration.isOwnedHelper($0, current: executable, appID: appID)
+               }) {
+                state.canUpdateClaudeProfile = true
+                state.legacyEntryFound = prepared.alias == legacyAlias
+                if state.legacyEntryFound { return state }
+            }
             let query = host == .codex ? ["mcp", "get", "--json"] : ["mcp", "get"]
             let legacy = try? await run(probe, cli: cliPath, host: host, args: query + [legacyAlias])
             state.legacyEntryFound = legacy?.exitCode == 0
@@ -271,6 +294,9 @@ enum AgentVoiceHostInstaller {
                 }
             } else {
                 state.entryMatchesCurrent = claudeOutputMatches(output: current.stdout, executable: executable, arguments: arguments)
+                state.entryDisabled = current.stdout.split(whereSeparator: \.isNewline).contains {
+                    $0.trimmingCharacters(in: .whitespaces).hasPrefix("Status: ⊘ Disabled")
+                }
             }
             let hooks = migration?.hooks ?? claudeProfileDirectory(homeDirectoryURL).appendingPathComponent("settings.json")
             return withHookStatus(state, host: host, url: hooks, executable: executable)
@@ -288,6 +314,18 @@ enum AgentVoiceHostInstaller {
         let config = migration.configuration
         let ownsPath: (String) -> Bool = {
             AgentVoiceHostMigration.isOwnedHelper($0, current: executable, appID: appID)
+        }
+        if host == .claudeCode {
+            guard let cli = cliDiscovery(host) else { throw InstallerError.hostCLIMissing(host.name) }
+            let version = try await run(runner, cli: cli, host: host, args: ["--version"])
+            guard version.exitCode == 0, supportsClaudeHooks(version.stdout) else {
+                throw InstallerError.commandFailed(host: host.name, detail: "Update Claude Code to 2.1.118 or later.")
+            }
+            try await updateClaudeProfile(migration, executable: executable, arguments: arguments,
+                                          ownsPath: ownsPath, hostIdle: hostIdle)
+            var message = "Omdo is configured in Claude Code. Start a new session to use it."
+            if !agentVoiceEnabled { message += " Turn on Enable Agent Voice to use it." }
+            return message
         }
         var disabled = false
         let cli: String?
@@ -451,12 +489,26 @@ enum AgentVoiceHostInstaller {
 
     private static func isHostIdle(_ host: Host) async throws -> Bool {
         let process = ProcessCommandRunner()
-        let names = host == .codex ? "codex|Codex|codex-app-server" : "muse|Muse|muse-code|Muse Code"
-        let result = try await run(process, cli: "/usr/bin/pgrep", host: host, args: ["-u", String(getuid()), "-x", names])
+        let match: [String]
+        switch host {
+        case .codex: match = ["-x", "codex|Codex|codex-app-server"]
+        case .museCode: match = ["-x", "muse|Muse|muse-code|Muse Code"]
+        case .claudeCode:
+            match = ["-f", claudeProcessPattern]
+        case .other: return false
+        }
+        let result = try await run(process, cli: "/usr/bin/pgrep", host: host, args: ["-u", String(getuid())] + match)
         if result.exitCode == 0 { return false }
         if result.exitCode == 1 { return true }
         throw AgentVoiceHostMigration.Failure.manual
     }
+
+    // Match the CLI executable or Node's Claude Code entry point, not a
+    // trailing argument such as the voice helper's "--host claude".
+    static let claudeProcessPattern =
+        #"^([^[:space:]]*/)?(claude|claude-code)([[:space:]]|$)|"#
+        + #"^[^[:space:]]*/claude/versions/[^[:space:]]+([[:space:]]|$)|"#
+        + #"^([^[:space:]]*/)?node([[:space:]]+-[^[:space:]]+)*[[:space:]]+[^[:space:]]*/(@anthropic-ai/claude-code/cli\.js|\.bin/claude)([[:space:]]|$)"#
 
     // MARK: - Verification helpers
 
@@ -530,6 +582,113 @@ enum AgentVoiceHostInstaller {
         try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     }
 
+    private static func claudeOwnedEntry(in root: [String: Any],
+                                         ownsPath: (String) -> Bool) throws -> (String, [String: Any]) {
+        let aliases = [legacyAlias, serverAlias]
+        guard let servers = root["mcpServers"] as? [String: Any] else {
+            throw AgentVoiceHostMigration.Failure.manual
+        }
+        let existing = aliases.filter { servers[$0] != nil }
+        guard let alias = existing.first else { throw AgentVoiceHostMigration.Failure.manual }
+        guard existing.count == 1, let entry = servers[alias] as? [String: Any],
+              let command = entry["command"] as? String, ownsPath(command),
+              entry["type"] == nil || (entry["type"] as? String) == "stdio" else {
+            throw AgentVoiceHostMigration.Failure.conflict
+        }
+        if let projects = root["projects"] {
+            guard let projects = projects as? [String: [String: Any]] else {
+                throw AgentVoiceHostMigration.Failure.manual
+            }
+            for project in projects.values {
+                guard let local = project["mcpServers"] else { continue }
+                guard let local = local as? [String: Any], aliases.allSatisfy({ local[$0] == nil }) else {
+                    throw AgentVoiceHostMigration.Failure.manual
+                }
+            }
+        }
+        return (alias, entry)
+    }
+
+    private static func updateClaudeProfile(_ migration: AgentVoiceHostMigration, executable: String,
+                                            arguments: [String], ownsPath: (String) -> Bool,
+                                            hostIdle: (@Sendable () async throws -> Bool)?) async throws {
+        let config = migration.configuration
+        try await migration.apply(executable: executable, arguments: arguments) {
+            try prepareClaudeUpdate(migration, executable: executable, arguments: arguments, ownsPath: ownsPath).changes
+        } verify: { changes, _ in
+            let candidate = try configurationObject(changes[0].candidate, path: config.path)
+            let (alias, entry) = try claudeOwnedEntry(in: candidate, ownsPath: { $0 == executable })
+            guard alias == serverAlias, (entry["args"] as? [String]) == arguments,
+                  hooksStatus(data: changes[1].candidate, host: .claudeCode, executable: executable).matches else {
+                throw InstallerError.verificationFailed(host: Host.claudeCode.name)
+            }
+        } checkIdle: {
+            let idle: Bool
+            if let hostIdle { idle = try await hostIdle() }
+            else { idle = try await isHostIdle(.claudeCode) }
+            guard idle else { throw AgentVoiceHostMigration.Failure.hostRunning(Host.claudeCode.name) }
+        }
+    }
+
+    private static func prepareClaudeUpdate(_ migration: AgentVoiceHostMigration, executable: String,
+                                            arguments: [String], ownsPath: (String) -> Bool)
+        throws -> (alias: String, changes: [AgentVoiceHostMigration.Change]) {
+        guard let hooks = migration.hooks else { throw AgentVoiceHostMigration.Failure.manual }
+        let config = migration.configuration
+        let original = try AgentVoiceHostMigration.read(config)
+        var root = try configurationObject(original, path: config.path)
+        let (alias, existing) = try claudeOwnedEntry(in: root, ownsPath: ownsPath)
+        var servers = root["mcpServers"] as? [String: Any] ?? [:]
+        var entry = existing
+        entry["command"] = executable
+        entry["args"] = arguments
+        servers.removeValue(forKey: alias)
+        servers[serverAlias] = entry
+        root["mcpServers"] = servers
+
+        let originalHooks = try AgentVoiceHostMigration.read(hooks)
+        let settings = try configurationObject(originalHooks, path: hooks.path)
+        guard (settings["disableAllHooks"] as? Bool) != true else {
+            throw AgentVoiceHostMigration.Failure.manual
+        }
+        var updated = try migratedHooks(root: settings, host: .claudeCode, executable: executable, ownsPath: ownsPath)
+        if alias == legacyAlias {
+            try renameClaudePolicies(registry: &root, settings: &updated)
+        }
+        let changes = [
+            try AgentVoiceHostMigration.change(at: config, original: original, candidate: encodeJSON(root)),
+            try AgentVoiceHostMigration.change(at: hooks, original: originalHooks, candidate: encodeJSON(updated))
+        ]
+        return (alias, changes)
+    }
+
+    private static func renameClaudePolicies(registry: inout [String: Any], settings: inout [String: Any]) throws {
+        if var projects = registry["projects"] as? [String: [String: Any]] {
+            for (path, var project) in projects {
+                guard let value = project["disabledMcpServers"] else { continue }
+                guard let disabled = value as? [String] else { throw AgentVoiceHostMigration.Failure.manual }
+                project["disabledMcpServers"] = disabled.map { $0 == legacyAlias ? serverAlias : $0 }
+                projects[path] = project
+            }
+            registry["projects"] = projects
+        }
+        guard let value = settings["permissions"] else { return }
+        guard var permissions = value as? [String: Any] else { throw AgentVoiceHostMigration.Failure.manual }
+        let oldTool = "mcp__\(legacyAlias)"
+        let newTool = "mcp__\(serverAlias)"
+        for key in ["allow", "ask", "deny"] {
+            guard let value = permissions[key] else { continue }
+            guard let rules = value as? [String] else { throw AgentVoiceHostMigration.Failure.manual }
+            permissions[key] = rules.map { rule in
+                guard rule == oldTool || rule.hasPrefix(oldTool + "__") || rule.hasPrefix(oldTool + "(") else {
+                    return rule
+                }
+                return newTool + rule.dropFirst(oldTool.count)
+            }
+        }
+        settings["permissions"] = permissions
+    }
+
     private static func museServerAliases(_ data: Data) -> Set<String> {
         guard let root = try? configurationObject(data, path: "") else { return [] }
         let regular = (root["mcp_servers"] as? [String: Any]) ?? [:]
@@ -592,6 +751,14 @@ enum AgentVoiceHostInstaller {
                             template.removeValue(forKey: "statusMessage")
                             template["server"] = alias
                             if canonicalJSON(template) == canonicalJSON(candidate) { continue }
+                            // Older DictaFlow releases shipped these Claude
+                            // lifecycle hooks before forwarding child identity.
+                            if host == .claudeCode, alias == legacyAlias,
+                               var input = template["input"] as? [String: String] {
+                                input.removeValue(forKey: "agent_id")
+                                template["input"] = input
+                                if canonicalJSON(template) == canonicalJSON(candidate) { continue }
+                            }
                         }
                         if event == "PreToolUse", let matcher, aliases.contains(where: { matcher == "mcp__\($0)__.*" }),
                            group.keys.allSatisfy({ $0 == "hooks" || $0 == "matcher" }),
@@ -732,6 +899,7 @@ enum AgentVoiceHostInstaller {
               let hooks = root["hooks"] as? [String: Any] else { return (false, false) }
         var found = false
         var matches = !expectedHookEvents(for: host).isEmpty
+            && (host != .claudeCode || (root["disableAllHooks"] as? Bool) != true)
         for event in expectedHookEvents(for: host) {
             let groups = (hooks[event] as? [[String: Any]]) ?? []
             let expectedMatcher = expectedHookMatcher(for: host, event: event)
