@@ -24,7 +24,7 @@ enum AgentVoiceHostCardStatus: Equatable {
         case .unsupportedVersion(let requirement):
             requirement
         case .needsMigration:
-            "The old DictaFlow registration needs to be migrated."
+            "Agent Voice setup needs to be updated."
         case .updateInterrupted:
             "The Omdo update was interrupted and needs to be recovered."
         case .needsSetup:
@@ -79,8 +79,8 @@ struct AgentVoiceHostCard: View {
             return offersOneClickSetup ? "Update setup to add the missing voice hooks."
                 : "Open Show setup and follow the Voice hooks instructions."
         case .needsMigration:
-            return offersOneClickSetup ? "Close the host, then choose Update to replace the old DictaFlow registration."
-                : "Close the host, then open Show setup to replace the old DictaFlow registration manually."
+            return offersOneClickSetup ? "Close the host, then choose Update."
+                : "Close the host, then open Show setup and follow the instructions."
         case .updateInterrupted:
             return offersOneClickSetup ? "Close the host, then choose Recover setup."
                 : "Install or restore the \(brand.displayName) CLI, then reopen this page to recover setup."
