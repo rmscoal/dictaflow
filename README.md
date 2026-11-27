@@ -1,12 +1,12 @@
 # Omdo
 
 <p align="center">
-  <strong>Private dictation that types where you work.</strong><br>
-  Turn spoken thoughts into text, right in the app you’re using. All on your Mac.
+  <strong>Work out loud.</strong><br>
+  Talk through a problem with your coding agent and hear its reply. Dictate into the apps you already use, with speech processing on your Mac.
 </p>
 
 <p align="center">
-  <a href="https://github.com/rmscoal/dictaflow/releases/latest"><img src="https://img.shields.io/github/v/release/rmscoal/dictaflow?style=flat-square&label=release&color=444444" alt="Download the latest release"></a>
+  <a href="https://github.com/rmscoal/dictaflow/releases/latest"><img src="https://img.shields.io/github/v/release/rmscoal/dictaflow?style=flat-square&label=release&color=444444" alt="Latest Omdo release"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-111827?style=flat-square&logo=apple" alt="macOS 14 or newer">
   <img src="https://img.shields.io/badge/Mac-Apple%20silicon-111827?style=flat-square&logo=apple" alt="Apple silicon Mac">
   <img src="https://img.shields.io/badge/processing-local-16a34a?style=flat-square" alt="Local processing">
@@ -14,116 +14,112 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/rmscoal/dictaflow/releases/latest"><strong>Published releases</strong></a><br>
-  <sub>Apple silicon · macOS 14 or newer · No account or API key</sub>
+  <a href="https://github.com/rmscoal/dictaflow/releases/latest"><strong>Download Omdo for Mac</strong></a><br>
+  <sub>Built to run locally</sub>
 </p>
 
-## From thought to text
-
-An email, a quick reply, a technical note. Say what you want to write, and
-Omdo puts the text where your cursor is. Start and stop with a global
-shortcut or from the menu bar, without switching away from your work.
-
-Omdo is a native macOS app. Speech recognition and optional text cleanup
-run locally, with no cloud transcription, analytics, or account to manage.
-Once your models are downloaded, you can dictate offline.
-
-- **Speak your language.** Transcribe in many languages, or translate supported speech into English.
-- **Make it sound like you.** Keep the transcript as spoken, or use optional local refinement for clearer wording and punctuation.
-- **Match the app.** Choose a writing style for each app, such as casual messages in chat and technical notes in your editor.
-- **Teach it your words.** Add names and specialist terms to custom vocabulary to help recognition.
-- **Pick up where you left off.** With history enabled, revisit recordings, compare original and refined text, copy a result, or try again.
+<p align="center">
+  <img src="Docs/Screenshots/omdo-dictation.png" width="740" alt="Omdo’s Dictation window with a local Whisper model, language controls, and a before-and-after writing example using Casual formatting">
+</p>
 
 ## Start dictating
 
-1. Build and install the **Omdo Dev** preview with `make run`.
-2. Open Omdo. In **Dictation → Transcription**, choose and download a speech model.
-3. Allow microphone access when asked. For automatic text insertion, allow Accessibility access when needed.
-4. Place your cursor in the app you want to write in. Press your dictation shortcut, speak, then press it again to finish.
+You’ll need an Apple silicon Mac with macOS 14 or later. The model picker shows
+each download size before you choose.
 
-Find or change your shortcut in **Settings → General**. If automatic insertion
-is unavailable, Omdo offers a copy panel so you can paste the result yourself.
+1. Download the latest `Omdo-…-arm64.dmg`, open it, and drag **Omdo** into **Applications**. Public releases are signed and notarized.
+2. Open **Dictation → Transcription** and use **Change…** or **Download…** to choose a speech model. If you choose Liquid, Omdo directs you to **Agent Voice** to download its shared model.
+3. Allow microphone access when prompted. Allow Accessibility access if you want Omdo to insert text automatically.
+4. Place your cursor where you want the text. Press the default shortcut <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>&#92;</kbd> to start, speak, then press it again to finish. You can also start dictation from the menu bar.
 
-Public releases are signed and notarized. You need an Apple silicon Mac running
-macOS 14 or newer, plus an internet connection to download the app, models, and
-updates. Larger models need more memory and disk space.
+Find or change your shortcut in **Settings → General**. If Omdo can’t insert
+the result, it opens a copy panel so you can paste it yourself.
 
-## A little cleanup, your way
+## Hear your coding agent
 
-Use **Dictation → Refinement** to turn rough speech into text that is easier to
-share. Choose a local model and a writing style: Normal Cleanup, Professional
-Formal, Casual Text Messaging, or Technical and Engineering. Add your own
-instructions, or use DIY for a fully custom prompt.
+Dictate a prompt into your coding app, send it, and listen to the reply.
+Omdo uses a local Liquid model to speak replies. Choose automatic playback
+or use **Play on request** to listen when you’re ready.
 
-You can assign styles to individual apps and let Omdo switch when you
-start recording. Below the styles, a **Final formatting** slider offers
-Casual, Original, and Formal finishing for every app, even when refinement
-is off.
+1. Open **Agent Voice → General**, turn on **Enable Agent Voice**, and download the speech model if needed.
+2. Choose a voice, accent, and speed, then click **Test speech** to hear a sample.
+3. Under **Connections**, choose your coding app and quit it. For Codex or Muse Code, click **Set up** in Omdo. For Claude Code or another host, follow the manual configuration on its card.
+4. Start a new session in your coding app. In Codex, use `/hooks` to review and trust the changed hooks.
 
-Refinement is optional. If it cannot complete, Omdo keeps the original
-transcription and applies your selected final formatting. You can review saved results in
-**History** before reusing them.
+![Omdo’s Connections panel showing the Codex setup button and tabs for Muse Code, Claude Code, and other hosts](Docs/Screenshots/omdo-agent-voice.png)
+
+See the [Agent Voice setup guide](Docs/AgentVoice.md#setup-and-host-boundaries)
+for supported host versions and manual setup.
+
+## Write the way you want
+
+- **Dictate in your language.** Choose local Whisper or Liquid speech recognition. With Whisper, set the input language or translate compatible speech into English.
+- **Clean up rough speech.** Open **Dictation → Refinement** to remove filler, clean up punctuation, or give a local model your own instructions. Assign different writing styles to different apps, such as casual chat and technical notes.
+- **Choose the finishing touches.** Set **Final formatting** to Casual, Original, or Formal. It also works with refinement off. Add names and specialist terms in **Dictation → Transcription → Vocabulary**.
+- **Revisit what you said.** With history enabled, open **History** to compare original and refined text, copy or insert a result again, or retry it.
 
 ## Local by design
 
-Your audio and text stay on your Mac during transcription and refinement.
-Omdo uses local [Whisper](https://github.com/ggml-org/whisper.cpp) speech
-models and [llama.cpp](https://github.com/ggml-org/llama.cpp) for optional text
-refinement. No subscription or cloud inference is required.
+Transcription, optional refinement, and Agent Voice playback run on your Mac.
+Omdo has no analytics or cloud transcription. You’ll need an internet
+connection to download the app, models, and updates. Once your models are in
+place, you can dictate offline.
 
-Download models from their **Change…** buttons in Dictation. Choose a smaller
-model for a lighter setup or a larger one when accuracy matters more. Downloads
-are checksum-verified before use, and supported speech models offer optional
-Neural Engine acceleration.
+Omdo uses [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and Liquid for
+speech recognition, Liquid for Agent Voice speech, and
+[llama.cpp](https://github.com/ggml-org/llama.cpp) for optional refinement.
+Model downloads are verified before use. Some Whisper models support Neural
+Engine acceleration.
 
-You control what stays on disk:
+Manage model files under **Settings → General → Storage**. Choose how long to
+keep recordings and text under **History → History settings**, or turn history
+off. Omdo tries to restore your clipboard contents after clipboard-based
+insertion. Automatic update checks use GitHub Releases and can be turned off
+in **Updates**.
 
-- **Models** stay until you remove them. Open **Settings → General → Storage** to find local model files and manage storage.
-- **History** keeps recordings and text for your selected retention period. With history off, recordings are temporary.
-- **Clipboard insertion** restores the previous clipboard contents when possible.
+## Make Omdo feel at home
 
-Update checks use GitHub Releases and send no transcripts, recordings, or usage
-data. You can turn automatic checks off. To update, open **Updates**, download
-the new DMG, and replace Omdo in Applications.
+Open **Settings → Appearance** to choose Light, Dark, or System. Turn on
+**Liquid Glass** for a translucent main window when macOS allows transparency.
 
-## Need a hand?
-
-| If… | Try… |
-| --- | --- |
-| Recording will not start | Check microphone access in **Settings → Permissions**. |
-| Text is not inserted | Check Accessibility access in **Settings → Permissions**, or use the copy panel. |
-| Recognition misses words | Set the input language, add custom vocabulary, or try a larger speech model. |
-| The first dictation takes longer | Give the selected local models time to load. |
-| You want to recover a previous result | Open **History**, if recording history was enabled. |
-
-For bugs or suggestions, [open an issue](https://github.com/rmscoal/dictaflow/issues).
-
-## Build and contribute
-
-Omdo is open source. Contributions that keep it private, local, and pleasant
-to use are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
-
-With Xcode installed, clone the repository and run:
-
-```sh
-make run
-```
-
-This builds, installs, and launches **Omdo Dev**. Use `make build` to install
-without launching, or `make verify` to check the installed app’s signature and
-launch it. The main Xcode scheme is `DictaFlow Dev`; see the
-[verification guide](Tests/README.md) for tests and manual checks.
+<img src="Docs/Screenshots/omdo-appearance.png" width="540" alt="Omdo’s Appearance settings with Light, Dark, and System options and the Liquid Glass toggle">
 
 ## Upgrading from DictaFlow
 
-Omdo migrates local history, refinement prompts, Agent Voice history, and verified Liquid models before opening its normal interface. Quit older copies of the same build before upgrading. Release data goes from `~/Library/Application Support/DictaFlow` to `Omdo` under the same parent. Dev data goes from `DictaFlow Dev` to `Omdo Dev`. Use **Show previous DictaFlow data in Finder** from the Omdo menu to inspect the retained originals or a saved interrupted copy. Once Omdo has opened and committed the new stores, continue using Omdo. Relaunching an archived older app can write to the old folders separately.
+Quit older copies of DictaFlow before opening Omdo. On first launch, Omdo
+migrates local history, refinement prompts, and Agent Voice history. It also
+tries to reuse verified models. If a model needs attention, follow the in-app
+instructions to restore it or choose another one.
 
-Omdo Dev continues using the shared legacy Whisper and refinement model cache in `DictaFlow/Models`. Production Omdo copies verified models into `Omdo/Models`. Keep the legacy model cache while any older app or preview still uses it.
+After migration, **Settings → Legacy** lists previous data when it’s
+still on disk. Use **Show in Finder** to inspect it, or **Remove previous data**
+after you’ve checked that your migrated data is available. You can also reach
+the tab from **Previous DictaFlow data…** in the menu bar.
 
-To update Agent Voice, close the host and use **Update** in **Agent Voice > General > Connections**. See the [Agent Voice setup guide](Docs/AgentVoice.md#setup-and-host-boundaries) for manual configuration and hook review.
+If you set up Agent Voice in DictaFlow, quit the coding app you connected,
+such as Codex or Muse Code. In Omdo, open **Agent Voice → General → Connections**,
+select that app, and click **Update** if it appears. If Omdo has no update
+button, follow the [host setup guide](Docs/AgentVoice.md#setup-and-host-boundaries).
+Start a new session afterward. In Codex, review and trust the changed hooks with
+`/hooks`.
 
-## License
+If you still use DictaFlow or Omdo Dev, keep the model files in
+`~/Library/Application Support/DictaFlow/Models`. Those apps may still load
+models from that folder.
+
+## Help and development
+
+- **Recording won’t start.** Check microphone access in **Settings → Permissions**.
+- **Text doesn’t appear at the cursor.** Check Accessibility access under **Settings → Permissions**, or use the copy panel.
+- **Recognition misses words.** Set the input language when available, add custom vocabulary, or try another model.
+
+[Open an issue](https://github.com/rmscoal/dictaflow/issues) for bugs or suggestions.
+
+To build and launch **Omdo Dev**, install Xcode, clone the repository, and run
+`make run`. The main Xcode scheme is `DictaFlow Dev`. See
+[CONTRIBUTING.md](CONTRIBUTING.md) and the [verification guide](Tests/README.md)
+for development and testing.
 
 Omdo is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE).
-Third-party notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-and [NOTICE](NOTICE).
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [NOTICE](NOTICE) for
+third-party notices.
