@@ -436,7 +436,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 3.0.0;
+				MARKETING_VERSION = 3.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow;
 				PRODUCT_NAME = "Omdo";
 				PRODUCT_MODULE_NAME = DictaFlow;
@@ -493,7 +493,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 3.0.0;
+				MARKETING_VERSION = 3.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow;
 				PRODUCT_NAME = "Omdo";
 				PRODUCT_MODULE_NAME = DictaFlow;
@@ -666,7 +666,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 3.0.0;
+				MARKETING_VERSION = 3.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow.dev;
 				PRODUCT_NAME = "Omdo Dev";
 				PRODUCT_MODULE_NAME = DictaFlow_Dev;
@@ -721,7 +721,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 3.0.0;
+				MARKETING_VERSION = 3.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.dictaflow.dev;
 				PRODUCT_NAME = "Omdo Dev";
 				PRODUCT_MODULE_NAME = DictaFlow_Dev;
