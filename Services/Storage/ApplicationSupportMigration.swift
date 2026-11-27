@@ -26,6 +26,27 @@ nonisolated struct ApplicationSupportPaths: Sendable {
         (["History", "Prompts", "AgentVoice", "Models/Liquid"].map { legacy.appendingPathComponent($0) } + [uncommittedData])
             .filter { FileManager.default.fileExists(atPath: $0.path) }
     }
+
+    func canRemoveLegacyArtifact(_ artifact: URL) throws -> Bool {
+        let rootComponents = applicationSupport.pathComponents
+        let components = artifact.pathComponents
+        guard components.starts(with: rootComponents), components.count > rootComponents.count else { return false }
+
+        // lstat checks the final component only. Walk down from the support root
+        // so a symlink cannot redirect a lookup of any later component.
+        var location = applicationSupport
+        try MigrationFiles.requireDirectory(location)
+        for component in components.dropFirst(rootComponents.count) {
+            location.appendPathComponent(component)
+            if try MigrationFiles.attributes(location)?[.type] as? FileAttributeType == .typeSymbolicLink {
+                return false
+            }
+        }
+
+        let activeComponents = current.resolvingSymlinksInPath().pathComponents
+        let artifactComponents = artifact.resolvingSymlinksInPath().pathComponents
+        return !artifactComponents.starts(with: activeComponents) && !activeComponents.starts(with: artifactComponents)
+    }
 }
 
 /// Imports only verified assets. A model failure is independent of the private data stores.
@@ -394,6 +415,14 @@ nonisolated struct ApplicationSupportMigration: Sendable {
         let history: SQLiteHistoryStore
         let voice: Result<VoiceStore, any Error>
         var isNewStorage = false
+    }
+
+    /// Whether the storage journal has reached its committed phase.
+    static func hasCompletedMigration(paths: ApplicationSupportPaths) -> Bool {
+        let journalURL = paths.storageWork.appendingPathComponent("storage.json")
+        guard let data = try? Data(contentsOf: journalURL),
+              let journal = try? JSONDecoder().decode(Journal.self, from: data) else { return false }
+        return journal.phase == .committed
     }
 
     /// Called before constructing app state, while no services can write to either root.

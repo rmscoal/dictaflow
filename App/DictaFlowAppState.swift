@@ -46,6 +46,9 @@ final class DictaFlowAppState: ObservableObject {
     @Published var settingsCategory: SettingsCategory = .general {
         didSet { if settingsCategory != .general { cancelGlobalShortcutEditing() } }
     }
+    @Published private(set) var legacyDataLocations: [URL] = []
+    @Published private(set) var hasCompletedMigration = false
+    private let applicationSupportPaths: ApplicationSupportPaths?
     @Published var modelPickerPresentation: ModelPickerPresentation?
     @Published private(set) var interfaceIssue: InterfaceIssue?
     @Published private(set) var downloadCompletionNotice: DownloadCompletionNotice?
@@ -189,7 +192,8 @@ final class DictaFlowAppState: ObservableObject {
             textInsertionService: SystemTextInsertionService(),
             localNotificationService: UserLocalNotificationService(),
             appUpdateService: GitHubReleaseUpdateService(),
-            historyStore: stores.history
+            historyStore: stores.history,
+            applicationSupportPaths: paths
         )
         // Hosted tests use isolated coordinator fixtures. Do not bind the user's socket
         // or recover/cancel speech from a separately running installed Dev app.
@@ -227,7 +231,8 @@ final class DictaFlowAppState: ObservableObject {
         localNotificationService: LocalNotificationServiceProtocol,
         appUpdateService: AppUpdateChecking,
         historyStore: HistoryStoreProtocol? = nil,
-        agentVoice: AgentVoiceCoordinator? = nil
+        agentVoice: AgentVoiceCoordinator? = nil,
+        applicationSupportPaths: ApplicationSupportPaths? = nil
     ) {
         var initialRefinementConfiguration = settingsStore.refinementConfiguration
         if initialRefinementConfiguration.writingStyleVersion == 0 {
@@ -248,6 +253,11 @@ final class DictaFlowAppState: ObservableObject {
         }
         let initialPromptText = refinementPromptStore.promptTemplate()
 
+        self.applicationSupportPaths = applicationSupportPaths
+        self.legacyDataLocations = applicationSupportPaths?.legacyArtifacts() ?? []
+        self.hasCompletedMigration = applicationSupportPaths.map {
+            ApplicationSupportMigration.hasCompletedMigration(paths: $0)
+        } ?? false
         self.historyStore = historyStore
         self.agentVoice = agentVoice
         self.history = HistoryViewModel(store: historyStore)
@@ -929,6 +939,56 @@ final class DictaFlowAppState: ObservableObject {
     func showSettingsCategory(_ category: SettingsCategory) {
         settingsCategory = category
         showMainWindowPage(.settings)
+    }
+
+    var visibleSettingsCategories: [SettingsCategory] {
+        Self.settingsCategories(hasCompletedMigration: hasCompletedMigration,
+                                legacyDataExists: !legacyDataLocations.isEmpty)
+    }
+
+    static func settingsCategories(hasCompletedMigration: Bool, legacyDataExists: Bool) -> [SettingsCategory] {
+        SettingsCategory.allCases.filter { $0 != .legacy || (hasCompletedMigration && legacyDataExists) }
+    }
+
+    /// Re-reads legacy visibility from disk. Call after `prepare()` and after deletion.
+    func refreshLegacyDataState() {
+        guard let applicationSupportPaths else {
+            legacyDataLocations = []
+            hasCompletedMigration = false
+            return
+        }
+        legacyDataLocations = applicationSupportPaths.legacyArtifacts()
+        hasCompletedMigration = ApplicationSupportMigration.hasCompletedMigration(paths: applicationSupportPaths)
+        if legacyDataLocations.isEmpty, settingsCategory == .legacy {
+            settingsCategory = .general
+        }
+    }
+
+    /// Deletes only the legacy artifacts (and the Previous attempt folder when
+    /// present). The Omdo Migration journal (`storage.json`) is never removed.
+    /// Returns an error message on failure, or nil when everything was removed.
+    @discardableResult
+    func removeLegacyData() -> String? {
+        refreshLegacyDataState()
+        guard let applicationSupportPaths else { return nil }
+        let journalURL = applicationSupportPaths.storageWork.appendingPathComponent("storage.json")
+        var failures: [String] = []
+        for url in legacyDataLocations where url != journalURL {
+            do {
+                guard try applicationSupportPaths.canRemoveLegacyArtifact(url) else {
+                    failures.append("\(url.lastPathComponent): The path contains a symbolic link or points to active Omdo data.")
+                    continue
+                }
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        refreshLegacyDataState()
+        guard failures.isEmpty else {
+            return "Could not remove some previous data. \(failures.joined(separator: " "))"
+        }
+        return nil
     }
 
     func showDictationSettings(_ tab: DictationSettingsTab) {

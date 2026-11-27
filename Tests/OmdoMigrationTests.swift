@@ -51,6 +51,15 @@ final class OmdoMigrationTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: newPrompt, encoding: .utf8), "legacy fixture")
     }
 
+    func testHasCompletedMigrationTracksJournalPhase() async throws {
+        let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
+        XCTAssertFalse(ApplicationSupportMigration.hasCompletedMigration(paths: paths))
+        _ = try await ApplicationSupportMigration(paths: paths).prepare { false }
+        XCTAssertTrue(ApplicationSupportMigration.hasCompletedMigration(paths: paths))
+        // The journal itself is never reported as a legacy artifact.
+        XCTAssertFalse(paths.legacyArtifacts().contains(paths.storageWork.appendingPathComponent("storage.json")))
+    }
+
     func testCleanAndCommittedLaunchesDoNotReportMigrationProgress() async throws {
         let paths = ApplicationSupportPaths(applicationSupport: try fixture(), bundleID: "com.dictaflow.dev")
         let migration = ApplicationSupportMigration(paths: paths)
@@ -705,11 +714,367 @@ final class OmdoMigrationTests: XCTestCase {
                                                          host: .codex, executable: helper.path).matches)
     }
 
+    func testCodexSetupFallsBackToCLIForMultilineArguments() async throws {
+        let host = try fixture()
+        let cli = host.appendingPathComponent("fake-codex")
+        let script = #"""
+        #!/usr/bin/env python3
+        import json, os, re, sys
+        args = sys.argv[1:]
+        if args == ["--version"]:
+            print("codex-cli 0.171.0"); raise SystemExit(0)
+        home = os.environ["CODEX_HOME"]
+        path = os.path.join(home, "config.toml")
+        def read():
+            try: return open(path).read()
+            except FileNotFoundError: return ""
+        def entry(name):
+            for line in read().splitlines():
+                if line.strip().startswith("mcp_servers") and not line.strip().startswith("["):
+                    im = re.search(re.escape(name) + r'\s*=\s*\{([^}]*)\}', line)
+                    if im:
+                        body = im.group(1)
+                        icmd = re.search(r'command\s*=\s*(?:\'([^\']*)\'|"((?:[^"\\]|\\.)*)")', body)
+                        iarg = re.search(r'args\s*=\s*\[(.*?)\]', body, re.S)
+                        ien = re.search(r'enabled\s*=\s*(true|false)', body)
+                        cmdv = (icmd.group(1) if icmd.group(1) is not None else json.loads('"' + icmd.group(2) + '"')) if icmd else ""
+                        argv = []
+                        if iarg:
+                            for sq, dq in re.findall(r"'([^']*)'|\"((?:[^\"\\]|\\.)*)\"", iarg.group(1)):
+                                argv.append(sq if sq else json.loads('"' + dq + '"'))
+                        return {"transport": {"command": cmdv, "args": argv}, "enabled": (ien.group(1) == "true") if ien else True}
+            m = re.search(r'\[mcp_servers\.' + re.escape(name) + r'\]\n(.*?)(?=\n\[|\Z)', read(), re.S)
+            if not m: return None
+            body = m.group(1)
+            cmd = re.search(r'command\s*=\s*"((?:[^"\\]|\\.)*)"', body)
+            argm = re.search(r'args\s*=\s*\[(.*?)\]', body, re.S)
+            en = re.search(r'enabled\s*=\s*(true|false)', body)
+            return {"transport": {"command": json.loads('"' + cmd.group(1) + '"') if cmd else "", "args": [json.loads('"' + x + '"') for x in re.findall(r'"((?:[^"\\]|\\.)*)"', argm.group(1))] if argm else []}, "enabled": (en.group(1) == "true") if en else True}
+        if args[:2] == ["mcp", "list"]:
+            print("omdo"); raise SystemExit(0)
+        if args[:2] == ["mcp", "get"]:
+            found = entry(args[-1])
+            if found is None: raise SystemExit(1)
+            print(json.dumps(found)); raise SystemExit(0)
+        if args[:2] == ["mcp", "remove"]:
+            name = args[-1]; out = []; skip = False
+            for line in read().splitlines(True):
+                stripped = line.strip()
+                if stripped.startswith("mcp_servers") and not stripped.startswith("[") and "=" in stripped and (" " + name + " ") in (" " + stripped + " "):
+                    continue
+                hdr = re.match(r'\[(.+)\]\s*$', stripped)
+                if hdr:
+                    parts = hdr.group(1).split(".")
+                    skip = len(parts) >= 2 and parts[0] == "mcp_servers" and parts[1].strip('"') == name
+                if skip: continue
+                out.append(line)
+            open(path, "w").write("".join(out)); raise SystemExit(0)
+        raise SystemExit(1)
+        """#
+        try Data(script.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        let helper = host.appendingPathComponent("dictaflow-mcp")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: helper)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+        let configURL = AgentVoiceHostInstaller.codexConfigURL(homeDirectoryURL: host)
+        try FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        # Example: omdo = { }
+        model = "keep-this-setting"
+        [mcp_servers.dictaflow]
+        command = "/Applications/DictaFlow.app/Contents/MacOS/dictaflow-mcp"
+        args = [
+            "--app-id", "com.dictaflow", "--installation-id", "stale", "--host", "codex"
+        ]
+        enabled = false
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+        let completion = try await AgentVoiceHostInstaller.setUp(
+            host: .codex, executable: helper.path, appID: "com.dictaflow.dev", installationID: installation,
+            agentVoiceEnabled: true, homeDirectoryURL: host, cliDiscovery: { _ in cli.path }, hostIdle: { true })
+        let contents = try String(contentsOf: configURL, encoding: .utf8)
+        XCTAssertTrue(completion.contains("remains disabled"))
+        XCTAssertTrue(contents.hasPrefix("# Example: omdo = { }"))
+        XCTAssertTrue(contents.contains("model = \"keep-this-setting\""))
+        XCTAssertTrue(contents.contains("[mcp_servers.omdo]"))
+        XCTAssertFalse(contents.contains("dictaflow = {"))
+        let configuration = try CodexMCPConfiguration(Data(contents.utf8))
+        XCTAssertFalse(configuration.aliases.contains("dictaflow"))
+        XCTAssertTrue(configuration.aliases.contains("omdo"))
+        XCTAssertTrue(configuration.isDisabled(alias: "omdo"))
+    }
+
+    /// Fake Codex CLI that reads and removes both section and inline
+    /// `mcp_servers` entries, preserving unrelated inline entries on removal.
+    private func fakeCodexCLI(in host: URL) throws -> URL {
+        let cli = host.appendingPathComponent("fake-codex")
+        let script = #"""
+        #!/usr/bin/env python3
+        import json, os, re, sys
+        args = sys.argv[1:]
+        if args == ["--version"]:
+            print("codex-cli 0.171.0"); raise SystemExit(0)
+        home = os.environ["CODEX_HOME"]
+        path = os.path.join(home, "config.toml")
+        def read():
+            try: return open(path).read()
+            except FileNotFoundError: return ""
+        def quoted(body, key):
+            m = re.search(key + r'\s*=\s*(?:\'([^\']*)\'|"((?:[^"\\]|\\.)*)")', body)
+            if not m: return ""
+            return m.group(1) if m.group(1) is not None else json.loads('"' + m.group(2) + '"')
+        def parse_body(body):
+            argv = []
+            am = re.search(r'args\s*=\s*\[(.*?)\]', body, re.S)
+            if am:
+                for sq, dq in re.findall(r"'([^']*)'|\"((?:[^\"\\]|\\.)*)\"", am.group(1)):
+                    argv.append(sq if sq else json.loads('"' + dq + '"'))
+            en = re.search(r'enabled\s*=\s*(true|false)', body)
+            result = {"transport": {"command": quoted(body, "command"), "args": argv}, "enabled": (en.group(1) == "true") if en else True}
+            for key in ("enabled_tools", "disabled_tools"):
+                match = re.search(key + r'\s*=\s*\[([^]]*)\]', body)
+                if match:
+                    result[key] = re.findall(r"'([^']*)'", match.group(1))
+            return result
+        def entry(name):
+            for line in read().splitlines():
+                if line.strip().startswith("mcp_servers") and not line.strip().startswith("["):
+                    m = re.search(re.escape(name) + r'\s*=\s*\{([^}]*)\}', line)
+                    if m: return parse_body(m.group(1))
+            m = re.search(r'\[mcp_servers\.' + re.escape(name) + r'\]\n(.*?)(?=\n\[|\Z)', read(), re.S)
+            return parse_body(m.group(1)) if m else None
+        if args[:2] == ["mcp", "list"]:
+            print("omdo"); raise SystemExit(0)
+        if args[:2] == ["mcp", "get"]:
+            found = entry(args[-1])
+            if found is None: raise SystemExit(1)
+            print(json.dumps(found)); raise SystemExit(0)
+        if args[:2] == ["mcp", "remove"]:
+            name = args[-1]; out = []; skip = False
+            for line in read().splitlines(True):
+                stripped = line.strip()
+                if stripped.startswith("mcp_servers") and not stripped.startswith("[") and "=" in stripped:
+                    m = re.search(re.escape(name) + r'\s*=\s*\{[^}]*\}', line)
+                    if m:
+                        start, end = m.span()
+                        if end < len(line) and line[end] == ",":
+                            end += 1
+                            while end < len(line) and line[end] == " ": end += 1
+                        elif start > 0 and "," in line[:start]:
+                            start = line.rfind(",", 0, start)
+                        line = line[:start] + line[end:]
+                        if re.search(r'mcp_servers\s*=\s*\{\s*\}', line): continue
+                    out.append(line); continue
+                hdr = re.match(r'\[(.+)\]\s*$', stripped)
+                if hdr:
+                    parts = hdr.group(1).split(".")
+                    skip = len(parts) >= 2 and parts[0] == "mcp_servers" and parts[1].strip('"') == name
+                if skip: continue
+                out.append(line)
+            open(path, "w").write("".join(out)); raise SystemExit(0)
+        raise SystemExit(1)
+        """#
+        try Data(script.utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        return cli
+    }
+
+    private func fakeCodexFixture(config: String) throws -> (host: URL, cli: URL, helper: URL, configURL: URL) {
+        let host = try fixture()
+        let cli = try fakeCodexCLI(in: host)
+        let helper = host.appendingPathComponent("dictaflow-mcp")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: helper)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+        let configURL = AgentVoiceHostInstaller.codexConfigURL(homeDirectoryURL: host)
+        try FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try config.write(to: configURL, atomically: true, encoding: .utf8)
+        return (host, cli, helper, configURL)
+    }
+
+    func testCodexSetupPreservesUnrelatedInlineServer() async throws {
+        let other = "other = { command = '/usr/bin/other', args = ['keep'] }"
+        let example = "# Example: omdo = { }"
+        let fixture = try fakeCodexFixture(config: """
+        \(example)
+        model = "keep-this-setting"
+        mcp_servers = { dictaflow = { command = '/Applications/DictaFlow.app/Contents/MacOS/dictaflow-mcp', args = ['--app-id', 'com.dictaflow', '--installation-id', 'stale', '--host', 'codex'], enabled = false, disabled_tools = ['on_stop'] }, \(other) }
+        """)
+        let completion = try await AgentVoiceHostInstaller.setUp(
+            host: .codex, executable: fixture.helper.path, appID: "com.dictaflow.dev", installationID: installation,
+            agentVoiceEnabled: true, homeDirectoryURL: fixture.host, cliDiscovery: { _ in fixture.cli.path }, hostIdle: { true })
+        let contents = try String(contentsOf: fixture.configURL, encoding: .utf8)
+        XCTAssertTrue(completion.contains("remains disabled"), completion)
+        XCTAssertTrue(contents.contains(example), contents)
+        XCTAssertTrue(contents.contains("disabled_tools = ['on_stop']"), contents)
+        XCTAssertTrue(contents.contains(other), contents)
+        XCTAssertFalse(contents.contains("dictaflow = {"), contents)
+        let configuration = try CodexMCPConfiguration(Data(contents.utf8))
+        XCTAssertEqual(configuration.aliases, ["omdo", "other"])
+        XCTAssertTrue(configuration.isDisabled(alias: "omdo"))
+    }
+
+    func testCodexSetupFallbackLeavesRegistrationsWithToolFiltersUntouched() async throws {
+        for filter in ["enabled_tools = []", "disabled_tools = ['on_stop']"] {
+            let config = """
+            [mcp_servers.dictaflow]
+            command = "/Applications/DictaFlow.app/Contents/MacOS/dictaflow-mcp"
+            args = [
+                "old"
+            ]
+            \(filter)
+            """
+            let fixture = try fakeCodexFixture(config: config)
+            do {
+                _ = try await AgentVoiceHostInstaller.setUp(
+                    host: .codex, executable: fixture.helper.path, appID: "com.dictaflow.dev", installationID: installation,
+                    agentVoiceEnabled: true, homeDirectoryURL: fixture.host, cliDiscovery: { _ in fixture.cli.path }, hostIdle: { true })
+                XCTFail("Registrations with tool filters require manual migration")
+            } catch CodexMCPConfiguration.EditError.unsupported {}
+            XCTAssertEqual(try String(contentsOf: fixture.configURL, encoding: .utf8), config)
+        }
+    }
+
+    func testCodexSetupAcceptsMCPServersSectionWithOptionalInlineSibling() async throws {
+        for config in ["[mcp_servers]\n", "[mcp_servers ]\nother = { command = '/usr/bin/other' }\n"] {
+            let fixture = try fakeCodexFixture(config: config)
+            _ = try await AgentVoiceHostInstaller.setUp(
+                host: .codex, executable: fixture.helper.path, appID: "com.dictaflow.dev", installationID: installation,
+                agentVoiceEnabled: true, homeDirectoryURL: fixture.host, cliDiscovery: { _ in fixture.cli.path }, hostIdle: { true })
+            let contents = try String(contentsOf: fixture.configURL, encoding: .utf8)
+            XCTAssertTrue(contents.hasPrefix(config), contents)
+            XCTAssertTrue(contents.contains("[mcp_servers.omdo]"), contents)
+        }
+    }
+
+    func testCodexInlineDottedKeysDistinguishManagedAliasesFromQuotedNames() throws {
+        for key in ["dictaflow.command", "'dictaflow' . command"] {
+            let config = try CodexMCPConfiguration(Data("mcp_servers = { \(key) = '/foreign', dictaflow.args = [] }".utf8))
+            XCTAssertEqual(config.aliases, ["dictaflow"])
+            XCTAssertThrowsError(try config.candidate(executable: currentHelper, arguments: [], ownsPath: { _ in false })) {
+                guard case CodexMCPConfiguration.EditError.unknownOwner = $0 else { return XCTFail("Expected unknown owner") }
+            }
+            let migrated = try config.candidate(executable: currentHelper, arguments: ["fresh"], ownsPath: { _ in true })
+            XCTAssertEqual(try CodexMCPConfiguration(migrated).aliases, ["omdo"])
+        }
+        let config = try CodexMCPConfiguration(Data("mcp_servers = { 'dictaflow.command' = { command = '/foreign' } }".utf8))
+        let migrated = try config.candidate(executable: currentHelper, arguments: [], ownsPath: { _ in false })
+        XCTAssertEqual(try CodexMCPConfiguration(migrated).aliases, ["dictaflow.command", "omdo"])
+    }
+
+    func testCodexSetupRejectsForeignInlineEntryMentioningOwnedHelper() async throws {
+        let config = """
+        # previous helper lived at /Applications/DictaFlow.app/Contents/MacOS/dictaflow-mcp
+        mcp_servers = { dictaflow = { command = '/usr/bin/foreign', args = ['x'] } }
+        """
+        let fixture = try fakeCodexFixture(config: config)
+        do {
+            _ = try await AgentVoiceHostInstaller.setUp(
+                host: .codex, executable: fixture.helper.path, appID: "com.dictaflow.dev", installationID: installation,
+                agentVoiceEnabled: true, homeDirectoryURL: fixture.host, cliDiscovery: { _ in fixture.cli.path }, hostIdle: { true })
+            XCTFail("A foreign entry must not be removed on a file-wide text match")
+        } catch CodexMCPConfiguration.EditError.unknownOwner {}
+        XCTAssertEqual(try String(contentsOf: fixture.configURL, encoding: .utf8), config)
+    }
+
+    func testCodexSetupPreservesBothAliasesOnCollision() async throws {
+        let config = """
+        mcp_servers = { dictaflow = { command = '/Applications/DictaFlow.app/Contents/MacOS/dictaflow-mcp', args = ['a'] }, omdo = { command = '/Applications/Omdo.app/Contents/MacOS/dictaflow-mcp', args = ['b'] } }
+        """
+        let fixture = try fakeCodexFixture(config: config)
+        do {
+            _ = try await AgentVoiceHostInstaller.setUp(
+                host: .codex, executable: fixture.helper.path, appID: "com.dictaflow.dev", installationID: installation,
+                agentVoiceEnabled: true, homeDirectoryURL: fixture.host, cliDiscovery: { _ in fixture.cli.path }, hostIdle: { true })
+            XCTFail("Both aliases together must require manual resolution")
+        } catch CodexMCPConfiguration.EditError.collision {}
+        XCTAssertEqual(try String(contentsOf: fixture.configURL, encoding: .utf8), config)
+    }
+
+    func testCodexInlineUnrelatedServersSurviveCandidate() throws {
+        let other = "other = { command = '/usr/bin/other', args = ['keep'] }"
+        let original = Data("model = \"keep\"\nmcp_servers = { \(other) }\n".utf8)
+        let migrated = try CodexMCPConfiguration(original).candidate(
+            executable: currentHelper, arguments: ["ours"], ownsPath: { _ in false })
+        let output = String(decoding: migrated, as: UTF8.self)
+        XCTAssertTrue(output.contains(other), output)
+        let result = try CodexMCPConfiguration(migrated)
+        XCTAssertEqual(result.aliases, ["omdo", "other"])
+        // An empty managed table cannot be adopted without a helper command.
+        for alias in ["dictaflow", "omdo"] {
+            let inline = try CodexMCPConfiguration(Data("mcp_servers = { \(alias) = {} }".utf8))
+            XCTAssertThrowsError(try inline.candidate(executable: currentHelper, arguments: ["ours"], ownsPath: { _ in true })) {
+                guard case CodexMCPConfiguration.EditError.unsupported = $0 else { return XCTFail("Expected unsupported") }
+            }
+        }
+    }
+
+    func testCodexAdoptsLegacyEntryWithDriftedArgsAcrossAppRename() throws {
+        let oldArgs = AgentVoiceHostInstaller.serverArguments(
+            appID: "com.dictaflow.dev", installationID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!, host: .codex)
+        let newArgs = AgentVoiceHostInstaller.serverArguments(appID: "com.dictaflow", installationID: installation, host: .codex)
+        let array = oldArgs.map { "\"\($0)\"" }.joined(separator: ", ")
+        let original = Data("""
+        [mcp_servers.dictaflow]
+        command = '\(legacyHelper)'
+        args = [\(array)]
+        enabled = false
+        """.utf8)
+        let owns: (String) -> Bool = {
+            AgentVoiceHostMigration.isOwnedHelper($0, current: "/Applications/Omdo.app/Contents/MacOS/dictaflow-mcp", appID: "com.dictaflow")
+        }
+        let migrated = try CodexMCPConfiguration(original).candidate(
+            executable: "/Applications/Omdo.app/Contents/MacOS/dictaflow-mcp", arguments: newArgs, ownsPath: owns)
+        let result = try CodexMCPConfiguration(migrated)
+        XCTAssertFalse(result.aliases.contains("dictaflow"))
+        XCTAssertTrue(result.aliases.contains("omdo"))
+        XCTAssertTrue(result.isDisabled(alias: "omdo"))
+        let output = String(decoding: migrated, as: UTF8.self)
+        XCTAssertTrue(output.contains("/Applications/Omdo.app/Contents/MacOS/dictaflow-mcp"))
+        XCTAssertTrue(output.contains(installation.uuidString))
+        XCTAssertFalse(output.contains("22222222-2222-2222-2222-222222222222"))
+    }
+
+    func testCodexStillRejectsForeignHelperEvenWithLegacyAlias() throws {
+        let original = Data("""
+        [mcp_servers.dictaflow]
+        command = "/Applications/Other.app/Contents/MacOS/dictaflow-mcp"
+        args = ['stale']
+        """.utf8)
+        let owns: (String) -> Bool = {
+            AgentVoiceHostMigration.isOwnedHelper($0, current: "/Applications/Omdo Dev.app/Contents/MacOS/dictaflow-mcp", appID: "com.dictaflow.dev")
+        }
+        XCTAssertThrowsError(try CodexMCPConfiguration(original).candidate(
+            executable: "/Applications/Omdo Dev.app/Contents/MacOS/dictaflow-mcp", arguments: ["ours"], ownsPath: owns)) {
+            guard case CodexMCPConfiguration.EditError.unknownOwner = $0 else { return XCTFail("Expected unknown owner") }
+        }
+    }
+
+    func testMuseAdoptsLegacyEntryWithDriftedArgs() throws {
+        let oldArgs = AgentVoiceHostInstaller.serverArguments(
+            appID: "com.dictaflow", installationID: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!, host: .museCode)
+        let newArgs = AgentVoiceHostInstaller.serverArguments(appID: "com.dictaflow", installationID: installation, host: .museCode)
+        let releaseHelper = "/Applications/DictaFlow.app/Contents/MacOS/dictaflow-mcp"
+        let currentReleaseHelper = "/Applications/Omdo.app/Contents/MacOS/dictaflow-mcp"
+        let old: [String: Any] = ["mcp_servers": [
+            "dictaflow": ["transport": "stdio", "command": releaseHelper, "args": oldArgs, "enabled": false]]]
+        let original = try JSONSerialization.data(withJSONObject: old)
+        let owns: (String) -> Bool = {
+            AgentVoiceHostMigration.isOwnedHelper($0, current: currentReleaseHelper, appID: "com.dictaflow")
+        }
+        let updated = try AgentVoiceHostInstaller.migratedMuseSettings(original, path: "/fixture",
+            executable: currentReleaseHelper, arguments: newArgs, ownsPath: owns)
+        let state = AgentVoiceHostInstaller.museEntryStatus(data: updated, executable: currentReleaseHelper, arguments: newArgs)
+        XCTAssertTrue(state.matches)
+        XCTAssertTrue(state.disabled)
+    }
+
     func testCodexProtectsForeignAndUnsupportedEntries() throws {
         let original = Data("[mcp_servers.dictaflow]\ncommand = '/foreign'\nargs = ['foreign']\n".utf8)
         let parsed = try CodexMCPConfiguration(original)
         XCTAssertThrowsError(try parsed.candidate(executable: currentHelper, arguments: ["ours"], ownsPath: { _ in false }))
-        XCTAssertThrowsError(try CodexMCPConfiguration(Data("mcp_servers = { dictaflow = {} }".utf8)))
+        let inline = try CodexMCPConfiguration(Data("mcp_servers = { dictaflow = {} }".utf8))
+        XCTAssertThrowsError(try inline.candidate(executable: currentHelper, arguments: ["ours"], ownsPath: { _ in true })) {
+            guard case CodexMCPConfiguration.EditError.unsupported = $0 else { return XCTFail("Expected unsupported") }
+        }
     }
 
     func testMuseMovesRegistrationAndGuardTogetherAndPreservesDisabledFlag() throws {
@@ -734,8 +1099,13 @@ final class OmdoMigrationTests: XCTestCase {
         let servers = try XCTUnwrap(root["mcp_servers"] as? [String: [String: Any]])
         XCTAssertNil(servers["dictaflow"])
         XCTAssertEqual(servers["other"]?["command"] as? String, "unchanged")
+        // Drifted args are adopted and rewritten, not treated as foreign.
+        let rewritten = try AgentVoiceHostInstaller.migratedMuseSettings(original,
+            path: "/fixture", executable: currentHelper, arguments: ["different installation"], ownsPath: { $0 == legacyHelper })
+        XCTAssertTrue(AgentVoiceHostInstaller.museEntryStatus(
+            data: rewritten, executable: currentHelper, arguments: ["different installation"]).matches)
         XCTAssertThrowsError(try AgentVoiceHostInstaller.migratedMuseSettings(original,
-            path: "/fixture", executable: currentHelper, arguments: ["different installation"], ownsPath: { _ in true }))
+            path: "/fixture", executable: currentHelper, arguments: args, ownsPath: { _ in false }))
     }
 
     func testHostRecoveryFinalizesAnAlreadyAppliedPairWithoutRewritingIt() async throws {

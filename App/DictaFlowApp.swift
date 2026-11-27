@@ -21,8 +21,7 @@ private struct MenuBarLaunchContent: View {
 
     var body: some View {
         if let state = appDelegate.appState {
-            MenuBarView(appState: state, modelMigrationNotice: appDelegate.modelMigrationNotice,
-                        legacyDataLocations: appDelegate.legacyDataLocations)
+            MenuBarView(appState: state, modelMigrationNotice: appDelegate.modelMigrationNotice)
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 if let migration = appDelegate.migration {

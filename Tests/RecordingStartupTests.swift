@@ -56,6 +56,103 @@ final class RecordingStartupTests: XCTestCase {
         XCTAssertNil(state.modelPickerPresentation)
     }
 
+    func testLegacyTabShowsOnlyWhenCommittedAndLegacyDataExists() throws {
+        XCTAssertEqual(DictaFlowAppState.settingsCategories(hasCompletedMigration: false, legacyDataExists: true),
+                       [.general, .appearance, .permissions])
+        XCTAssertEqual(DictaFlowAppState.settingsCategories(hasCompletedMigration: true, legacyDataExists: false),
+                       [.general, .appearance, .permissions])
+        XCTAssertTrue(DictaFlowAppState.settingsCategories(hasCompletedMigration: true, legacyDataExists: true).contains(.legacy))
+
+        for phase in ["committed", "copying"] {
+            let support = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: support) }
+            let paths = ApplicationSupportPaths(applicationSupport: support, bundleID: "com.dictaflow.dev")
+            let history = paths.legacy.appendingPathComponent("History/record.txt")
+            try FileManager.default.createDirectory(at: history.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("legacy".utf8).write(to: history)
+            try FileManager.default.createDirectory(at: paths.storageWork, withIntermediateDirectories: true)
+            let journal = paths.storageWork.appendingPathComponent("storage.json")
+            try Data("{\"phase\":\"\(phase)\",\"stagingName\":\"\(UUID().uuidString)\"}".utf8).write(to: journal)
+
+            let fixture = try RecordingStartupFixture(applicationSupportPaths: paths)
+            defer { fixture.cleanup() }
+            let state = fixture.state
+            XCTAssertEqual(state.hasCompletedMigration, phase == "committed")
+            XCTAssertEqual(state.legacyDataLocations, paths.legacyArtifacts())
+            XCTAssertEqual(state.visibleSettingsCategories.contains(.legacy), phase == "committed")
+            guard phase == "committed" else { continue }
+
+            XCTAssertEqual(LegacyDataItem.make(from: paths.legacy.appendingPathComponent("History")).byteCount, 6)
+            state.showSettingsCategory(.legacy)
+            XCTAssertNil(state.removeLegacyData())
+            XCTAssertFalse(FileManager.default.fileExists(atPath: history.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: journal.path), "storage.json must not be deleted")
+            XCTAssertTrue(state.legacyDataLocations.isEmpty)
+            XCTAssertFalse(state.visibleSettingsCategories.contains(.legacy))
+            XCTAssertEqual(state.settingsCategory, .general, "Deleting the last legacy data must hide the tab")
+        }
+    }
+
+    func testLegacyRemovalRejectsSymlinkPathsAndRemovesOrdinaryData() throws {
+        let files = FileManager.default
+        let support = files.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? files.removeItem(at: support) }
+        let paths = ApplicationSupportPaths(applicationSupport: support, bundleID: "com.dictaflow.dev")
+        let activeModels = paths.current.appendingPathComponent("Models")
+        let activeFile = activeModels.appendingPathComponent("Liquid/model.bin")
+        let legacyModels = paths.legacy.appendingPathComponent("Models")
+        let legacyPrompts = paths.legacy.appendingPathComponent("Prompts")
+        let legacyHistory = paths.legacy.appendingPathComponent("History")
+        try files.createDirectory(at: activeFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("active".utf8).write(to: activeFile)
+        try files.createDirectory(at: legacyHistory, withIntermediateDirectories: true)
+        try files.createSymbolicLink(at: legacyModels, withDestinationURL: activeModels)
+        try files.createSymbolicLink(at: legacyPrompts, withDestinationURL: paths.current)
+
+        let fixture = try RecordingStartupFixture(applicationSupportPaths: paths)
+        defer { fixture.cleanup() }
+
+        let message = try XCTUnwrap(fixture.state.removeLegacyData())
+        XCTAssertTrue(message.contains("Liquid:"))
+        XCTAssertTrue(message.contains("Prompts:"))
+        XCTAssertEqual(try Data(contentsOf: activeFile), Data("active".utf8))
+        XCTAssertEqual(try files.destinationOfSymbolicLink(atPath: legacyPrompts.path), paths.current.path)
+        XCTAssertFalse(files.fileExists(atPath: legacyHistory.path))
+    }
+
+    func testLegacyRemovalRejectsDataInsideResolvedActiveRoot() throws {
+        let files = FileManager.default
+        let support = files.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? files.removeItem(at: support) }
+        let paths = ApplicationSupportPaths(applicationSupport: support, bundleID: "com.dictaflow.dev")
+        let history = paths.legacy.appendingPathComponent("History")
+        try files.createDirectory(at: history, withIntermediateDirectories: true)
+        try files.createSymbolicLink(at: paths.current, withDestinationURL: paths.legacy)
+
+        let fixture = try RecordingStartupFixture(applicationSupportPaths: paths)
+        defer { fixture.cleanup() }
+
+        let message = try XCTUnwrap(fixture.state.removeLegacyData())
+        XCTAssertTrue(message.contains("History:"))
+        XCTAssertTrue(files.fileExists(atPath: history.path))
+    }
+
+    func testLegacyTabHidesWhenCommittedButNoLegacyData() throws {
+        let support = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: support) }
+        let paths = ApplicationSupportPaths(applicationSupport: support, bundleID: "com.dictaflow.dev")
+        try FileManager.default.createDirectory(at: paths.storageWork, withIntermediateDirectories: true)
+        try Data("{\"phase\":\"committed\",\"stagingName\":\"\(UUID().uuidString)\"}".utf8)
+            .write(to: paths.storageWork.appendingPathComponent("storage.json"))
+        let fixture = try RecordingStartupFixture(applicationSupportPaths: paths)
+        defer { fixture.cleanup() }
+        XCTAssertTrue(fixture.state.hasCompletedMigration)
+        XCTAssertTrue(fixture.state.legacyDataLocations.isEmpty)
+        XCTAssertFalse(fixture.state.visibleSettingsCategories.contains(.legacy))
+    }
+
     func testLiquidRecoverySwitchesOnlyToAVerifiedWhisperModel() async throws {
         let directory = FileManager.default.temporaryDirectory
         let models = PipelineModelDownloadService(modelsDirectoryURL: directory)
@@ -1631,7 +1728,8 @@ private final class RecordingStartupFixture {
         voiceHistoryRetention: VoiceHistoryRetention = .thirtyDays,
         promptStore: RefinementPromptStoreProtocol? = nil,
         allowsInsertion: Bool = false,
-        hotkeyService: HotkeyServiceProtocol? = nil
+        hotkeyService: HotkeyServiceProtocol? = nil,
+        applicationSupportPaths: ApplicationSupportPaths? = nil
     ) throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1662,7 +1760,8 @@ private final class RecordingStartupFixture {
             localNotificationService: notifications,
             appUpdateService: GitHubReleaseUpdateService(),
             historyStore: historyStore,
-            agentVoice: agentVoice
+            agentVoice: agentVoice,
+            applicationSupportPaths: applicationSupportPaths
         )
         state.attach(recordingOverlayRouter: overlay)
     }

@@ -172,10 +172,14 @@ struct AgentVoiceHostMigration {
         }
     }
 
+    /// A helper is ours when it is the bundled `dictaflow-mcp` inside any
+    /// DictaFlow or Omdo app bundle, release or Dev. The DictaFlow-to-Omdo
+    /// rename and Dev-to-release moves change the path and the recorded
+    /// arguments, so those may drift; the bundle family and binary name may not.
     static func isOwnedHelper(_ command: String, current: String, appID: String) -> Bool {
         if command == current { return true }
         let url = URL(fileURLWithPath: command)
-        let suffix = appID == "com.dictaflow" ? ["DictaFlow.app", "Omdo.app"] : ["DictaFlow Dev.app", "Omdo Dev.app"]
+        let suffix = ["DictaFlow.app", "DictaFlow Dev.app", "Omdo.app", "Omdo Dev.app"]
         return command.hasPrefix("/") && url.lastPathComponent == "dictaflow-mcp"
             && url.deletingLastPathComponent().lastPathComponent == "MacOS"
             && url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == "Contents"

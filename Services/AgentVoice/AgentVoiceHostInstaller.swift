@@ -301,11 +301,32 @@ enum AgentVoiceHostInstaller {
         } else {
             cli = nil
         }
+        // TOML forms the built-in editor cannot safely edit (inline tables,
+        // multi-line values) fall back to the Codex CLI removing our entries
+        // from a copy; the journaled transaction below still writes the result.
+        var codexFallback: (original: Data, candidate: Data)?
+        if host == .codex, let cli {
+            let stored = (try? AgentVoiceHostMigration.read(config)) ?? nil
+            if let original = stored {
+                do {
+                    _ = try CodexMCPConfiguration(original).candidate(executable: executable, arguments: arguments, ownsPath: ownsPath)
+                } catch CodexMCPConfiguration.EditError.unsupported {
+                    codexFallback = (original, try await cliCleanedCodexCandidate(
+                        original: original, executable: executable, arguments: arguments, cli: cli, runner: runner,
+                        ownsPath: ownsPath))
+                } catch {}
+            }
+        }
         try await migration.apply(executable: executable, arguments: arguments) {
             let original = try AgentVoiceHostMigration.read(config)
             if let hooks = migration.hooks {
-                let configuration = try CodexMCPConfiguration(original)
-                let candidate = try configuration.candidate(executable: executable, arguments: arguments, ownsPath: ownsPath)
+                let candidate: Data
+                if let codexFallback, let original, codexFallback.original == original {
+                    candidate = codexFallback.candidate
+                } else {
+                    let configuration = try CodexMCPConfiguration(original)
+                    candidate = try configuration.candidate(executable: executable, arguments: arguments, ownsPath: ownsPath)
+                }
                 let originalHooks = try AgentVoiceHostMigration.read(hooks)
                 let root = try configurationObject(originalHooks, path: hooks.path)
                 let updated = try migratedHooks(root: root, host: host, executable: executable, ownsPath: ownsPath)
@@ -326,7 +347,9 @@ enum AgentVoiceHostInstaller {
                 let entry = try await run(scoped, cli: cli, host: host, args: ["mcp", "get", "--json", serverAlias])
                 let configuration = try CodexMCPConfiguration(changes[0].candidate)
                 guard list.exitCode == 0, !configuration.aliases.contains(legacyAlias), entry.exitCode == 0,
-                      codexEntryMatches(json: Data(entry.stdout.utf8), executable: executable, arguments: arguments),
+                      let registration = try? JSONDecoder().decode(CodexEntry.self, from: Data(entry.stdout.utf8)),
+                      registration.matches(executable: executable, arguments: arguments),
+                      (registration.enabled == false) == configuration.isDisabled(alias: serverAlias),
                       hooksStatus(data: changes[1].candidate, host: host, executable: executable).matches else {
                     throw InstallerError.verificationFailed(host: host.name)
                 }
@@ -351,6 +374,59 @@ enum AgentVoiceHostInstaller {
         if host == .codex { message += " In the new session, open /hooks and review and trust the Omdo hooks." }
         if !agentVoiceEnabled { message += " Turn on Enable Agent Voice to use it." }
         return message
+    }
+
+    /// Builds a candidate for a Codex config the TOML editor cannot parse, by
+    /// letting the Codex CLI remove our server entries from an isolated copy.
+    /// Each existing managed entry is decoded through the CLI and checked with
+    /// `ownsPath` before any removal, so a helper path in a comment or an
+    /// unrelated value is not ownership evidence. A profile with both aliases
+    /// is a collision, and an entry whose ownership cannot be established
+    /// keeps the manual path. The live file is only written later, inside the
+    /// journaled migration.
+    private static func cliCleanedCodexCandidate(original: Data, executable: String, arguments: [String],
+                                                 cli: String, runner: any CommandRunner,
+                                                 ownsPath: (String) -> Bool) async throws -> Data {
+        guard String(data: original, encoding: .utf8) != nil else { throw CodexMCPConfiguration.EditError.unsupported }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("omdo-codex-fallback-\(UUID().uuidString)")
+        try MigrationFiles.makePrivateDirectory(directory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let isolatedConfig = directory.appendingPathComponent("config.toml")
+        try MigrationFiles.replaceDurably(original, at: isolatedConfig)
+        let scoped = scopedRunner(runner, codexDirectory: directory)
+        // Decode every existing managed entry before removing anything.
+        var existing: [String: CodexEntry] = [:]
+        for alias in [legacyAlias, serverAlias] {
+            guard let probe = try? await run(scoped, cli: cli, host: .codex, args: ["mcp", "get", "--json", alias]),
+                  probe.exitCode == 0 else { continue }
+            guard let entry = try? JSONDecoder().decode(CodexEntry.self, from: Data(probe.stdout.utf8)) else {
+                throw CodexMCPConfiguration.EditError.unsupported
+            }
+            existing[alias] = entry
+        }
+        guard !existing.isEmpty else { throw CodexMCPConfiguration.EditError.unsupported }
+        if existing.count > 1 { throw CodexMCPConfiguration.EditError.collision }
+        for entry in existing.values where !ownsPath(entry.transport.command) {
+            throw CodexMCPConfiguration.EditError.unknownOwner
+        }
+        guard existing.values.allSatisfy({ $0.enabledTools == nil && $0.disabledTools == nil }) else {
+            throw CodexMCPConfiguration.EditError.unsupported
+        }
+        let disabled = existing.values.contains { $0.enabled == false }
+        for alias in existing.keys {
+            let removed = try await run(scoped, cli: cli, host: .codex, args: ["mcp", "remove", alias])
+            guard removed.exitCode == 0 else {
+                throw InstallerError.commandFailed(host: Host.codex.name,
+                    detail: removed.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        let cleaned = try Data(contentsOf: isolatedConfig)
+        let configuration = try CodexMCPConfiguration(cleaned)
+        guard !configuration.aliases.contains(legacyAlias), !configuration.aliases.contains(serverAlias) else {
+            throw InstallerError.verificationFailed(host: Host.codex.name)
+        }
+        return try configuration.candidate(
+            executable: executable, arguments: arguments, newEntryDisabled: disabled, ownsPath: ownsPath)
     }
 
     static func claudeProfileDirectory(_ home: URL? = nil) -> URL {
@@ -388,6 +464,14 @@ enum AgentVoiceHostInstaller {
         struct Transport: Decodable { var command: String; var args: [String]? }
         let transport: Transport
         let enabled: Bool?
+        let enabledTools: [String]?
+        let disabledTools: [String]?
+
+        private enum CodingKeys: String, CodingKey {
+            case transport, enabled
+            case enabledTools = "enabled_tools"
+            case disabledTools = "disabled_tools"
+        }
 
         func matches(executable: String, arguments: [String]) -> Bool {
             transport.command == executable && transport.args == arguments
@@ -464,14 +548,16 @@ enum AgentVoiceHostInstaller {
         let existing = entries[legacyAlias] ?? entries[serverAlias]
         var entry: [String: Any]
         if let existing {
+            // The helper path proves ownership; recorded arguments may name a
+            // previous installation and are rewritten below.
             guard let owned = existing as? [String: Any],
                   let command = owned["command"] as? String, ownsPath(command),
-                  owned["args"] as? [String] == arguments,
                   (owned["transport"] ?? owned["type"]) as? String == "stdio" else {
                 throw AgentVoiceHostMigration.Failure.conflict
             }
             entry = owned
             entry["command"] = executable
+            entry["args"] = arguments
         } else {
             entry = ["transport": "stdio", "command": executable, "args": arguments, "mode": "optional"]
         }

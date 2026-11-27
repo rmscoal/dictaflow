@@ -4,7 +4,6 @@ struct MenuBarView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var appState: DictaFlowAppState
     var modelMigrationNotice: String?
-    var legacyDataLocations: [URL] = []
 
     var body: some View {
         VStack(spacing: 14) {
@@ -15,12 +14,13 @@ struct MenuBarView: View {
                 Label { Text(modelMigrationNotice).foregroundStyle(AppTheme.secondaryText) } icon: { EmberWarningIcon() }
                     .font(.system(size: 12))
             }
-            if !legacyDataLocations.isEmpty {
-                Button("Show previous DictaFlow data in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting(legacyDataLocations)
+            if appState.visibleSettingsCategories.contains(.legacy) {
+                Button("Previous DictaFlow data…") {
+                    dismiss()
+                    appState.showSettingsCategory(.legacy)
                 }
                 .buttonStyle(EmberInlineActionButtonStyle())
-                .help("These are the old private data folders. Keep using Omdo after upgrading.")
+                .help("Review or remove the old private data folders in Settings.")
             }
             footer
         }
