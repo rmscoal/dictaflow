@@ -199,13 +199,14 @@ struct AgentVoiceConnectionsTab: View {
 
     private func setupButtonTitle(for host: Host) -> String {
         if hostState[host]?.status == .updateInterrupted { return "Recover setup" }
+        if host == .claudeCode, hostState[host]?.canUpdateClaudeProfile == true { return "Update" }
         if let status = hostState[host]?.status, status == .configured || status == .migrationRequired { return "Update" }
         return "Set up"
     }
 
     private func canSetUp(_ host: Host) -> Bool {
         if host == .museCode { return true }
-        if host == .claudeCode { return false }
+        if host == .claudeCode { return hostState[host]?.canUpdateClaudeProfile == true }
         return hostAvailability[host]?.isDetected == true
     }
 

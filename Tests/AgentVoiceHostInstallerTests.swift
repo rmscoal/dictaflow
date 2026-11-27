@@ -310,6 +310,148 @@ final class AgentVoiceHostInstallerTests: XCTestCase {
                       "Muse setup must install the PreToolUse guard alongside the server.")
     }
 
+    func testClaudeUpdatesOwnedLegacyUserRegistrationAndHooks() async throws {
+        let executable = try makeExecutable()
+        let home = try makeHome()
+        let registry = home.appendingPathComponent(".claude.json")
+        let settings = AgentVoiceHostInstaller.claudeSettingsURL(homeDirectoryURL: home)
+        try FileManager.default.createDirectory(at: settings.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let previousHelper = "/Applications/DictaFlow.app/Contents/MacOS/dictaflow-mcp"
+        try Data("""
+        {
+          "mcpServers": {
+            "dictaflow": {"type":"stdio","command":"\(previousHelper)","args":["--old"],"env":{"VOICE_FIXTURE":"keep"}},
+            "another": {"type":"stdio","command":"/bin/echo"}
+          },
+          "projects": {"/fixture":{"disabledMcpServers":["another","dictaflow"],"hasTrustDialogAccepted":true}}
+        }
+        """.utf8).write(to: registry)
+        let legacyHooks = try XCTUnwrap(AgentVoiceHostSetup.hooksSnippet(for: .claudeCode, executable: previousHelper))
+        var originalSettings = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(legacyHooks.replacingOccurrences(of: "mcp__omdo__", with: "mcp__dictaflow__")
+                .replacingOccurrences(of: "\"omdo\"", with: "\"dictaflow\"").utf8)) as? [String: Any])
+        originalSettings["permissions"] = [
+            "allow": ["mcp__dictaflow", "Bash(git status)"],
+            "deny": ["mcp__dictaflow__play", "mcp__dictaflow_other"],
+            "ask": ["mcp__dictaflow__inspect"]
+        ]
+        originalSettings["theme"] = "dark"
+        try JSONSerialization.data(withJSONObject: originalSettings).write(to: settings)
+        let runner = StubRunner(handlers: [{ _, args in
+            args == ["--version"] ? .init(exitCode: 0, stdout: "2.1.118 (Claude Code)", stderr: "") : nil
+        }])
+        let state = await AgentVoiceHostInstaller.refreshState(
+            host: .claudeCode, executable: executable, appID: "com.dictaflow.dev", installationID: installation,
+            runner: runner, homeDirectoryURL: home, cliDiscovery: { _ in "/bin/claude" })
+        XCTAssertEqual(state.status, .migrationRequired)
+        XCTAssertTrue(state.canUpdateClaudeProfile)
+
+        _ = try await AgentVoiceHostInstaller.setUp(
+            host: .claudeCode, executable: executable, appID: "com.dictaflow.dev", installationID: installation,
+            agentVoiceEnabled: true, runner: runner, homeDirectoryURL: home,
+            cliDiscovery: { _ in "/bin/claude" }, hostIdle: { true })
+
+        let updated = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: registry)) as? [String: Any])
+        let servers = try XCTUnwrap(updated["mcpServers"] as? [String: [String: Any]])
+        XCTAssertNil(servers["dictaflow"])
+        XCTAssertEqual(servers["another"]?["command"] as? String, "/bin/echo")
+        XCTAssertEqual(servers["omdo"]?["command"] as? String, executable)
+        XCTAssertEqual(servers["omdo"]?["args"] as? [String], arguments(host: .claudeCode))
+        XCTAssertEqual(servers["omdo"]?["env"] as? [String: String], ["VOICE_FIXTURE": "keep"])
+        let project = (updated["projects"] as? [String: [String: Any]])?["/fixture"]
+        XCTAssertEqual(project?["disabledMcpServers"] as? [String], ["another", "omdo"])
+        XCTAssertEqual(project?["hasTrustDialogAccepted"] as? Bool, true)
+
+        let data = try Data(contentsOf: settings)
+        let updatedSettings = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(updatedSettings["theme"] as? String, "dark")
+        XCTAssertEqual(updatedSettings["permissions"] as? [String: [String]], [
+            "allow": ["mcp__omdo", "Bash(git status)"],
+            "deny": ["mcp__omdo__play", "mcp__dictaflow_other"],
+            "ask": ["mcp__omdo__inspect"]
+        ])
+        XCTAssertTrue(AgentVoiceHostInstaller.hooksStatus(data: data, host: .claudeCode, executable: executable).matches)
+    }
+
+    func testClaudeRefusesLocalCollisionAndRunningHost() async throws {
+        let executable = try makeExecutable()
+        let home = try makeHome()
+        let registry = home.appendingPathComponent(".claude.json")
+        let settings = AgentVoiceHostInstaller.claudeSettingsURL(homeDirectoryURL: home)
+        let runner = StubRunner(handlers: [{ _, args in
+            args == ["--version"] ? .init(exitCode: 0, stdout: "2.1.118 (Claude Code)", stderr: "") : nil
+        }])
+        let owned = ["command": executable]
+        for idle in [false, true] {
+            let original: [String: Any] = [
+                "mcpServers": ["dictaflow": owned],
+                "projects": idle ? ["/fixture": ["mcpServers": ["omdo": owned]]] : [:]
+            ]
+            let data = try JSONSerialization.data(withJSONObject: original)
+            try data.write(to: registry)
+            do {
+                _ = try await AgentVoiceHostInstaller.setUp(
+                    host: .claudeCode, executable: executable, appID: "com.dictaflow.dev", installationID: installation,
+                    agentVoiceEnabled: true, runner: runner, homeDirectoryURL: home,
+                    cliDiscovery: { _ in "/bin/claude" }, hostIdle: { idle })
+                XCTFail("Expected setup to refuse this profile")
+            } catch AgentVoiceHostMigration.Failure.manual where idle {
+            } catch AgentVoiceHostMigration.Failure.hostRunning where !idle {
+            }
+            XCTAssertEqual(try Data(contentsOf: registry), data)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: settings.path))
+        }
+    }
+
+    func testClaudeOffersManualSetupForUnsafeSettings() async throws {
+        let home = try makeHome()
+        let executable = try makeExecutable()
+        let registry = home.appendingPathComponent(".claude.json")
+        let settings = AgentVoiceHostInstaller.claudeSettingsURL(homeDirectoryURL: home)
+        try FileManager.default.createDirectory(at: settings.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: ["mcpServers": ["dictaflow": ["command": executable]]])
+        try data.write(to: registry)
+        let runner = StubRunner(handlers: [{ _, args in
+            switch args {
+            case ["--version"]: return .init(exitCode: 0, stdout: "2.1.118 (Claude Code)", stderr: "")
+            case ["mcp", "get", "dictaflow"]: return .init(exitCode: 0, stdout: "", stderr: "")
+            default: return nil
+            }
+        }])
+        for invalidSettings in [
+            "{",
+            #"{"disableAllHooks":true}"#,
+            #"{"permissions":{"deny":"mcp__dictaflow"}}"#,
+            #"{"hooks":{"Stop":[{"hooks":[{"type":"mcp_tool","server":"dictaflow","tool":"custom"}]}]}}"#
+        ] {
+            let settingsData = Data(invalidSettings.utf8)
+            try settingsData.write(to: settings)
+            let state = await AgentVoiceHostInstaller.refreshState(
+                host: .claudeCode, executable: executable, appID: "com.dictaflow.dev", installationID: installation,
+                runner: runner, homeDirectoryURL: home, cliDiscovery: { _ in "/bin/claude" })
+            XCTAssertEqual(state.status, .migrationRequired)
+            XCTAssertFalse(state.canUpdateClaudeProfile)
+            XCTAssertEqual(try Data(contentsOf: registry), data)
+            XCTAssertEqual(try Data(contentsOf: settings), settingsData)
+        }
+    }
+
+    func testClaudeIdlePatternMatchesCodeProcessesOnly() throws {
+        let pattern = try NSRegularExpression(pattern: AgentVoiceHostInstaller.claudeProcessPattern)
+        func matches(_ command: String) -> Bool {
+            pattern.firstMatch(in: command, range: NSRange(command.startIndex..., in: command)) != nil
+        }
+        XCTAssertTrue(matches("claude --continue"))
+        XCTAssertTrue(matches("/opt/homebrew/bin/claude --resume"))
+        XCTAssertTrue(matches("/home/fixture/.local/share/claude/versions/2.1.301"))
+        XCTAssertTrue(matches("/usr/bin/node /opt/node_modules/@anthropic-ai/claude-code/cli.js -p"))
+        XCTAssertTrue(matches("node --no-warnings /opt/node_modules/.bin/claude"))
+        XCTAssertFalse(matches("/Applications/Claude.app/Contents/MacOS/Claude"))
+        XCTAssertFalse(matches("/Applications/Omdo.app/Contents/MacOS/dictaflow-mcp --host claude"))
+        XCTAssertFalse(matches("/usr/bin/vim /tmp/claude"))
+        XCTAssertFalse(matches("node test.js /opt/node_modules/@anthropic-ai/claude-code/cli.js"))
+    }
+
     func testSetUpFailsWhenHelperIsMissing() async {
         do {
             _ = try await AgentVoiceHostInstaller.setUp(
